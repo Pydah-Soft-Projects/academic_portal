@@ -21,6 +21,10 @@ export type MatrixModuleDef = {
   /** Sidebar item label from navigation.ts */
   label: string;
   href: string;
+  /** Name of the sidebar icon for rendering in RBAC UI */
+  iconName?: string;
+  /** Permissions that unlock this item in the sidebar navigation */
+  sidebarUnlockPermissions?: string[];
   permissions: MatrixPermissionDef[];
   /**
    * When this nav item is unlocked by a permission owned primarily elsewhere,
@@ -64,7 +68,7 @@ export const PERMISSION_PRESENTATION: Record<
   "students.view": {
     key: "students.view",
     label: "View Students",
-    description: "View student list and profiles. Also unlocks Mentoring & Risks in the sidebar.",
+    description: "View student list and profiles. Also unlocks Class Teacher & Mentoring in the sidebar.",
     kind: "read",
   },
   "faculty.view": {
@@ -249,8 +253,8 @@ export const PERMISSION_PRESENTATION: Record<
   },
   "mentoring.view": {
     key: "mentoring.view",
-    label: "View Mentoring & Risks",
-    description: "View mentoring dashboard, mentees, and complaints within academic scope.",
+    label: "View Class Teacher & Mentoring",
+    description: "View class teacher dashboard, mentees, and complaints within academic scope.",
     kind: "read",
   },
   "mentoring.manage": {
@@ -314,104 +318,157 @@ export const PERMISSION_PRESENTATION: Record<
 };
 
 /**
- * Sidebar-ordered matrix. Mirrors NAV_GROUPS labels/hrefs.
+ * Sidebar-ordered matrix. Mirrors NAV_GROUPS labels/hrefs and groups.
  * Each module uses its own permission keys so access can be granted independently.
  */
 export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
+  // 1. Overview
   {
     group: "Overview",
     label: "Dashboard",
     href: "/dashboard",
+    iconName: "LayoutDashboard",
+    sidebarUnlockPermissions: ["dashboard.view"],
     permissions: [asDef("dashboard.view")],
   },
+
+  // 2. Academics
   {
     group: "Academics",
     label: "Students",
     href: "/students",
+    iconName: "GraduationCap",
+    sidebarUnlockPermissions: ["students.view"],
     permissions: [asDef("students.view")],
   },
   {
     group: "Academics",
     label: "My Timetable",
     href: "/my-timetable",
+    iconName: "CalendarCheck",
+    sidebarUnlockPermissions: ["my_timetable.view"],
     permissions: [asDef("my_timetable.view")],
   },
   {
     group: "Academics",
     label: "Attendance Calendar",
     href: "/attendance-calendar",
+    iconName: "CalendarRange",
+    sidebarUnlockPermissions: ["attendance_calendar.view"],
     permissions: [asDef("attendance_calendar.view"), asDef("attendance_calendar.edit")],
   },
   {
     group: "Academics",
     label: "Master Timetable",
     href: "/timetables",
+    iconName: "CalendarDays",
+    sidebarUnlockPermissions: ["timetable.view"],
     permissions: [asDef("timetable.view"), asDef("timetable.edit"), asDef("timetable.publish")],
   },
   {
     group: "Academics",
     label: "Today Timetable",
     href: "/today-timetable",
+    iconName: "CalendarCheck",
+    sidebarUnlockPermissions: ["today_timetable.view", "timetable.view"],
     permissions: [asDef("today_timetable.view"), asDef("today_timetable.edit")],
   },
   {
     group: "Academics",
     label: "Staff Workload",
     href: "/staff-workload",
+    iconName: "Briefcase",
+    sidebarUnlockPermissions: ["workload.view"],
     permissions: [asDef("workload.view")],
   },
   {
     group: "Academics",
     label: "Attendance Posting",
     href: "/attendance-posting",
+    iconName: "ClipboardCheck",
+    sidebarUnlockPermissions: ["attendance.view", "attendance.post"],
     permissions: [asDef("attendance.view"), asDef("attendance.post")],
   },
   {
     group: "Academics",
     label: "Attendance Analytics",
     href: "/attendance-analytics",
+    iconName: "LineChart",
+    sidebarUnlockPermissions: ["attendance_analytics.view", "attendance.view"],
     permissions: [asDef("attendance_analytics.view")],
+  },
+
+  // 3. Requests
+  {
+    group: "Requests",
+    label: "My Requests",
+    href: "/requests",
+    iconName: "Inbox",
+    sidebarUnlockPermissions: ["request.view"],
+    permissions: [asDef("request.view"), asDef("request.create")],
+  },
+  {
+    group: "Requests",
+    label: "Pending Requests & Approvals",
+    href: "/requests/pending",
+    iconName: "Clock3",
+    sidebarUnlockPermissions: ["request.approve"],
+    permissions: [asDef("request.approve"), asDef("request.workflow.manage")],
+  },
+
+  // 4. Examinations
+  {
+    group: "Examinations",
+    label: "Examinations",
+    href: "/examinations",
+    iconName: "Layers3",
+    sidebarUnlockPermissions: ["examinations.view"],
+    permissions: [asDef("examinations.view")],
   },
   {
     group: "Examinations",
     label: "Internal Marks Management",
     href: "/internal-marks-management",
+    iconName: "FileBarChart2",
+    sidebarUnlockPermissions: ["internal_marks_mgmt.view", "internal_marks_mgmt.edit"],
     permissions: [asDef("internal_marks_mgmt.view"), asDef("internal_marks_mgmt.edit")],
   },
   {
     group: "Examinations",
     label: "Internal Marks",
     href: "/internal-marks",
+    iconName: "ClipboardCheck",
+    sidebarUnlockPermissions: ["internal_marks.view", "internal_marks.edit"],
     permissions: [asDef("internal_marks.view"), asDef("internal_marks.edit")],
-  },
-  {
-    group: "System",
-    label: "Faculty & Departments",
-    href: "/faculty-departments",
-    permissions: [asDef("faculty.view")],
-  },
-  {
-    group: "System",
-    label: "Curriculum & Subjects",
-    href: "/curriculum-subjects",
-    permissions: [asDef("catalog.view")],
-  },
-  {
-    group: "Examinations",
-    label: "Examinations",
-    href: "/examinations",
-    permissions: [asDef("examinations.view")],
   },
   {
     group: "Examinations",
     label: "Results",
     href: "/results",
+    iconName: "Gauge",
+    sidebarUnlockPermissions: ["results.view"],
     permissions: [asDef("results.view")],
   },
+
+  // 5. Reports
+  {
+    group: "Reports",
+    label: "Reports Hub & Analytics",
+    href: "/reports",
+    iconName: "FileBarChart2",
+    sidebarUnlockPermissions: ["reports.view"],
+    accessNote: "Unlocks reports navigation including Timetables, Staff Analytics, Subject Analytics, and Student Reports.",
+    permissions: [asDef("reports.view")],
+  },
+
+  // 6. Student Support
   {
     group: "Student Support",
-    label: "Mentoring & Risks",
+    label: "Class Teacher & Mentoring",
     href: "/mentoring-risks",
+    iconName: "ShieldAlert",
+    sidebarUnlockPermissions: ["mentoring.view", "students.view"],
+    accessNote: "mentoring.view unlocks this page in sidebar. students.view remains supported for legacy access during RBAC rollout.",
     permissions: [
       asDef("mentoring.view"),
       asDef("mentoring.manage"),
@@ -420,48 +477,65 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
       asDef("mentoring.case_manage"),
       asDef("mentoring.escalate"),
     ],
-    accessNote: "mentoring.view unlocks the page. students.view remains supported for legacy access during RBAC rollout.",
   },
+
+  // 7. Operations
   {
     group: "Operations",
     label: "Pending & Exceptions",
     href: "/pending-exceptions",
+    iconName: "AlertTriangle",
+    sidebarUnlockPermissions: ["pending_exceptions.view"],
     permissions: [asDef("pending_exceptions.view")],
-  },
-  {
-    group: "Reports",
-    label: "Reports",
-    href: "/reports",
-    permissions: [asDef("reports.view")],
-  },
-  {
-    group: "Operations",
-    label: "Requests",
-    href: "/requests",
-    permissions: [asDef("request.view"), asDef("request.create"), asDef("request.approve")],
   },
   {
     group: "Operations",
     label: "Alerts",
     href: "/alerts",
+    iconName: "Bell",
+    sidebarUnlockPermissions: ["alerts.view"],
     permissions: [asDef("alerts.view")],
+  },
+
+  // 8. System
+  {
+    group: "System",
+    label: "Faculty & Departments",
+    href: "/faculty-departments",
+    iconName: "Users",
+    sidebarUnlockPermissions: ["faculty.view"],
+    permissions: [asDef("faculty.view")],
+  },
+  {
+    group: "System",
+    label: "Curriculum & Subjects",
+    href: "/curriculum-subjects",
+    iconName: "BookOpen",
+    sidebarUnlockPermissions: ["catalog.view"],
+    permissions: [asDef("catalog.view")],
   },
   {
     group: "System",
     label: "User Management",
     href: "/user-management",
+    iconName: "UserCog",
+    sidebarUnlockPermissions: ["user_management.view", "user_management.manage_users"],
     permissions: [asDef("user_management.view"), asDef("user_management.manage_users")],
   },
   {
     group: "System",
     label: "Roles & Permissions",
     href: "/settings/roles",
+    iconName: "ShieldAlert",
+    sidebarUnlockPermissions: ["roles.view", "roles.manage"],
     permissions: [asDef("roles.view"), asDef("roles.manage")],
   },
   {
     group: "System",
     label: "Settings",
     href: "/settings",
+    iconName: "Settings",
+    sidebarUnlockPermissions: ["settings.view"],
     permissions: [
       asDef("settings.view"),
       asDef("settings.edit"),

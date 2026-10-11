@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, UserRound, Users } from "lucide-react";
+import { BookOpen, GraduationCap, RefreshCw, UserRound, Users } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -10,6 +10,7 @@ import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import { DataTable, type DataTableColumn } from "@/components/ui/DataTable";
 import { FilterBar, FilterField } from "@/components/ui/FilterBar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
+import { StatCard } from "@/components/ui/StatCard";
 import {
   MobileDataCardHeader,
   MobileDataCardGrid,
@@ -26,6 +27,8 @@ import {
   type ManagedRole,
   type ManagedUser,
   type RoleAssignment,
+  type UserManagementStats,
+  type UserRoleStat,
 } from "@/features/user-management/types";
 import { RolesPermissionsPanel } from "@/features/user-management/RolesPermissionsPanel";
 import { CreateUserPanel } from "@/features/user-management/CreateUserPanel";
@@ -38,6 +41,19 @@ import {
 } from "@/features/user-management/permission-matrix";
 import { RoleBadge, getRoleStyle } from "@/features/user-management/RoleBadge";
 import { cn } from "@/lib/cn";
+
+const HIERARCHY_ORDER: Record<string, number> = {
+  super_admin: 1,
+  principal: 2,
+  vice_principal: 3,
+  director: 3,
+  dean: 3,
+  hod: 4,
+  class_teacher: 5,
+  mentor: 5,
+  staff: 6,
+  faculty: 6,
+};
 
 type LoadState =
   | { status: "loading" }
@@ -102,7 +118,13 @@ export function UserManagementView() {
   const [scopeTarget, setScopeTarget] = useState<RoleAssignment | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [stats, setStats] = useState({ total: 0, active: 0 });
+  const [stats, setStats] = useState<UserManagementStats>({
+    total: 0,
+    active: 0,
+    inactive: 0,
+    unassigned: 0,
+    roles: [],
+  });
   const [syncingTimetables, setSyncingTimetables] = useState(false);
   const [syncingHrmsStaff, setSyncingHrmsStaff] = useState(false);
   const [syncResult, setSyncResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -147,22 +169,58 @@ export function UserManagementView() {
 
   const loadStats = useCallback(async () => {
     try {
-      const [allRes, activeRes] = await Promise.all([
-        apiFetch("/users?limit=1&status=all", { cache: "no-store" }),
-        apiFetch("/users?limit=1&status=active", { cache: "no-store" }),
-      ]);
-      const allBody = await allRes.json().catch(() => ({}));
-      const activeBody = await activeRes.json().catch(() => ({}));
-      if (allRes.ok && activeRes.ok) {
+      const res = await apiFetch("/users/stats", { cache: "no-store" });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body && typeof body === "object") {
         setStats({
-          total: Number(allBody.total ?? 0),
-          active: Number(activeBody.total ?? 0),
+          total: Number(body.total ?? 0),
+          active: Number(body.active ?? 0),
+          inactive: Number(body.inactive ?? 0),
+          unassigned: Number(body.unassigned ?? 0),
+          roles: Array.isArray(body.roles) ? body.roles : [],
         });
       }
     } catch {
       /* keep previous stats */
     }
   }, []);
+
+  const displayedRoleStats = useMemo(() => {
+    const map = new Map<string, UserRoleStat>();
+
+    // Canonical hierarchy seed so all institutional tiers are always represented
+    const canonicalSeeds: Array<{ roleKey: string; label: string }> = [
+      { roleKey: "super_admin", label: "Super Admin" },
+      { roleKey: "principal", label: "Principal" },
+      { roleKey: "vice_principal", label: "Vice Principal" },
+      { roleKey: "hod", label: "HOD" },
+      { roleKey: "class_teacher", label: "Class Teacher" },
+      { roleKey: "staff", label: "Subject Faculty" },
+    ];
+    for (const seed of canonicalSeeds) {
+      map.set(seed.roleKey, { ...seed, totalCount: 0, activeCount: 0 });
+    }
+
+    for (const r of stats.roles) {
+      const existing = map.get(r.roleKey);
+      if (existing) {
+        existing.totalCount = r.totalCount;
+        existing.activeCount = r.activeCount;
+        if (r.label) existing.label = r.label;
+      } else {
+        map.set(r.roleKey, {
+          roleKey: r.roleKey,
+          label: r.label,
+          totalCount: r.totalCount,
+          activeCount: r.activeCount,
+        });
+      }
+    }
+
+    return Array.from(map.values())
+      .filter((r) => r.roleKey !== "mentor")
+      .sort((a, b) => (HIERARCHY_ORDER[a.roleKey] ?? 99) - (HIERARCHY_ORDER[b.roleKey] ?? 99));
+  }, [stats.roles]);
 
   const loadRoles = useCallback(async () => {
     const response = await apiFetch("/roles?includeInactive=false", { cache: "no-store" });
@@ -389,20 +447,14 @@ export function UserManagementView() {
     },
     {
       key: "roles",
-      header: "Roles",
+      header: "Role",
       render: (row) => {
-        const uniqueRoles = uniqueRoleSummaries(row.roles);
-        return uniqueRoles.length ? (
-          <div className="flex flex-wrap gap-1.5">
-            {uniqueRoles.map((role) => (
-              <RoleBadge
-                key={role.roleKey}
-                roleKey={role.roleKey}
-                label={role.label}
-                assignmentCount={role.assignmentCount}
-              />
-            ))}
-          </div>
+        const primary = row.roles[0];
+        return primary ? (
+          <RoleBadge
+            roleKey={primary.roleKey}
+            label={primary.label}
+          />
         ) : (
           <span className="text-xs text-slate-400">None</span>
         );
@@ -410,10 +462,12 @@ export function UserManagementView() {
     },
     {
       key: "scope",
-      header: "College / Branch",
+      header: "Courses / Branches Access",
       render: (row) =>
         row.roles.length ? (
-          <span className="text-xs text-slate-600">{formatScopeListCompact(row.roles)}</span>
+          <span className="text-xs text-slate-600 font-medium">
+            {formatScopeListCompact(row.roles)}
+          </span>
         ) : (
           "—"
         ),
@@ -432,49 +486,94 @@ export function UserManagementView() {
         description="Create and manage users with role-based access. Import staff from the HRMS employees directory, then assign Academic Portal roles and scope here."
         actions={
           <div className="flex items-center gap-2">
-            {canManage ? (
-              <>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="h-12 border-slate-200 bg-white hover:bg-slate-50 text-navy-800 shadow-sm px-3 text-xs flex items-center gap-2"
-                  disabled={syncingHrmsStaff || syncingTimetables}
-                  onClick={handleSyncHrmsStaff}
-                  title="Import and update all HRMS teaching faculty accounts with the Staff role"
-                >
-                  <Users className={cn("h-4 w-4 text-emerald-600", syncingHrmsStaff && "animate-spin")} />
-                  <div className="text-left">
-                    <p className="font-semibold leading-tight text-navy-900">Sync HRMS Staff</p>
-                    <p className="text-[10px] text-slate-500 leading-tight">All teaching staff</p>
-                  </div>
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="h-12 border-slate-200 bg-white hover:bg-slate-50 text-navy-800 shadow-sm px-3 text-xs flex items-center gap-2"
-                  disabled={syncingTimetables || syncingHrmsStaff}
-                  onClick={handleSyncTimetables}
-                  title="Scan all active timetables to ensure teaching staff profiles exist and clean up unassigned roles"
-                >
-                  <RefreshCw className={cn("h-4 w-4 text-cyan-600", syncingTimetables && "animate-spin")} />
-                  <div className="text-left">
-                    <p className="font-semibold leading-tight text-navy-900">Sync Timetables</p>
-                    <p className="text-[10px] text-slate-500 leading-tight">Update timetable roles</p>
-                  </div>
-                </Button>
-              </>
-            ) : null}
-            <div className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-center shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Total</p>
-              <p className="text-lg font-semibold text-navy-900">{stats.total}</p>
-            </div>
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2 text-center shadow-sm">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Active</p>
-              <p className="text-lg font-semibold text-emerald-800">{stats.active}</p>
-            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void loadStats()}
+              className="text-xs"
+              title="Refresh User & Role Statistics"
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              Refresh
+            </Button>
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 shadow-2xs">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              {stats.active} Active / {stats.total} Total
+            </span>
           </div>
         }
       />
+
+      {/* INSTITUTIONAL ROLE HEADCOUNT / STATS CARDS */}
+      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8 sm:gap-3">
+        {/* Total Users Card */}
+        <StatCard
+          compact
+          label="Total Users"
+          value={stats.total}
+          hint={roleKey === "all" ? "● All Roles" : "Click to view all"}
+          tone="info"
+          selected={roleKey === "all"}
+          onClick={() => {
+            setTab("users");
+            setRoleKey("all");
+          }}
+          className="transition-all hover:-translate-y-0.5"
+        />
+
+        {/* Roles in Hierarchical Order */}
+        {displayedRoleStats.map((r) => {
+          const isSelected = roleKey === r.roleKey;
+          const hLevel = HIERARCHY_ORDER[r.roleKey];
+          const levelTag = hLevel ? `L${hLevel}` : "R";
+          const style = getRoleStyle(r.roleKey);
+
+          return (
+            <StatCard
+              key={r.roleKey}
+              compact
+              badge={
+                <span className={cn("rounded px-1 py-0.2 text-[9px] font-bold uppercase", style.pill)}>
+                  {levelTag}
+                </span>
+              }
+              label={r.label}
+              value={r.totalCount}
+              hint={isSelected ? "● Filter active" : `${r.activeCount} active`}
+              tone={
+                r.roleKey === "super_admin"
+                  ? "default"
+                  : r.roleKey === "principal" || r.roleKey === "vice_principal"
+                  ? "warning"
+                  : r.roleKey === "hod"
+                  ? "success"
+                  : "info"
+              }
+              selected={isSelected}
+              onClick={() => {
+                setTab("users");
+                setRoleKey(isSelected ? "all" : r.roleKey);
+              }}
+              className="transition-all hover:-translate-y-0.5"
+            />
+          );
+        })}
+
+        {/* Active Accounts Card */}
+        <StatCard
+          compact
+          label="Active Users"
+          value={stats.active}
+          hint={stats.inactive > 0 ? `${stats.inactive} inactive` : "100% active"}
+          tone="success"
+          selected={status === "active"}
+          onClick={() => {
+            setTab("users");
+            setStatus((prev) => (prev === "active" ? "all" : "active"));
+          }}
+          className="transition-all hover:-translate-y-0.5"
+        />
+      </div>
 
       {syncResult && (
         <div
@@ -559,25 +658,25 @@ export function UserManagementView() {
 
       {tab === "users" ? (
         <>
-      <FilterBar>
-        <FilterField label="Search">
-          <input
-            className={inputClass}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Name, email, employee id…"
-          />
-        </FilterField>
-        <FilterField label="Role">
-          <select className={selectClass} value={roleKey} onChange={(e) => setRoleKey(e.target.value)}>
-            <option value="all">All roles</option>
-            {roles.map((role) => (
-              <option key={role.roleKey} value={role.roleKey}>
-                {role.label}
-              </option>
-            ))}
-          </select>
-        </FilterField>
+          <FilterBar>
+            <FilterField label="Search">
+              <input
+                className={inputClass}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Name, email, employee id…"
+              />
+            </FilterField>
+            <FilterField label="Role">
+              <select className={selectClass} value={roleKey} onChange={(e) => setRoleKey(e.target.value)}>
+                <option value="all">All roles ({stats.total})</option>
+                {displayedRoleStats.map((role) => (
+                  <option key={role.roleKey} value={role.roleKey}>
+                    {role.label} ({role.totalCount})
+                  </option>
+                ))}
+              </select>
+            </FilterField>
         <FilterField label="Status">
           <select className={selectClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="all">All</option>
@@ -654,18 +753,14 @@ export function UserManagementView() {
                 />
                 <MobileDataCardGrid>
                   <MobileDataCardField
-                    label="Roles"
+                    label="Role"
                     value={
-                      row.roles.length ? (
-                        <div className="mt-0.5 flex flex-wrap gap-1">
-                          {uniqueRoleSummaries(row.roles).map((role) => (
-                            <RoleBadge
-                              key={role.roleKey}
-                              roleKey={role.roleKey}
-                              label={role.label}
-                              assignmentCount={role.assignmentCount}
-                            />
-                          ))}
+                      row.roles[0] ? (
+                        <div className="mt-0.5">
+                          <RoleBadge
+                            roleKey={row.roles[0].roleKey}
+                            label={row.roles[0].label}
+                          />
                         </div>
                       ) : (
                         "—"
@@ -673,7 +768,7 @@ export function UserManagementView() {
                     }
                   />
                   <MobileDataCardField
-                    label="College / Branch"
+                    label="Courses / Branches Access"
                     value={formatScopeListCompact(row.roles)}
                   />
                   <MobileDataCardField label="Last login" value={formatLastLogin(row.lastLoginAt)} />
@@ -1227,98 +1322,77 @@ function UserDetailModal(props: {
                   <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-700 text-xs font-bold text-white">
                     2
                   </span>
-                  <h3 className="text-sm font-semibold text-navy-900">Role Selection</h3>
+                  <div>
+                    <h3 className="text-sm font-semibold text-navy-900">User Role</h3>
+                    <p className="text-[11px] text-slate-500">Single assigned role</p>
+                  </div>
                 </div>
                 {canManageRolesAndScope ? (
                   <Button size="sm" variant="secondary" onClick={props.onEditRoles}>
-                    Edit roles
+                    Edit role &amp; scope
                   </Button>
                 ) : null}
               </div>
-              <div className="mb-2 flex flex-wrap gap-1.5">
-                {uniqueRoleSummaries(user.roles).map((r) => (
-                  <RoleBadge
-                    key={r.roleKey}
-                    roleKey={r.roleKey}
-                    label={r.label}
-                    assignmentCount={r.assignmentCount}
-                  />
-                ))}
-              </div>
-              <p className="mb-3 text-xs text-slate-600">
-                {assignedRoleKeys.size} assigned role{assignedRoleKeys.size === 1 ? "" : "s"} ·{" "}
-                {user.roles.length} scope{user.roles.length === 1 ? "" : "s"}
-              </p>
-              <div className="max-h-[22rem] space-y-2 overflow-y-auto pr-1">
-                {bootstrapSuperAdmin ? (
-                  <div className="rounded-lg border border-purple-300 bg-white px-3 py-2.5 text-sm text-slate-600">
-                    System Administrator — global scope (fixed for bootstrap account).
-                  </div>
-                ) : displayRoles.length === 0 ? (
-                  <p className="text-sm text-slate-500">No roles available.</p>
-                ) : (
-                  displayRoles.map((role) => {
-                    const active = assignedRoleKeys.has(role.roleKey);
-                    const assignmentCount = user.roles.filter((row) => row.roleKey === role.roleKey)
-                      .length;
-                    const style = getRoleStyle(role.roleKey);
-                    return (
-                      <div
-                        key={role.roleKey}
+
+              {bootstrapSuperAdmin ? (
+                <div className="rounded-lg border border-purple-300 bg-white px-3 py-2.5 text-sm text-slate-600">
+                  System Administrator — global scope (fixed for bootstrap account).
+                </div>
+              ) : user.roles.length === 0 ? (
+                <div className="rounded-lg border border-slate-200 bg-white p-3 text-center">
+                  <p className="text-xs text-slate-500">No role assigned to this user yet.</p>
+                </div>
+              ) : (
+                (() => {
+                  const primary = user.roles[0];
+                  const style = getRoleStyle(primary.roleKey);
+                  const roleMeta = displayRoles.find((r) => r.roleKey === primary.roleKey);
+                  return (
+                    <div
+                      className={cn(
+                        "flex w-full items-start gap-3 rounded-lg border px-3.5 py-3 text-left transition-all",
+                        style.cardActive,
+                        style.border,
+                      )}
+                    >
+                      <span
                         className={cn(
-                          "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
-                          active
-                            ? cn(style.cardActive, style.border)
-                            : "border-slate-200 bg-white/80 opacity-70",
+                          "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                          style.iconBg,
+                          style.iconText,
                         )}
                       >
-                        <span
-                          className={cn(
-                            "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
-                            active ? cn(style.iconBg, style.iconText) : "bg-slate-100 text-slate-400",
-                          )}
-                        >
-                          <UserRound className="h-4 w-4" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-navy-900">{role.label}</span>
-                            {active ? (
-                              <span
-                                className={cn(
-                                  "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                                  style.pill,
-                                )}
-                              >
-                                Assigned
-                              </span>
-                            ) : null}
+                        <UserRound className="h-5 w-5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-bold text-navy-900">{primary.label}</span>
+                          <span
+                            className={cn(
+                              "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                              style.pill,
+                            )}
+                          >
+                            Single Role
                           </span>
-                          <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
-                            {role.description ||
-                              (role.isGlobalCapable
-                                ? "Global role — no college/branch required."
-                                : "College-scoped access.")}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-600">
+                          {roleMeta?.description ||
+                            (roleMeta?.isGlobalCapable
+                              ? "Global role — institute-wide access."
+                              : "Multi-course and branch scoped access.")}
+                        </p>
+                        <div className="mt-2 flex items-center gap-2 text-[11px] font-medium text-slate-600">
+                          <span>Scope:</span>
+                          <span className="font-semibold text-navy-900">
+                            {user.roles.length} course/branch access point{user.roles.length === 1 ? "" : "s"}
                           </span>
-                          {active && assignmentCount > 0 ? (
-                            <span className={cn("mt-1 block text-[11px] font-medium", style.iconText)}>
-                              {assignmentCount} scope{assignmentCount === 1 ? "" : "s"} assigned
-                            </span>
-                          ) : null}
-                        </span>
-                        <input
-                          type="checkbox"
-                          className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-700"
-                          checked={active}
-                          disabled
-                          readOnly
-                          aria-label={`${role.label} assigned`}
-                        />
+                        </div>
                       </div>
-                    );
-                  })
-                )}
-              </div>
+                    </div>
+                  );
+                })()
+              )}
             </section>
 
             {/* 3 · Access Scope */}
@@ -1328,7 +1402,10 @@ function UserDetailModal(props: {
                   <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-700 text-xs font-bold text-white">
                     3
                   </span>
-                  <h3 className="text-sm font-semibold text-navy-900">Access Scope</h3>
+                  <div>
+                    <h3 className="text-sm font-semibold text-navy-900">Courses &amp; Branches Access</h3>
+                    <p className="text-[11px] text-slate-500">Multi-course &amp; branch scope</p>
+                  </div>
                 </div>
                 {canManageRolesAndScope && user.roles.length > 0 ? (
                   <Button size="sm" variant="secondary" onClick={props.onEditRoles}>
@@ -1417,6 +1494,176 @@ function UserDetailModal(props: {
               )}
             </section>
           </div>
+
+          {/* TEACHING SCOPE & STUDENT ACCESS ARCHITECTURE */}
+          <section className="rounded-xl border border-blue-200 bg-linear-to-b from-blue-50/50 to-white p-4 sm:p-5 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-blue-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-700 text-xs font-bold text-white shadow-2xs">
+                  <BookOpen className="w-3.5 h-3.5" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-blue-950">
+                    Teaching Scope &amp; Student Access Architecture
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Difference between Subject Teaching Students vs Role-Based Assigned Students
+                  </p>
+                </div>
+              </div>
+              {user.teachingScope && (
+                <div className="flex items-center gap-2">
+                  <span className="bg-blue-100 text-blue-800 text-xs font-bold px-2.5 py-1 rounded-lg">
+                    {user.teachingScope.totalTeachingStudents} Teaching Students
+                  </span>
+                  <span className="bg-slate-100 text-slate-700 text-xs font-semibold px-2 py-1 rounded-lg">
+                    {user.teachingScope.subjectsCount} Subjects
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Box A: Assigned Timetable Subjects (Teaching Students) */}
+              <div className="rounded-xl border border-blue-200/80 bg-white p-3.5 shadow-2xs space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-blue-900">
+                    <BookOpen className="w-4 h-4 text-blue-600" />
+                    <span>Teaching Subjects &amp; Classroom Access</span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    From Timetable Assignments
+                  </span>
+                </div>
+
+                {user.teachingScope?.subjects && user.teachingScope.subjects.length > 0 ? (
+                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                    {user.teachingScope.subjects.map((sub, idx) => (
+                      <div
+                        key={idx}
+                        className="rounded-lg border border-slate-100 bg-slate-50/70 p-2.5 flex items-center justify-between gap-2 hover:bg-blue-50/40 transition"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-slate-800 truncate">
+                            {sub.subjectName}
+                          </p>
+                          <p className="text-[11px] text-slate-500 flex items-center gap-1.5 mt-0.5">
+                            <span className="font-semibold text-blue-700">{sub.subjectCode}</span>
+                            {sub.sectionName && (
+                              <span className="bg-white border border-slate-200 px-1 rounded text-[10px]">
+                                Sec {sub.sectionName}
+                              </span>
+                            )}
+                            <span className="truncate">{sub.branchName}</span>
+                          </p>
+                        </div>
+                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-xs px-2 py-0.5 rounded-full shrink-0">
+                          {sub.studentCount} students
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 text-center bg-slate-50 rounded-lg border border-dashed border-slate-200 text-xs text-slate-500">
+                    No active published timetable subjects assigned. Subject assignments in timetables
+                    automatically grant teaching student access, attendance posting, and subject marks.
+                  </div>
+                )}
+              </div>
+
+              {/* Box B: Role-Based Assigned Students & Organizational Hierarchy */}
+              <div className="rounded-xl border border-teal-200/80 bg-white p-3.5 shadow-2xs space-y-2.5 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-teal-900">
+                      <GraduationCap className="w-4 h-4 text-teal-600" />
+                      <span>Role-Based Assigned Student Scope</span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      Organizational Hierarchy
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    {/* Role description card */}
+                    <div className="p-2.5 rounded-lg border border-teal-100 bg-teal-50/50 text-slate-700 leading-relaxed">
+                      {user.roles[0]?.roleKey === "super_admin" && (
+                        <p>
+                          <strong className="text-purple-900">Super Admin (Level 1):</strong> Full
+                          institute-wide authority over all colleges, staff, and students.
+                        </p>
+                      )}
+                      {(user.roles[0]?.roleKey === "principal" ||
+                        user.roles[0]?.roleKey === "vice_principal") && (
+                        <p>
+                          <strong className="text-amber-900">
+                            {user.roles[0]?.label} (Level 2):
+                          </strong>{" "}
+                          College-wide oversight across all departments, faculties, and students.
+                        </p>
+                      )}
+                      {user.roles[0]?.roleKey === "hod" && (
+                        <p>
+                          <strong className="text-emerald-900">HOD (Level 3):</strong> Department
+                          head overseeing all sections, combined branches, and faculty within the
+                          department.
+                        </p>
+                      )}
+                      {user.roles[0]?.roleKey === "class_teacher" && (
+                        <p>
+                          <strong className="text-teal-900">Class Teacher (Level 4):</strong> Section
+                          In-Charge with assigned class students for mentoring, section attendance,
+                          progress tracking, and interventions.
+                        </p>
+                      )}
+                      {(!user.roles[0] ||
+                        user.roles[0]?.roleKey === "staff" ||
+                        user.roles[0]?.roleKey === "faculty") && (
+                        <p>
+                          <strong className="text-cyan-900">Subject Faculty (Level 5):</strong> Staff
+                          login scoped strictly to assigned teaching subjects, subject timetables, and
+                          teaching students reports.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Hierarchy order trail */}
+                    <div className="pt-1.5">
+                      <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                        Management Hierarchy Order:
+                      </p>
+                      <div className="flex flex-wrap items-center gap-1 text-[11px] font-semibold text-slate-600">
+                        <span className="bg-purple-100 text-purple-800 px-1.5 py-0.5 rounded">
+                          Super Admin
+                        </span>
+                        <span>→</span>
+                        <span className="bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                          Principal / VP
+                        </span>
+                        <span>→</span>
+                        <span className="bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">
+                          HOD
+                        </span>
+                        <span>→</span>
+                        <span className="bg-teal-100 text-teal-800 px-1.5 py-0.5 rounded">
+                          Class Teacher
+                        </span>
+                        <span>→</span>
+                        <span className="bg-cyan-100 text-cyan-800 px-1.5 py-0.5 rounded">
+                          Subject Faculty
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-400 italic pt-1">
+                  Subject Faculty teach their course students, whereas Class Teachers, HODs, and
+                  Principals hold administrative student mentorship &amp; oversight.
+                </p>
+              </div>
+            </div>
+          </section>
 
           {/* 4 · Effective permissions (3-column grid) */}
           <section className="rounded-xl border border-border bg-white shadow-sm">
@@ -1548,6 +1795,53 @@ function inferCourseIdForBranch(
   return branch ? String(branch.courseId) : "";
 }
 
+type CourseScopeDraft = {
+  allBranches: boolean;
+  branchIds: number[];
+};
+
+type CollegeScopeDraft = {
+  allCollege: boolean;
+  courses: Record<number, CourseScopeDraft>;
+};
+
+function buildInitialCollegeScopes(
+  roles: RoleAssignment[],
+  branches: Array<{ id: number; name: string; courseId: number }>,
+): Record<number, CollegeScopeDraft> {
+  const result: Record<number, CollegeScopeDraft> = {};
+  for (const r of roles) {
+    if (r.collegeId == null) continue;
+    const collegeId = Number(r.collegeId);
+    if (!result[collegeId]) {
+      result[collegeId] = {
+        allCollege: false,
+        courses: {},
+      };
+    }
+    const collegeDraft = result[collegeId];
+    if (r.branchId == null) {
+      collegeDraft.allCollege = true;
+    } else {
+      const branchId = Number(r.branchId);
+      const bObj = branches.find((b) => b.id === branchId);
+      if (bObj) {
+        const courseId = bObj.courseId;
+        if (!collegeDraft.courses[courseId]) {
+          collegeDraft.courses[courseId] = {
+            allBranches: false,
+            branchIds: [],
+          };
+        }
+        if (!collegeDraft.courses[courseId].branchIds.includes(branchId)) {
+          collegeDraft.courses[courseId].branchIds.push(branchId);
+        }
+      }
+    }
+  }
+  return result;
+}
+
 function RolesDialog(props: {
   user: ManagedUser;
   roles: ApRoleOption[];
@@ -1557,244 +1851,474 @@ function RolesDialog(props: {
   onClose: () => void;
   onSaved: (user: ManagedUser) => Promise<void>;
 }) {
-  const [rows, setRows] = useState(
-    props.user.roles.map((r) => ({
-      roleKey: r.roleKey,
-      collegeId: r.collegeId == null ? "" : String(r.collegeId),
-      courseId: inferCourseIdForBranch(props.branches, r.branchId),
-      branchId: r.branchId == null ? "" : String(r.branchId),
-    })),
+  const creatableRoles = useMemo(() => {
+    const list = [...props.roles];
+    if (!list.some((r) => r.roleKey === "class_teacher")) {
+      list.push({
+        id: 9999,
+        roleKey: "class_teacher",
+        label: "Class Teacher",
+        description: "Class Teacher / Section In-Charge — section students roster & mentoring",
+        isGlobalCapable: false,
+        permissions: [],
+      });
+    }
+    const filtered = list.filter(
+      (r) =>
+        r.roleKey !== "super_admin" ||
+        props.user.roles.some((x) => x.roleKey === "super_admin"),
+    );
+    return filtered.sort(
+      (a, b) => (HIERARCHY_ORDER[a.roleKey] ?? 99) - (HIERARCHY_ORDER[b.roleKey] ?? 99),
+    );
+  }, [props.roles, props.user.roles]);
+
+  const initialRoleKey =
+    props.user.roles[0]?.roleKey ?? creatableRoles[0]?.roleKey ?? "staff";
+  const [selectedRoleKey, setSelectedRoleKey] = useState<string>(initialRoleKey);
+  const [collegeScopes, setCollegeScopes] = useState<Record<number, CollegeScopeDraft>>(() =>
+    buildInitialCollegeScopes(props.user.roles, props.branches),
   );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  function addRow() {
-    setRows((prev) => [
-      ...prev,
-      {
-        roleKey: props.roles[0]?.roleKey ?? "staff",
-        collegeId: "",
-        courseId: "",
-        branchId: "",
-      },
-    ]);
+  const selectedRoleMeta = props.roles.find((r) => r.roleKey === selectedRoleKey);
+  const isGlobal = Boolean(selectedRoleMeta?.isGlobalCapable);
+
+  function toggleCollege(collegeId: number) {
+    setCollegeScopes((prev) => {
+      if (prev[collegeId]) {
+        const next = { ...prev };
+        delete next[collegeId];
+        return next;
+      }
+      return {
+        ...prev,
+        [collegeId]: { allCollege: true, courses: {} },
+      };
+    });
+    setError(null);
+  }
+
+  function setCollegeMode(collegeId: number, allCollege: boolean) {
+    setCollegeScopes((prev) => {
+      const current = prev[collegeId];
+      if (!current) return prev;
+      return {
+        ...prev,
+        [collegeId]: allCollege
+          ? { allCollege: true, courses: {} }
+          : { allCollege: false, courses: current.courses },
+      };
+    });
+    setError(null);
+  }
+
+  function toggleCourse(collegeId: number, courseId: number) {
+    setCollegeScopes((prev) => {
+      const current = prev[collegeId];
+      if (!current) return prev;
+      const courses = { ...current.courses };
+      if (courses[courseId]) {
+        delete courses[courseId];
+      } else {
+        courses[courseId] = { allBranches: true, branchIds: [] };
+      }
+      return {
+        ...prev,
+        [collegeId]: { allCollege: false, courses },
+      };
+    });
+    setError(null);
+  }
+
+  function setCourseBranchMode(collegeId: number, courseId: number, allBranches: boolean) {
+    setCollegeScopes((prev) => {
+      const current = prev[collegeId];
+      const course = current?.courses[courseId];
+      if (!current || !course) return prev;
+      return {
+        ...prev,
+        [collegeId]: {
+          allCollege: false,
+          courses: {
+            ...current.courses,
+            [courseId]: allBranches
+              ? { allBranches: true, branchIds: [] }
+              : { allBranches: false, branchIds: course.branchIds },
+          },
+        },
+      };
+    });
+    setError(null);
+  }
+
+  function toggleBranch(collegeId: number, courseId: number, branchId: number) {
+    setCollegeScopes((prev) => {
+      const current = prev[collegeId];
+      const course = current?.courses[courseId];
+      if (!current || !course) return prev;
+      const has = course.branchIds.includes(branchId);
+      const branchIds = has
+        ? course.branchIds.filter((id) => id !== branchId)
+        : [...course.branchIds, branchId];
+      return {
+        ...prev,
+        [collegeId]: {
+          allCollege: false,
+          courses: {
+            ...current.courses,
+            [courseId]: { allBranches: false, branchIds },
+          },
+        },
+      };
+    });
+    setError(null);
   }
 
   async function save() {
     setBusy(true);
     setError(null);
     try {
+      if (!selectedRoleKey) {
+        throw new Error("Please select a role for the user.");
+      }
+
       const assignments: Array<{
         roleKey: string;
         collegeId: number | null;
         branchId: number | null;
       }> = [];
 
-      for (const row of rows) {
-        const meta = props.roles.find((r) => r.roleKey === row.roleKey);
-        const global = Boolean(meta?.isGlobalCapable);
-        if (global) {
-          assignments.push({ roleKey: row.roleKey, collegeId: null, branchId: null });
-          continue;
+      if (isGlobal) {
+        assignments.push({ roleKey: selectedRoleKey, collegeId: null, branchId: null });
+      } else {
+        const selectedCollegeIds = Object.keys(collegeScopes).map(Number);
+        if (!selectedCollegeIds.length) {
+          throw new Error("Please select at least one college for this role's scope.");
         }
-        if (!row.collegeId) {
-          throw new Error("Each non-global role needs a college");
-        }
-        const collegeId = Number(row.collegeId);
-        // Whole college
-        if (!row.courseId && !row.branchId) {
-          assignments.push({ roleKey: row.roleKey, collegeId, branchId: null });
-          continue;
-        }
-        // Course selected, all branches in course
-        if (row.courseId && !row.branchId) {
-          const courseBranches = branchesForCourseId(props.branches, row.courseId);
-          if (!courseBranches.length) {
-            throw new Error("Selected course has no branches — pick another course or whole college");
+
+        for (const collegeId of selectedCollegeIds) {
+          const draft = collegeScopes[collegeId];
+          if (!draft) continue;
+
+          if (draft.allCollege) {
+            assignments.push({ roleKey: selectedRoleKey, collegeId, branchId: null });
+            continue;
           }
-          for (const branch of courseBranches) {
-            assignments.push({
-              roleKey: row.roleKey,
-              collegeId,
-              branchId: branch.id,
-            });
+
+          const courseIds = Object.keys(draft.courses).map(Number);
+          if (!courseIds.length) {
+            throw new Error(
+              "Please select at least one course for the selected college, or select 'Entire college'."
+            );
           }
-          continue;
+
+          for (const courseId of courseIds) {
+            const courseDraft = draft.courses[courseId];
+            const courseBranches = props.branches.filter((b) => b.courseId === courseId);
+
+            if (courseDraft.allBranches) {
+              if (!courseBranches.length) {
+                throw new Error("Selected course has no branches configured.");
+              }
+              for (const branch of courseBranches) {
+                assignments.push({
+                  roleKey: selectedRoleKey,
+                  collegeId,
+                  branchId: branch.id,
+                });
+              }
+            } else {
+              if (!courseDraft.branchIds.length) {
+                throw new Error(
+                  "Please select at least one branch or choose 'All branches in this course'."
+                );
+              }
+              for (const branchId of courseDraft.branchIds) {
+                assignments.push({
+                  roleKey: selectedRoleKey,
+                  collegeId,
+                  branchId,
+                });
+              }
+            }
+          }
         }
-        // Specific branch
-        assignments.push({
-          roleKey: row.roleKey,
-          collegeId,
-          branchId: row.branchId ? Number(row.branchId) : null,
-        });
       }
+
+      // Deduplicate
+      const seen = new Set<string>();
+      const uniqueAssignments = assignments.filter((s) => {
+        const key = `${s.roleKey}:${s.collegeId ?? "null"}:${s.branchId ?? "null"}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
 
       const response = await apiFetch(`/users/${props.user.id}/roles`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ assignments }),
+        body: JSON.stringify({ assignments: uniqueAssignments }),
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body?.message || "Failed to update roles");
+      if (!response.ok) throw new Error(body?.message || "Failed to update role & scope");
       await props.onSaved(body as ManagedUser);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update roles");
+      setError(err instanceof Error ? err.message : "Failed to update role & scope");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Modal title={`Edit roles — ${props.user.name}`} onClose={props.onClose}>
-      <p className="mb-3 text-xs text-slate-500">
-        Scope order: college → course → branch. Leave course/branch empty for whole-college access.
-        Leave branch empty (with a course) for all branches in that course.
-      </p>
-      <div className="space-y-3">
-        {rows.map((row, index) => {
-          const meta = props.roles.find((r) => r.roleKey === row.roleKey);
-          const global = Boolean(meta?.isGlobalCapable);
-          const courseOptions = coursesForCollegeId(props.courses, row.collegeId);
-          const branchOptions = row.courseId
-            ? branchesForCourseId(props.branches, row.courseId)
-            : branchesForCollege(props.branches, props.courses, row.collegeId);
-          return (
-            <div key={index} className="rounded-md border border-border p-3">
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                <label className="text-xs font-medium text-slate-500">
-                  Role
-                  <select
-                    className={`${selectClass} mt-1 w-full`}
-                    value={row.roleKey}
-                    onChange={(e) =>
-                      setRows((prev) =>
-                        prev.map((item, i) =>
-                          i === index
-                            ? {
-                                ...item,
-                                roleKey: e.target.value,
-                                collegeId: "",
-                                courseId: "",
-                                branchId: "",
-                              }
-                            : item,
-                        ),
-                      )
-                    }
-                  >
-                    {props.roles.map((r) => (
-                      <option key={r.roleKey} value={r.roleKey}>
-                        {r.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                {!global ? (
-                  <>
-                    <label className="text-xs font-medium text-slate-500">
-                      College
-                      <select
-                        className={`${selectClass} mt-1 w-full`}
-                        value={row.collegeId}
-                        onChange={(e) =>
-                          setRows((prev) =>
-                            prev.map((item, i) =>
-                              i === index
-                                ? {
-                                    ...item,
-                                    collegeId: e.target.value,
-                                    courseId: "",
-                                    branchId: "",
-                                  }
-                                : item,
-                            ),
-                          )
-                        }
-                      >
-                        <option value="">Select</option>
-                        {props.colleges.map((c) => (
-                          <option key={c.id} value={String(c.id)}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs font-medium text-slate-500">
-                      Course
-                      <select
-                        className={`${selectClass} mt-1 w-full`}
-                        value={row.courseId}
-                        disabled={!row.collegeId}
-                        onChange={(e) =>
-                          setRows((prev) =>
-                            prev.map((item, i) =>
-                              i === index
-                                ? { ...item, courseId: e.target.value, branchId: "" }
-                                : item,
-                            ),
-                          )
-                        }
-                      >
-                        <option value="">All courses (whole college)</option>
-                        {courseOptions.map((c) => (
-                          <option key={c.id} value={String(c.id)}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs font-medium text-slate-500">
-                      Branch
-                      <select
-                        className={`${selectClass} mt-1 w-full`}
-                        value={row.branchId}
-                        disabled={!row.collegeId}
-                        onChange={(e) =>
-                          setRows((prev) =>
-                            prev.map((item, i) =>
-                              i === index ? { ...item, branchId: e.target.value } : item,
-                            ),
-                          )
-                        }
-                      >
-                        <option value="">
-                          {row.courseId ? "All branches in course" : "All branches in college"}
-                        </option>
-                        {branchOptions.map((b) => (
-                          <option key={b.id} value={String(b.id)}>
-                            {b.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </>
-                ) : (
-                  <p className="text-xs text-slate-500 sm:col-span-3 sm:self-end">Global scope</p>
-                )}
-              </div>
-              <div className="mt-2 flex justify-end">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setRows((prev) => prev.filter((_, i) => i !== index))}
-                >
-                  Remove
-                </Button>
-              </div>
-            </div>
-          );
-        })}
+    <Modal title={`Edit Role & Scope — ${props.user.name}`} onClose={props.onClose}>
+      <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3">
+        <label className="text-xs font-bold text-blue-950">
+          User Role (Single Role)
+          <select
+            className={`${selectClass} mt-1 w-full bg-white font-semibold text-slate-900 border-blue-300`}
+            value={selectedRoleKey}
+            onChange={(e) => {
+              setSelectedRoleKey(e.target.value);
+              const meta = props.roles.find((r) => r.roleKey === e.target.value);
+              if (meta?.isGlobalCapable) {
+                setCollegeScopes({});
+              }
+              setError(null);
+            }}
+          >
+            {creatableRoles.map((r) => {
+              const hierarchyIndex = HIERARCHY_ORDER[r.roleKey];
+              const prefix = hierarchyIndex ? `[L${hierarchyIndex}] ` : "";
+              return (
+                <option key={r.roleKey} value={r.roleKey}>
+                  {prefix}
+                  {r.label} —{" "}
+                  {r.roleKey === "super_admin"
+                    ? "Institute-wide Authority"
+                    : r.roleKey === "principal"
+                    ? "College-wide Leadership"
+                    : r.roleKey === "vice_principal"
+                    ? "Academic & Timetable Oversight"
+                    : r.roleKey === "hod"
+                    ? "Department & Combined Branches"
+                    : r.roleKey === "class_teacher"
+                    ? "Section / Class In-Charge & Mentoring"
+                    : "Subject Faculty & Teaching Access"}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+        <p className="mt-1 text-[11px] text-blue-800">
+          <strong>Hierarchy Order:</strong> Super Admin (L1) → Principal/VP (L2) → HOD (L3) → Class Teacher (L4) → Subject Faculty (L5). Pure subject faculty have teaching student access; Class Teachers, HODs, and Principals have role-assigned student oversight.
+        </p>
       </div>
-      <Button className="mt-3" size="sm" variant="secondary" onClick={addRow}>
-        Add role
-      </Button>
+
+      {isGlobal ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+          This role has institute-wide global access (no specific college/branch restriction required).
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-bold text-slate-800">
+                Courses &amp; Branches Multi-Selection Scope
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Select colleges, multiple courses, and branches below. Select entire colleges, combined courses, or specific branches.
+              </p>
+            </div>
+            <span className="rounded bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-800 border border-blue-200">
+              Multi-Select
+            </span>
+          </div>
+
+          <div className="max-h-[22rem] space-y-2.5 overflow-y-auto pr-1">
+            {props.colleges.map((college) => {
+              const checked = Boolean(collegeScopes[college.id]);
+              const draft = collegeScopes[college.id];
+              const collegeCourses = props.courses.filter((c) => c.collegeId === college.id);
+
+              return (
+                <div
+                  key={college.id}
+                  className={cn(
+                    "rounded-xl border bg-white p-3 transition-all",
+                    checked ? "border-navy-700 ring-1 ring-navy-800/10 shadow-xs" : "border-slate-200"
+                  )}
+                >
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4 rounded border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                      checked={checked}
+                      onChange={() => toggleCollege(college.id)}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-bold text-navy-900">{college.name}</span>
+                        <span className="text-[11px] text-slate-500">
+                          {collegeCourses.length} course{collegeCourses.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    </div>
+                  </label>
+
+                  {checked && draft ? (
+                    <div className="mt-2.5 space-y-2.5 border-t border-slate-100 pt-2.5 pl-6">
+                      <div className="flex flex-wrap gap-4 text-xs">
+                        <label className="flex cursor-pointer items-center gap-1.5 font-medium text-slate-700">
+                          <input
+                            type="radio"
+                            name={`dialog-college-mode-${college.id}`}
+                            checked={draft.allCollege}
+                            onChange={() => setCollegeMode(college.id, true)}
+                            className="h-3.5 w-3.5 border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                          />
+                          Entire College (All Courses &amp; Branches)
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-1.5 font-medium text-slate-700">
+                          <input
+                            type="radio"
+                            name={`dialog-college-mode-${college.id}`}
+                            checked={!draft.allCollege}
+                            onChange={() => setCollegeMode(college.id, false)}
+                            className="h-3.5 w-3.5 border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                          />
+                          Specific Courses &amp; Branches
+                        </label>
+                      </div>
+
+                      {!draft.allCollege ? (
+                        collegeCourses.length === 0 ? (
+                          <p className="text-[11px] text-amber-800">
+                            No courses available for this college.
+                          </p>
+                        ) : (
+                          <div className="space-y-2 mt-2">
+                            <p className="text-[11px] font-semibold text-slate-600 uppercase tracking-wider">
+                              Select Courses:
+                            </p>
+                            {collegeCourses.map((course) => {
+                              const courseChecked = Boolean(draft.courses[course.id]);
+                              const courseDraft = draft.courses[course.id];
+                              const courseBranches = props.branches.filter(
+                                (b) => b.courseId === course.id,
+                              );
+
+                              return (
+                                <div
+                                  key={course.id}
+                                  className={cn(
+                                    "rounded-lg border p-2.5 transition-all",
+                                    courseChecked
+                                      ? "border-blue-300 bg-blue-50/40"
+                                      : "border-slate-200 bg-slate-50/60"
+                                  )}
+                                >
+                                  <label className="flex cursor-pointer items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      className="h-3.5 w-3.5 rounded border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                                      checked={courseChecked}
+                                      onChange={() => toggleCourse(college.id, course.id)}
+                                    />
+                                    <span className="text-xs font-bold text-navy-900">
+                                      {course.name}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500">
+                                      ({courseBranches.length} branch{courseBranches.length === 1 ? "" : "es"})
+                                    </span>
+                                  </label>
+
+                                  {courseChecked && courseDraft ? (
+                                    <div className="mt-2 space-y-2 border-t border-blue-100 pt-2 pl-5">
+                                      <div className="flex flex-wrap gap-3 text-xs">
+                                        <label className="flex cursor-pointer items-center gap-1.5 text-slate-700">
+                                          <input
+                                            type="radio"
+                                            name={`dialog-course-mode-${college.id}-${course.id}`}
+                                            checked={courseDraft.allBranches}
+                                            onChange={() =>
+                                              setCourseBranchMode(college.id, course.id, true)
+                                            }
+                                            className="h-3 w-3 border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                                          />
+                                          All branches in {course.name}
+                                        </label>
+                                        <label className="flex cursor-pointer items-center gap-1.5 text-slate-700">
+                                          <input
+                                            type="radio"
+                                            name={`dialog-course-mode-${college.id}-${course.id}`}
+                                            checked={!courseDraft.allBranches}
+                                            onChange={() =>
+                                              setCourseBranchMode(college.id, course.id, false)
+                                            }
+                                            className="h-3 w-3 border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                                          />
+                                          Specific branches
+                                        </label>
+                                      </div>
+
+                                      {!courseDraft.allBranches ? (
+                                        <div className="flex flex-wrap gap-1.5 pt-1">
+                                          {courseBranches.map((branch) => {
+                                            const bChecked = courseDraft.branchIds.includes(
+                                              branch.id,
+                                            );
+                                            return (
+                                              <button
+                                                key={branch.id}
+                                                type="button"
+                                                onClick={() =>
+                                                  toggleBranch(college.id, course.id, branch.id)
+                                                }
+                                                className={cn(
+                                                  "rounded-md px-2 py-1 text-xs font-medium transition-all flex items-center gap-1.5",
+                                                  bChecked
+                                                    ? "bg-navy-900 text-white shadow-2xs"
+                                                    : "bg-white text-slate-700 border border-slate-200 hover:border-slate-300"
+                                                )}
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  checked={bChecked}
+                                                  readOnly
+                                                  className="h-3 w-3 rounded pointer-events-none"
+                                                />
+                                                <span>{branch.name}</span>
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {error ? <p className="mt-3 text-sm text-critical">{error}</p> : null}
-      <div className="mt-4 flex justify-end gap-2">
+      <div className="mt-4 flex justify-end gap-2 border-t border-slate-100 pt-3">
         <Button variant="secondary" onClick={props.onClose}>
           Cancel
         </Button>
         <Button disabled={busy} onClick={() => void save()}>
-          {busy ? "Saving…" : "Save roles"}
+          {busy ? "Saving…" : "Save Role & Scope"}
         </Button>
       </div>
     </Modal>

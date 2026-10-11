@@ -10,6 +10,27 @@ export type RoleAssignment = {
   createdAt: string | null;
 };
 
+export type TeachingSubjectScope = {
+  subjectId: number;
+  subjectCode: string;
+  subjectName: string;
+  sectionName: string | null;
+  batch: string | null;
+  yearOfStudy: number | null;
+  semesterNumber: number | null;
+  branchId: number;
+  branchName: string;
+  collegeName: string;
+  studentCount: number;
+};
+
+export type TeachingScope = {
+  staffLinkId: number | null;
+  subjectsCount: number;
+  totalTeachingStudents: number;
+  subjects: TeachingSubjectScope[];
+};
+
 export type ManagedUser = {
   id: number;
   name: string;
@@ -26,6 +47,7 @@ export type ManagedUser = {
   revokedPermissions?: string[];
   createdAt?: string | null;
   updatedAt?: string | null;
+  teachingScope?: TeachingScope;
 };
 
 export type ApRoleOption = {
@@ -112,3 +134,18 @@ export function isBootstrapSuperAdmin(
 ): boolean {
   return user.isLocalBootstrap && user.roles.some((r) => r.roleKey === "super_admin");
 }
+
+export type UserRoleStat = {
+  roleKey: string;
+  label: string;
+  totalCount: number;
+  activeCount: number;
+};
+
+export type UserManagementStats = {
+  total: number;
+  active: number;
+  inactive: number;
+  unassigned: number;
+  roles: UserRoleStat[];
+};

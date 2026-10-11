@@ -155,6 +155,9 @@ type PeriodOverride = {
 };
 
 export type AllBatchesCohort = {
+  collegeId?: number;
+  branchId?: number;
+  courseId?: number;
   batch: string;
   year: number;
   semester: number;
@@ -1983,21 +1986,20 @@ export function TodayTimetableView() {
   // Only allowed to edit if user is authorized AND date is today or future!
   const canEditCurrentView = canChangeTimetable && !isPastDate;
 
-  // Auto-resolve required filters so timetable displays by default when college & branch are selected
+  // Auto-resolve required filters so timetable displays by default on initial loading
   useEffect(() => {
     if (!masters) return;
-    if (filters.collegeId === "all" || filters.branchId === "all") return;
 
     const updates: Partial<typeof filters> = {};
 
-    // 1. Course
-    if (filters.courseId === "all") {
-      const branch = masters.branches.find((b) => b.id === filters.branchId);
-      if (branch?.courseId) {
-        updates.courseId = branch.courseId;
-      } else if (masters.courses.length > 0) {
-        updates.courseId = masters.courses[0].id;
-      }
+    // 1. Academic Year: default if not set
+    if (!filters.academicYear) {
+      const defYear =
+        masters.defaults?.academicYear ||
+        masters.academicYears.find((y) => y.isActive)?.label ||
+        masters.academicYears[0]?.label ||
+        "2026-2027";
+      if (defYear) updates.academicYear = defYear;
     }
 
     // 2. Batch: For Today Timetable, Batch is removed from filters, so always 'all'
@@ -2010,10 +2012,14 @@ export function TodayTimetableView() {
       updates.section = "all";
     }
 
-    // 4. Academic Year
-    if (!filters.academicYear) {
-      const defYear = masters.defaults?.academicYear || masters.academicYears[0]?.label || "2024-2025";
-      if (defYear) updates.academicYear = defYear;
+    // 4. Course: if branch is selected, sync course
+    if (filters.branchId !== "all" && filters.courseId === "all") {
+      const branch = masters.branches.find((b) => b.id === filters.branchId);
+      if (branch?.courseId) {
+        updates.courseId = branch.courseId;
+      } else if (masters.courses.length > 0) {
+        updates.courseId = masters.courses[0].id;
+      }
     }
 
     if (Object.keys(updates).length > 0) {
@@ -2087,6 +2093,10 @@ export function TodayTimetableView() {
     setFilters,
   ]);
 
+  const selectedCollege =
+    filters.collegeId === "all" || !masters
+      ? null
+      : masters.colleges.find((c) => c.id === filters.collegeId) ?? null;
   const selectedBranch =
     filters.branchId === "all" || !masters
       ? null
@@ -2094,11 +2104,11 @@ export function TodayTimetableView() {
   const needsSection = Boolean(selectedBranch?.hasSections);
   const isAllBatchesMode = filters.batch === "all";
   const filtersComplete =
-    filters.collegeId !== "all" &&
-    filters.branchId !== "all" &&
     Boolean(filters.academicYear) &&
     (isAllBatchesMode ||
-      (filters.batch !== "all" &&
+      (filters.collegeId !== "all" &&
+        filters.branchId !== "all" &&
+        filters.batch !== "all" &&
         filters.semester !== "all" &&
         (!needsSection || filters.section !== "all")));
 
@@ -2109,20 +2119,33 @@ export function TodayTimetableView() {
 
   // Semester pills: 1-1, 1-2, 2-1, 2-2, 3-1, 3-2, 4-1, 4-2
   const semesterPills = useMemo(() => {
-    const totalYears = selectedCourse?.totalYears ?? 4;
-    const semsPerYear = selectedCourse?.semestersPerYear ?? 2;
+    if (selectedCourse) {
+      const totalYears = selectedCourse?.totalYears ?? 4;
+      const semsPerYear = selectedCourse?.semestersPerYear ?? 2;
+      const pills: Array<{ label: string; year: number; semester: number }> = [];
+      for (let y = 1; y <= totalYears; y++) {
+        for (let s = 1; s <= semsPerYear; s++) {
+          pills.push({
+            label: `${y}-${s}`,
+            year: y,
+            semester: s,
+          });
+        }
+      }
+      return pills;
+    }
+    // If all colleges / courses mode, derive pills from loaded batches:
+    const seen = new Set<string>();
     const pills: Array<{ label: string; year: number; semester: number }> = [];
-    for (let y = 1; y <= totalYears; y++) {
-      for (let s = 1; s <= semsPerYear; s++) {
-        pills.push({
-          label: `${y}-${s}`,
-          year: y,
-          semester: s,
-        });
+    for (const b of allBatchesData) {
+      const key = `${b.year}-${b.semester}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        pills.push({ label: key, year: b.year, semester: b.semester });
       }
     }
-    return pills;
-  }, [selectedCourse]);
+    return pills.sort((a, b) => (a.year !== b.year ? a.year - b.year : a.semester - b.semester));
+  }, [selectedCourse, allBatchesData]);
 
   const query = useMemo(() => {
     if (!filtersComplete || isAllBatchesMode) return null;
@@ -2198,12 +2221,7 @@ export function TodayTimetableView() {
 
   // Load All Batches timetable for all running cohorts in the academic year
   const loadAllBatches = useCallback(async () => {
-    if (
-      !isAllBatchesMode ||
-      filters.collegeId === "all" ||
-      filters.branchId === "all" ||
-      !filters.academicYear
-    ) {
+    if (!isAllBatchesMode || !filters.academicYear) {
       setAllBatchesData([]);
       return;
     }
@@ -2212,9 +2230,9 @@ export function TodayTimetableView() {
     setAllBatchesError(null);
     try {
       const params = new URLSearchParams();
-      params.set("collegeId", String(filters.collegeId));
+      if (filters.collegeId !== "all") params.set("collegeId", String(filters.collegeId));
       if (filters.courseId !== "all") params.set("courseId", String(filters.courseId));
-      params.set("branchId", String(filters.branchId));
+      if (filters.branchId !== "all") params.set("branchId", String(filters.branchId));
       params.set("academicYear", filters.academicYear);
       params.set("date", selectedDate);
 
@@ -2360,7 +2378,7 @@ export function TodayTimetableView() {
   const isSunday = fromYMD(selectedDate).getDay() === 0;
   const isDayOff = planner?.ready && !isSunday && daySlots.length === 0;
   const missingLabel = !filtersComplete
-    ? "Please select College and Branch from the filter bar to view Today's timetable."
+    ? "Please select an Academic Year from the filter bar to view Today's timetable."
     : null;
 
 
@@ -2437,14 +2455,24 @@ export function TodayTimetableView() {
 
     // Call backend API to record activity and store override permanently
     try {
+      const targetCollegeId =
+        cohort?.collegeId ||
+        (cohort?.planner?.context as { collegeId?: number } | undefined)?.collegeId ||
+        (filters.collegeId !== "all" ? Number(filters.collegeId) : (masters?.colleges[0]?.id ?? 1));
+      const targetBranchId =
+        cohort?.branchId ||
+        (cohort?.planner?.context as { branchId?: number } | undefined)?.branchId ||
+        (filters.branchId !== "all" ? Number(filters.branchId) : (masters?.branches[0]?.id ?? 1));
+      const targetCourseId =
+        cohort?.courseId ||
+        (cohort?.planner?.context as { courseId?: number } | undefined)?.courseId ||
+        (filters.courseId !== "all" ? Number(filters.courseId) : (selectedBranch?.courseId || 1));
+
       const body = {
         date: selectedDate,
-        collegeId: filters.collegeId,
-        courseId:
-          filters.courseId !== "all"
-            ? filters.courseId
-            : (cohort?.planner.context as { courseId?: number } | undefined)?.courseId || (selectedBranch?.courseId || 1),
-        branchId: filters.branchId,
+        collegeId: targetCollegeId,
+        courseId: targetCourseId,
+        branchId: targetBranchId,
         batch: targetBatch,
         semester: targetSemester,
         section: targetSection,
@@ -2551,7 +2579,7 @@ export function TodayTimetableView() {
       </div>
 
       {/* Semester Switcher Tabs (All Semesters, 1-1, 1-2, 2-1, 2-2, etc.) */}
-      {filters.branchId !== "all" && semesterPills.length > 0 && (
+      {semesterPills.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-xs">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2">Semester:</span>
@@ -2611,13 +2639,22 @@ export function TodayTimetableView() {
           <div>
             <div className="flex items-center gap-2">
               <h3 className="text-base font-bold text-navy-900">
-                {selectedBranch ? `${selectedBranch.name}` : ""}
+                {filters.collegeId === "all"
+                  ? "All Colleges"
+                  : selectedCollege?.name || "Selected College"}
+                {filters.branchId !== "all" && selectedBranch ? ` · ${selectedBranch.name}` : ""}
                 {filters.academicYear ? ` · ${filters.academicYear}` : ""}
               </h3>
               {isAllBatchesMode ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-0.5 text-[11px] font-bold text-indigo-800 border border-indigo-200">
                   <BookOpen className="h-3 w-3" />
-                  <span>All Running Batches</span>
+                  <span>
+                    {filters.collegeId === "all"
+                      ? "All Colleges · All Batches"
+                      : filters.branchId === "all"
+                      ? "All Branches · All Batches"
+                      : "All Running Batches"}
+                  </span>
                 </span>
               ) : studentProgressInfo ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800 border border-emerald-200">
@@ -2727,7 +2764,7 @@ export function TodayTimetableView() {
           {!allBatchesLoading && !allBatchesError && allBatchesData.length === 0 && (
             <Card className="mb-4">
               <p className="text-sm text-slate-600">
-                No active timetable plans found for this branch in {filters.academicYear}.
+                No active timetable plans found for {filters.collegeId === "all" ? "any college" : selectedCollege?.name || "this college"} in {filters.academicYear}.
               </p>
             </Card>
           )}
@@ -2742,7 +2779,7 @@ export function TodayTimetableView() {
 
               return (
                 <div
-                  key={`${cohort.batch}-${cohort.year}-${cohort.semester}-${cohort.section || ""}`}
+                  key={`${cohort.collegeId || ""}-${cohort.branchId || ""}-${cohort.batch}-${cohort.year}-${cohort.semester}-${cohort.section || ""}`}
                   className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
                 >
                   {/* Cohort Header */}
@@ -2754,6 +2791,16 @@ export function TodayTimetableView() {
                       <span className="rounded-lg bg-indigo-100 px-2.5 py-1 text-xs font-extrabold text-indigo-800 border border-indigo-200">
                         {cohort.yearSemLabel}
                       </span>
+                      {cohort.planner?.context?.college && (
+                        <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-800 border border-blue-200">
+                          {cohort.planner.context.college}
+                        </span>
+                      )}
+                      {cohort.planner?.context?.branch && (
+                        <span className="rounded-md bg-purple-50 px-2 py-0.5 text-xs font-bold text-purple-800 border border-purple-200">
+                          {cohort.planner.context.branch}
+                        </span>
+                      )}
                       <span className="text-sm font-bold text-slate-800">
                         Year {cohort.year}, Semester {cohort.semester}
                       </span>

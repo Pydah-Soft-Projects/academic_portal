@@ -16,6 +16,7 @@ import {
   loadHrmsOrgLookups,
 } from "./hrms-staff.service.js";
 import { mysqlDateTimeToIso } from "../lib/mysql-datetime.js";
+import { resolveStaffLinkIdForUser } from "../authz/faculty-self-scope.js";
 
 export type UserListFilters = {
   q?: string;
@@ -51,12 +52,34 @@ export type ManagedUserListItem = {
   lastLoginAt: string | null;
 };
 
+export type TeachingSubjectScopeDto = {
+  subjectId: number;
+  subjectCode: string;
+  subjectName: string;
+  sectionName: string | null;
+  batch: string | null;
+  yearOfStudy: number | null;
+  semesterNumber: number | null;
+  branchId: number;
+  branchName: string;
+  collegeName: string;
+  studentCount: number;
+};
+
+export type TeachingScopeDto = {
+  staffLinkId: number | null;
+  subjectsCount: number;
+  totalTeachingStudents: number;
+  subjects: TeachingSubjectScopeDto[];
+};
+
 export type ManagedUserDetail = ManagedUserListItem & {
   permissions: string[];
   rolePermissions: string[];
   directPermissions: string[];
   createdAt: string | null;
   updatedAt: string | null;
+  teachingScope?: TeachingScopeDto;
 };
 
 export type HrmsCandidate = {
@@ -318,6 +341,176 @@ export async function listManagedUsers(filters: UserListFilters = {}) {
   };
 }
 
+export type UserRoleStat = {
+  roleKey: string;
+  label: string;
+  totalCount: number;
+  activeCount: number;
+};
+
+export type UserManagementStatsDto = {
+  total: number;
+  active: number;
+  inactive: number;
+  unassigned: number;
+  roles: UserRoleStat[];
+};
+
+export async function getUserManagementStats(): Promise<UserManagementStatsDto> {
+  const [overallRows, roleRows, unassignedRows] = await Promise.all([
+    queryAcademic<(RowDataPacket & { total: number; active: number; inactive: number })[]>(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) AS active,
+        COALESCE(SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END), 0) AS inactive
+      FROM ap_users
+    `),
+    queryAcademic<(RowDataPacket & { role_key: string; label: string; total_count: number; active_count: number })[]>(`
+      SELECT
+        r.role_key,
+        r.label,
+        COUNT(DISTINCT u.id) AS total_count,
+        COUNT(DISTINCT CASE WHEN u.is_active = 1 THEN u.id END) AS active_count
+      FROM ap_roles r
+      LEFT JOIN ap_user_roles ur ON ur.role_id = r.id
+      LEFT JOIN ap_users u ON u.id = ur.user_id
+      WHERE r.is_active = 1
+      GROUP BY r.id, r.role_key, r.label
+      ORDER BY r.id ASC
+    `),
+    queryAcademic<(RowDataPacket & { unassigned: number })[]>(`
+      SELECT COUNT(*) AS unassigned
+      FROM ap_users u
+      WHERE NOT EXISTS (SELECT 1 FROM ap_user_roles ur WHERE ur.user_id = u.id)
+    `),
+  ]);
+
+  const overall = overallRows[0] ?? { total: 0, active: 0, inactive: 0 };
+  const unassigned = Number(unassignedRows[0]?.unassigned ?? 0);
+
+  return {
+    total: Number(overall.total ?? 0),
+    active: Number(overall.active ?? 0),
+    inactive: Number(overall.inactive ?? 0),
+    unassigned,
+    roles: roleRows.map((r) => ({
+      roleKey: String(r.role_key),
+      label: String(r.label),
+      totalCount: Number(r.total_count ?? 0),
+      activeCount: Number(r.active_count ?? 0),
+    })),
+  };
+}
+
+export async function loadUserTeachingScope(userId: number): Promise<TeachingScopeDto> {
+  const staffLinkId = await resolveStaffLinkIdForUser(userId);
+  if (!staffLinkId) {
+    return {
+      staffLinkId: null,
+      subjectsCount: 0,
+      totalTeachingStudents: 0,
+      subjects: [],
+    };
+  }
+
+  const { collegeById, branchById } = await loadCollegeBranchMaps();
+
+  const rows = await queryAcademic<
+    (RowDataPacket & {
+      subject_id: number;
+      subject_code: string | null;
+      subject_name: string | null;
+      college_id: number | null;
+      section_name: string | null;
+      batch: string | null;
+      year_of_study: number | null;
+      semester_number: number | null;
+      branch_id: number;
+    })[]
+  >(
+    `
+    SELECT
+      te.subject_id,
+      te.subject_code,
+      te.subject_name,
+      tp.college_id,
+      tp.section_name,
+      tp.batch,
+      tp.year_of_study,
+      tp.semester_number,
+      tp.branch_id
+    FROM ap_timetable_entries te
+    INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
+    WHERE te.faculty_staff_link_id = ?
+      AND te.subject_id IS NOT NULL
+    GROUP BY te.subject_id, te.subject_code, te.subject_name, tp.college_id, tp.section_name, tp.batch, tp.year_of_study, tp.semester_number, tp.branch_id
+    ORDER BY te.subject_name ASC, tp.section_name ASC
+    `,
+    [staffLinkId],
+  );
+
+  const studentIdSet = new Set<number>();
+  const subjectsWithStudents: TeachingSubjectScopeDto[] = [];
+
+  for (const row of rows) {
+    const where = ["branch_id = ?"];
+    const params: unknown[] = [row.branch_id];
+    if (row.batch) {
+      where.push("batch = ?");
+      params.push(row.batch);
+    }
+    if (row.year_of_study) {
+      where.push("current_year = ?");
+      params.push(row.year_of_study);
+    }
+    if (row.semester_number) {
+      where.push("current_semester = ?");
+      params.push(row.semester_number);
+    }
+    if (row.section_name) {
+      where.push("section = ?");
+      params.push(row.section_name);
+    }
+    where.push(
+      "(student_status IS NULL OR LOWER(student_status) NOT IN ('relieved', 'discontinued', 'inactive', 'cancelled'))",
+    );
+
+    const studentRows = await queryStudent<(RowDataPacket & { id: number })[]>(
+      `SELECT DISTINCT id FROM students WHERE ${where.join(" AND ")}`,
+      params,
+    ).catch(() => []);
+
+    for (const s of studentRows) {
+      studentIdSet.add(s.id);
+    }
+
+    const branchName = branchById.get(Number(row.branch_id)) || `Branch #${row.branch_id}`;
+    const collegeName =
+      (row.college_id != null ? collegeById.get(Number(row.college_id)) : null) || "College";
+
+    subjectsWithStudents.push({
+      subjectId: Number(row.subject_id),
+      subjectCode: row.subject_code || "",
+      subjectName: row.subject_name || "Subject",
+      sectionName: row.section_name,
+      batch: row.batch,
+      yearOfStudy: row.year_of_study != null ? Number(row.year_of_study) : null,
+      semesterNumber: row.semester_number != null ? Number(row.semester_number) : null,
+      branchId: Number(row.branch_id),
+      branchName,
+      collegeName,
+      studentCount: studentRows.length,
+    });
+  }
+
+  return {
+    staffLinkId,
+    subjectsCount: subjectsWithStudents.length,
+    totalTeachingStudents: studentIdSet.size,
+    subjects: subjectsWithStudents,
+  };
+}
+
 export async function getManagedUser(userId: number): Promise<ManagedUserDetail | null> {
   const rows = await queryAcademic<ApUserRow[]>(
     `
@@ -340,6 +533,7 @@ export async function getManagedUser(userId: number): Promise<ManagedUserDetail 
   const assignments = await loadAssignmentsForUsers([userId]);
   const roles = assignments.get(userId) ?? [];
   const authz = await loadAuthzContext(userId);
+  const teachingScope = await loadUserTeachingScope(userId);
   return {
     ...mapListItem(row, roles),
     permissions: authz.permissions,
@@ -347,6 +541,7 @@ export async function getManagedUser(userId: number): Promise<ManagedUserDetail 
     directPermissions: authz.directPermissions,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
+    teachingScope,
   };
 }
 
@@ -794,6 +989,11 @@ export async function replaceUserRoles(input: {
   const existing = await getManagedUser(input.userId);
   if (!existing) fail(404, "User not found");
   assertBootstrapSuperAdminRolesLocked(existing);
+
+  const distinctRoles = new Set(input.assignments.map((a) => a.roleKey));
+  if (distinctRoles.size > 1) {
+    fail(400, "Users can only have a single role. Multiple roles are not supported.");
+  }
 
   const normalized = await Promise.all(
     input.assignments.map((a) =>

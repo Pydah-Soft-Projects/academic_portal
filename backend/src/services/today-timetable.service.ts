@@ -530,6 +530,9 @@ export async function listDailyTimetableActivities(filters: {
 }
 
 export type AllBatchesCohortResult = {
+  collegeId: number;
+  branchId: number;
+  courseId?: number;
   batch: string;
   year: number;
   semester: number;
@@ -542,9 +545,11 @@ export type AllBatchesCohortResult = {
 };
 
 export async function getAllBatchesDailyTimetableData(filters: {
-  collegeId: number;
+  collegeId?: number;
+  collegeIds?: number[];
   courseId?: number;
-  branchId: number;
+  branchId?: number;
+  branchIds?: number[];
   academicYear: string;
   timetableDate?: string;
   semester?: number;
@@ -567,9 +572,41 @@ export async function getAllBatchesDailyTimetableData(filters: {
   }
 
   // 1. Fetch plans from ap_timetable_plans (prefer published, then any)
+  const conds: string[] = ["academic_year_label = ?"];
+  const params: unknown[] = [filters.academicYear];
+
+  if (filters.collegeId) {
+    conds.push("college_id = ?");
+    params.push(filters.collegeId);
+  } else if (filters.collegeIds?.length) {
+    conds.push(`college_id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    params.push(...filters.collegeIds);
+  }
+
+  if (filters.courseId) {
+    conds.push("course_id = ?");
+    params.push(filters.courseId);
+  }
+
+  if (filters.branchId) {
+    conds.push("branch_id = ?");
+    params.push(filters.branchId);
+  } else if (filters.branchIds?.length) {
+    conds.push(`branch_id IN (${filters.branchIds.map(() => "?").join(",")})`);
+    params.push(...filters.branchIds);
+  }
+
+  if (filters.semester) {
+    conds.push("semester_number = ?");
+    params.push(filters.semester);
+  }
+
   const planRows = await queryAcademic<
     (RowDataPacket & {
       id: number;
+      college_id: number;
+      course_id: number;
+      branch_id: number;
       batch: string;
       year_of_study: number | null;
       semester_number: number | null;
@@ -578,17 +615,18 @@ export async function getAllBatchesDailyTimetableData(filters: {
     })[]
   >(
     `
-    SELECT id, batch, year_of_study, semester_number, section_name, status
+    SELECT id, college_id, course_id, branch_id, batch, year_of_study, semester_number, section_name, status
     FROM ap_timetable_plans
-    WHERE college_id = ?
-      AND branch_id = ?
-      AND academic_year_label = ?
+    WHERE ${conds.join(" AND ")}
     ORDER BY CASE WHEN status = 'published' THEN 0 ELSE 1 END, year_of_study DESC, batch DESC, section_name ASC
     `,
-    [filters.collegeId, filters.branchId, filters.academicYear],
+    params,
   );
 
   type CohortKey = {
+    collegeId: number;
+    courseId?: number;
+    branchId: number;
     batch: string;
     year: number;
     semester: number;
@@ -603,52 +641,72 @@ export async function getAllBatchesDailyTimetableData(filters: {
     const y = p.year_of_study != null ? Number(p.year_of_study) : 1;
     const s = p.semester_number != null ? Number(p.semester_number) : 1;
     const sec = p.section_name ? String(p.section_name).trim() : null;
-    const key = `${b}_${y}_${s}_${sec || ""}`;
+    const key = `${p.college_id}_${p.branch_id}_${b}_${y}_${s}_${sec || ""}`;
     if (!cohortsMap.has(key)) {
-      cohortsMap.set(key, { batch: b, year: y, semester: s, section: sec });
+      cohortsMap.set(key, {
+        collegeId: p.college_id,
+        courseId: p.course_id,
+        branchId: p.branch_id,
+        batch: b,
+        year: y,
+        semester: s,
+        section: sec,
+      });
     }
   }
 
   // 2. Also check live students table to identify any active batches running in this academic year
-  try {
-    const studentCohorts = await queryStudent<
-      (RowDataPacket & {
-        batch: string;
-        current_year: number;
-        current_semester: number;
-      })[]
-    >(
-      `
-      SELECT DISTINCT s.batch, s.current_year, s.current_semester
-      FROM students s
-      WHERE s.college_id = ?
-        AND s.course_id = ?
-        AND s.branch_id = ?
-        AND s.batch IS NOT NULL AND s.batch != ''
-        AND s.current_year IS NOT NULL
-        AND s.current_semester IS NOT NULL
-        AND TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci
-      ORDER BY s.current_year DESC, s.batch DESC
-      `,
-      [filters.collegeId, filters.courseId, filters.branchId],
-    );
+  if (filters.collegeId && filters.branchId && resolvedCourseId) {
+    try {
+      const studentCohorts = await queryStudent<
+        (RowDataPacket & {
+          batch: string;
+          current_year: number;
+          current_semester: number;
+        })[]
+      >(
+        `
+        SELECT DISTINCT s.batch, s.current_year, s.current_semester
+        FROM students s
+        WHERE s.college_id = ?
+          AND s.course_id = ?
+          AND s.branch_id = ?
+          AND s.batch IS NOT NULL AND s.batch != ''
+          AND s.current_year IS NOT NULL
+          AND s.current_semester IS NOT NULL
+          AND TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci
+        ORDER BY s.current_year DESC, s.batch DESC
+        `,
+        [filters.collegeId, resolvedCourseId, filters.branchId],
+      );
 
-    for (const sc of studentCohorts) {
-      const b = String(sc.batch || "").trim();
-      if (!b) continue;
-      const y = Number(sc.current_year) || 1;
-      const s = Number(sc.current_semester) || 1;
-      const key = `${b}_${y}_${s}_`;
-      if (!cohortsMap.has(key)) {
-        cohortsMap.set(key, { batch: b, year: y, semester: s, section: null });
+      for (const sc of studentCohorts) {
+        const b = String(sc.batch || "").trim();
+        if (!b) continue;
+        const y = Number(sc.current_year) || 1;
+        const s = Number(sc.current_semester) || 1;
+        const key = `${filters.collegeId}_${filters.branchId}_${b}_${y}_${s}_`;
+        if (!cohortsMap.has(key)) {
+          cohortsMap.set(key, {
+            collegeId: filters.collegeId,
+            courseId: resolvedCourseId,
+            branchId: filters.branchId,
+            batch: b,
+            year: y,
+            semester: s,
+            section: null,
+          });
+        }
       }
+    } catch (err) {
+      console.warn("Could not query students table for cohort fallback:", err);
     }
-  } catch (err) {
-    console.warn("Could not query students table for cohort fallback:", err);
   }
 
-  // Convert to array and sort: 4th year first, then 3rd, 2nd, 1st (descending year)
+  // Convert to array and sort: college first, then branch, then 4th year, 3rd, 2nd, 1st
   const sortedCohorts = Array.from(cohortsMap.values()).sort((a, b) => {
+    if (a.collegeId !== b.collegeId) return a.collegeId - b.collegeId;
+    if (a.branchId !== b.branchId) return a.branchId - b.branchId;
     if (b.year !== a.year) return b.year - a.year;
     if (b.batch !== a.batch) return b.batch.localeCompare(a.batch);
     return (a.section || "").localeCompare(b.section || "");
@@ -657,11 +715,12 @@ export async function getAllBatchesDailyTimetableData(filters: {
   // Load planner and daily data for each cohort in parallel
   const batches: AllBatchesCohortResult[] = await Promise.all(
     sortedCohorts.map(async (cohort) => {
+      const cohortCourseId = cohort.courseId || resolvedCourseId;
       const [planner, dailyData] = await Promise.all([
         getTimetablePlanner({
-          collegeId: filters.collegeId,
-          courseId: resolvedCourseId,
-          branchId: filters.branchId,
+          collegeId: cohort.collegeId,
+          courseId: cohortCourseId,
+          branchId: cohort.branchId,
           batch: cohort.batch,
           year: cohort.year,
           semester: cohort.semester,
@@ -669,9 +728,9 @@ export async function getAllBatchesDailyTimetableData(filters: {
           academicYear: filters.academicYear,
         }),
         getDailyTimetableData({
-          collegeId: filters.collegeId,
-          courseId: resolvedCourseId,
-          branchId: filters.branchId,
+          collegeId: cohort.collegeId,
+          courseId: cohortCourseId,
+          branchId: cohort.branchId,
           batch: cohort.batch,
           semester: cohort.semester,
           sectionName: cohort.section,
@@ -684,6 +743,9 @@ export async function getAllBatchesDailyTimetableData(filters: {
       const batchLabel = `Batch ${cohort.batch} · ${yearSemLabel}${cohort.section ? ` (Sec ${cohort.section})` : ""}`;
 
       return {
+        collegeId: cohort.collegeId,
+        branchId: cohort.branchId,
+        courseId: cohortCourseId,
         batch: cohort.batch,
         year: cohort.year,
         semester: cohort.semester,

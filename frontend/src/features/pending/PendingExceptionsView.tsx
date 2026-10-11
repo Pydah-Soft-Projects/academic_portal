@@ -109,7 +109,7 @@ export function PendingExceptionsView() {
                 id: "attendance-risk-cohort",
                 priority: summary.studentsBelowThreshold >= 50 ? "High" : "Medium",
                 issue: `${summary.studentsBelowThreshold.toLocaleString()} students below 75% attendance`,
-                module: "Mentoring & Risks",
+                module: "Class Teacher & Mentoring",
                 owner: "Academic staff",
                 href: "/mentoring-risks",
                 status: "Open",

@@ -74,8 +74,8 @@ export function MentoringRisksView() {
   if (!canView) {
     return (
       <EmptyState
-        title="Mentoring & Risks unavailable"
-        description="You do not have permission to view mentoring and risk management."
+        title="Class Teacher & Mentoring unavailable"
+        description="You do not have permission to view class teacher oversight and mentoring."
       />
     );
   }
@@ -86,8 +86,8 @@ export function MentoringRisksView() {
   return (
     <div>
       <PageHeader
-        title="Mentoring & Risks"
-        description="Attendance-risk students, mentor assignments, and complaints within your academic scope."
+        title="Class Teacher & Mentoring"
+        description="Section in-charge roster, attendance-risk monitoring, interventions, and mentoring cases."
       />
 
       {error ? (

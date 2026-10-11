@@ -217,7 +217,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: ShieldAlert,
     items: [
       {
-        label: "Mentoring & Risks",
+        label: "Class Teacher & Mentoring",
         href: "/mentoring-risks",
         icon: ShieldAlert,
         permissions: ["mentoring.view", "students.view"],
