@@ -337,8 +337,9 @@ todayTimetableRouter.get(
         startDate: str(req.query.startDate),
         endDate: str(req.query.endDate),
         staffHrmsId: str(req.query.staffHrmsId),
+        facultyName: str(req.query.facultyName),
         subjectCode: str(req.query.subjectCode),
-        limit: num(req.query.limit) || 150,
+        limit: num(req.query.limit) || 300,
       });
 
       res.json(report);
