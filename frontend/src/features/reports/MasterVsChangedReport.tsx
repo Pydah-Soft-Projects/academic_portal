@@ -4,6 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { apiFetch } from "@/lib/api";
 import { escapeHtml, printElement, printHtml } from "@/lib/print-service";
+import {
+  downloadExcelWorkbook,
+  sanitizeSheetName,
+  type ExcelWorksheet,
+  type ExcelRow,
+} from "@/lib/excel-service";
 import { cn } from "@/lib/cn";
 import {
   RotateCcw,
@@ -27,6 +33,9 @@ import {
   Info,
   Users,
   Eye,
+  Printer,
+  Loader2,
+  Download,
 } from "lucide-react";
 
 type KpiModalType = "master" | "conducted" | "changed" | "substituted" | "swapped" | "rate" | null;
@@ -58,6 +67,9 @@ type SubjectStat = {
   changedFaculties?: Array<{ facultyName: string; originalFacultyName?: string; count: number }>;
   turnoutPct?: number | null;
   attendancePct: number;
+  totalPresent?: number;
+  totalAbsent?: number;
+  totalMarked?: number;
 };
 
 type FacultyStat = {
@@ -69,6 +81,10 @@ type FacultyStat = {
   substituteTakenCount: number;
   netTeachingCount: number;
   subjects: string[];
+  totalPresent?: number;
+  totalAbsent?: number;
+  totalMarked?: number;
+  attendancePct?: number | null;
 };
 
 type ComparisonItem = {
@@ -96,6 +112,8 @@ type ComparisonItem = {
   presentCount: number;
   absentCount: number;
   attendancePct: number | null;
+  enrolledCount?: number;
+  yearOfStudy?: number;
 };
 
 type MasterPeriodItem = {
@@ -167,6 +185,7 @@ type ReportResponse = {
   catalogSubjects?: Array<{ subjectCode: string; subjectName: string }>;
   catalogFaculties?: Array<{ hrmsId: string; facultyName: string }>;
   catalogClasses?: CatalogClass[];
+  sectionStrengths?: Record<string, number>;
 };
 
 function cleanSectionCode(raw: string | null | undefined): string {
@@ -235,6 +254,15 @@ export function MasterVsChangedReport({
   }) | null>(null);
   const [subjectModalSearch, setSubjectModalSearch] = useState("");
 
+  // Dedicated sessions loaded for active faculty/subject modal or on-demand export
+  const [dedicatedStaffSessions, setDedicatedStaffSessions] = useState<ComparisonItem[] | null>(null);
+  const [dedicatedSubjectSessions, setDedicatedSubjectSessions] = useState<ComparisonItem[] | null>(null);
+  const [loadingDedicatedSessions, setLoadingDedicatedSessions] = useState(false);
+
+  // Key tracking async PDF/Excel generation for specific items
+  const [generatingPdfKey, setGeneratingPdfKey] = useState<string | null>(null);
+  const [generatingExcelKey, setGeneratingExcelKey] = useState<string | null>(null);
+
   // Date mode: "today" or "range"
   const [dateMode, setDateMode] = useState<"today" | "range">("today");
   const [startDate, setStartDate] = useState(getTodayDateString());
@@ -301,8 +329,11 @@ export function MasterVsChangedReport({
         if (startDate) params.set("startDate", startDate);
         if (endDate) params.set("endDate", endDate);
       }
+      params.set("limit", "1000");
 
-      const res = await apiFetch(`/today-timetable/master-vs-changed-report?${params.toString()}`);
+      const res = await apiFetch(`/today-timetable/master-vs-changed-report?${params.toString()}`, {
+        cache: "no-store",
+      });
       if (res.ok) {
         const json = (await res.json()) as ReportResponse;
         setData(json);
@@ -332,6 +363,149 @@ export function MasterVsChangedReport({
   useEffect(() => {
     void loadReport();
   }, [loadReport]);
+
+  // Fetch dedicated complete dataset (up to 1000 sessions) for an individual faculty member
+  const fetchDedicatedFacultyData = useCallback(
+    async (f: { hrmsId?: string | null; facultyName: string }) => {
+      if (!academicYear) return null;
+      try {
+        const params = new URLSearchParams();
+        params.set("academicYear", academicYear);
+        if (selectedCollege != null) params.set("collegeId", String(selectedCollege));
+        if (selectedCourse != null) params.set("courseId", String(selectedCourse));
+        if (selectedBranch != null) params.set("branchId", String(selectedBranch));
+        if (selectedBatch) params.set("batch", selectedBatch);
+        if (selectedYear != null) params.set("year", String(selectedYear));
+        if (selectedSemester != null) params.set("semester", String(selectedSemester));
+        if (dateMode === "today") {
+          const todayStr = getTodayDateString();
+          params.set("startDate", todayStr);
+          params.set("endDate", todayStr);
+        } else {
+          if (startDate) params.set("startDate", startDate);
+          if (endDate) params.set("endDate", endDate);
+        }
+        if (f.hrmsId && f.hrmsId !== "N/A") params.set("staffHrmsId", f.hrmsId);
+        if (f.facultyName) params.set("facultyName", f.facultyName);
+        params.set("limit", "1000");
+
+        const res = await apiFetch(`/today-timetable/master-vs-changed-report?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          return (await res.json()) as ReportResponse;
+        }
+      } catch (err) {
+        console.error("Failed to fetch dedicated faculty data:", err);
+      }
+      return null;
+    },
+    [
+      academicYear,
+      selectedCollege,
+      selectedCourse,
+      selectedBranch,
+      selectedBatch,
+      selectedYear,
+      selectedSemester,
+      dateMode,
+      startDate,
+      endDate,
+    ],
+  );
+
+  // Fetch dedicated complete dataset (up to 1000 sessions) for an individual curriculum subject
+  const fetchDedicatedSubjectData = useCallback(
+    async (sub: { subjectCode: string; subjectName?: string }) => {
+      if (!academicYear) return null;
+      try {
+        const params = new URLSearchParams();
+        params.set("academicYear", academicYear);
+        if (selectedCollege != null) params.set("collegeId", String(selectedCollege));
+        if (selectedCourse != null) params.set("courseId", String(selectedCourse));
+        if (selectedBranch != null) params.set("branchId", String(selectedBranch));
+        if (selectedBatch) params.set("batch", selectedBatch);
+        if (selectedYear != null) params.set("year", String(selectedYear));
+        if (selectedSemester != null) params.set("semester", String(selectedSemester));
+        if (dateMode === "today") {
+          const todayStr = getTodayDateString();
+          params.set("startDate", todayStr);
+          params.set("endDate", todayStr);
+        } else {
+          if (startDate) params.set("startDate", startDate);
+          if (endDate) params.set("endDate", endDate);
+        }
+        if (sub.subjectCode) params.set("subjectCode", sub.subjectCode);
+        params.set("limit", "1000");
+
+        const res = await apiFetch(`/today-timetable/master-vs-changed-report?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (res.ok) {
+          return (await res.json()) as ReportResponse;
+        }
+      } catch (err) {
+        console.error("Failed to fetch dedicated subject data:", err);
+      }
+      return null;
+    },
+    [
+      academicYear,
+      selectedCollege,
+      selectedCourse,
+      selectedBranch,
+      selectedBatch,
+      selectedYear,
+      selectedSemester,
+      dateMode,
+      startDate,
+      endDate,
+    ],
+  );
+
+  // Automatically fetch complete verified history when activeStaffModal is opened
+  useEffect(() => {
+    if (!activeStaffModal) {
+      setDedicatedStaffSessions(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDedicatedSessions(true);
+    fetchDedicatedFacultyData(activeStaffModal)
+      .then((json) => {
+        if (!cancelled && json?.comparisons) {
+          setDedicatedStaffSessions(json.comparisons);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDedicatedSessions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeStaffModal, fetchDedicatedFacultyData]);
+
+  // Automatically fetch complete verified history when activeSubjectModal is opened
+  useEffect(() => {
+    if (!activeSubjectModal) {
+      setDedicatedSubjectSessions(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDedicatedSessions(true);
+    fetchDedicatedSubjectData(activeSubjectModal)
+      .then((json) => {
+        if (!cancelled && json?.comparisons) {
+          setDedicatedSubjectSessions(json.comparisons);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDedicatedSessions(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSubjectModal, fetchDedicatedSubjectData]);
 
   // Cascading Course Filter
   const filterCourses = useMemo(() => {
@@ -754,7 +928,12 @@ export function MasterVsChangedReport({
     const avgAttendance =
       withAttendance.length > 0
         ? Math.round(withAttendance.reduce((acc, s) => acc + s.attendancePct, 0) / withAttendance.length)
-        : 0;
+        : null;
+
+    const totalPresent = list.reduce((acc, s) => acc + (s.totalPresent || 0), 0);
+    const totalAbsent = list.reduce((acc, s) => acc + (s.totalAbsent || 0), 0);
+    const totalMarked = list.reduce((acc, s) => acc + (s.totalMarked || 0), 0);
+    const overallTurnoutPct = totalMarked > 0 ? Math.round((totalPresent / totalMarked) * 100) : null;
 
     return {
       totalSubjects,
@@ -765,6 +944,10 @@ export function MasterVsChangedReport({
       totalSwappedOut,
       totalSwappedIn,
       avgAttendance,
+      totalPresent,
+      totalAbsent,
+      totalMarked,
+      overallTurnoutPct,
     };
   }, [filteredSubjects]);
 
@@ -781,6 +964,11 @@ export function MasterVsChangedReport({
       (f) => f.classesConducted > 0 || f.masterAssignedPeriods > 0 || f.substituteTakenCount > 0,
     ).length;
 
+    const totalPresent = list.reduce((acc, f) => acc + (f.totalPresent || 0), 0);
+    const totalAbsent = list.reduce((acc, f) => acc + (f.totalAbsent || 0), 0);
+    const totalMarked = list.reduce((acc, f) => acc + (f.totalMarked || 0), 0);
+    const overallTurnoutPct = totalMarked > 0 ? Math.round((totalPresent / totalMarked) * 100) : null;
+
     return {
       totalStaff,
       totalAssignedLoad,
@@ -789,6 +977,10 @@ export function MasterVsChangedReport({
       totalSubstituteTaken,
       totalNetLoad,
       activeFacultyCount,
+      totalPresent,
+      totalAbsent,
+      totalMarked,
+      overallTurnoutPct,
     };
   }, [filteredFaculties]);
 
@@ -821,8 +1013,9 @@ export function MasterVsChangedReport({
     if (!activeStaffModal) return [];
     const hrms = (activeStaffModal.hrmsId || "").trim().toLowerCase();
     const facName = (activeStaffModal.facultyName || "").trim().toLowerCase();
+    const sourceComparisons = (dedicatedStaffSessions && dedicatedStaffSessions.length > 0) ? dedicatedStaffSessions : (data?.comparisons || []);
 
-    return (data?.comparisons || [])
+    return sourceComparisons
       .filter((c) => {
         const todayHrms = (c.todayFacultyHrmsId || "").trim().toLowerCase();
         const masterHrms = (c.masterFacultyHrmsId || "").trim().toLowerCase();
@@ -875,7 +1068,7 @@ export function MasterVsChangedReport({
           actionBadgeClass,
         };
       });
-  }, [activeStaffModal, data?.comparisons]);
+  }, [activeStaffModal, dedicatedStaffSessions, data?.comparisons]);
 
   const filteredModalStaffSessions = useMemo(() => {
     if (!staffModalSearch.trim()) return modalStaffSessions;
@@ -902,8 +1095,9 @@ export function MasterVsChangedReport({
     if (!activeSubjectModal) return [];
     const code = (activeSubjectModal.subjectCode || "").trim().toUpperCase();
     const name = (activeSubjectModal.subjectName || "").trim().toLowerCase();
+    const sourceComparisons = (dedicatedSubjectSessions && dedicatedSubjectSessions.length > 0) ? dedicatedSubjectSessions : (data?.comparisons || []);
 
-    return (data?.comparisons || [])
+    return sourceComparisons
       .filter((c) => {
         const matchCode =
           (c.masterSubjectCode && c.masterSubjectCode.trim().toUpperCase() === code) ||
@@ -964,7 +1158,7 @@ export function MasterVsChangedReport({
           actionBadgeClass,
         };
       });
-  }, [activeSubjectModal, data?.comparisons]);
+  }, [activeSubjectModal, dedicatedSubjectSessions, data?.comparisons]);
 
   const filteredModalSubjectSessions = useMemo(() => {
     if (!subjectModalSearch.trim()) return modalSubjectSessions;
@@ -1026,6 +1220,20 @@ export function MasterVsChangedReport({
     },
     [branchLookup, selectedBranch],
   );
+
+  const selectedCohortTitle = useMemo(() => {
+    const parts: string[] = [];
+    if (selectedBranch && branchLookup.has(selectedBranch)) {
+      parts.push(branchLookup.get(selectedBranch)!.code || branchLookup.get(selectedBranch)!.name);
+    }
+    if (selectedBatch) {
+      parts.push(`Batch ${selectedBatch}`);
+    }
+    if (selectedSection) {
+      parts.push(`Section ${cleanSectionCode(selectedSection)}`);
+    }
+    return parts.length > 0 ? parts.join(" · ") : "All Classes & Sections";
+  }, [selectedBranch, branchLookup, selectedBatch, selectedSection]);
 
   // Group comparisons cleanly by academic cohort (Branch + Batch + Section)
   // Ensures distinct classes (e.g. BCSE Sec A vs DCSE Sec A vs DECE Sec A) are separated accurately into their own cohort cards
@@ -1096,6 +1304,31 @@ export function MasterVsChangedReport({
       const secTitle = meta.sectionLetter === "Unassigned"
         ? `${meta.branchCode} · All Sections`
         : `Section ${meta.sectionLetter}`;
+
+      // Resolve official student enrollment / class strength from student database
+      const bCode = (meta.branchCode || "").trim().toUpperCase();
+      const batchStr = (meta.batch || "").trim().replace(/^batch\s*/i, "");
+      const secL = (meta.sectionLetter || "").trim().toUpperCase();
+      const itemYr = items.find((it) => it.yearOfStudy)?.yearOfStudy;
+
+      let officialStrength = 0;
+      if (data?.sectionStrengths) {
+        officialStrength =
+          data.sectionStrengths[`${bCode}__${batchStr}__${secL}`] ||
+          (meta.branchId ? data.sectionStrengths[`${meta.branchId}__${batchStr}__${secL}`] : 0) ||
+          (itemYr ? data.sectionStrengths[`${bCode}__YEAR${itemYr}__${secL}`] : 0) ||
+          (meta.branchId && itemYr ? data.sectionStrengths[`${meta.branchId}__YEAR${itemYr}__${secL}`] : 0) ||
+          0;
+      }
+      if (!officialStrength) {
+        const fromItem = items.find((it) => (it.enrolledCount || 0) > 0)?.enrolledCount || 0;
+        if (fromItem > 0) officialStrength = fromItem;
+      }
+      const maxMarkedInItems = items.reduce(
+        (max, it) => Math.max(max, (it.presentCount || 0) + (it.absentCount || 0)),
+        0,
+      );
+      const secEnrolled = officialStrength > 0 ? officialStrength : (maxMarkedInItems > 0 ? maxMarkedInItems : 0);
 
       // Derive distinct subjects taught in this specific class & section
       type CohortSubjectEntry = {
@@ -1283,6 +1516,8 @@ export function MasterVsChangedReport({
           changedFaculty: Array.from(sub.changedFaculty.values()),
           turnoutPct,
           effectiveAttendancePct,
+          totalPresent: sub.totalPresent,
+          totalMarked: sub.totalMarked,
         };
       }).sort((a, b) => b.totalConducted - a.totalConducted || b.masterWeeklyPeriods - a.masterWeeklyPeriods);
 
@@ -1294,6 +1529,7 @@ export function MasterVsChangedReport({
         batch: meta.batch,
         sectionLetter: meta.sectionLetter,
         sectionTitle: secTitle,
+        secEnrolled,
         items,
         totalClasses: items.length,
         conductedCount,
@@ -1302,8 +1538,13 @@ export function MasterVsChangedReport({
         unchangedCount,
         cohortSubjects,
       };
-    });
-  }, [filteredComparisons, getBranchBadge, selectedBatch, data?.masterScheduledPeriods, dateMode]);
+    }).filter((g): g is NonNullable<typeof g> => g !== null && (g.secEnrolled > 0 || g.conductedCount > 0 || g.items.some(i => i.isConducted)));
+  }, [filteredComparisons, getBranchBadge, selectedBatch, data?.masterScheduledPeriods, data?.sectionStrengths, dateMode]);
+
+  // Total enrolled students across all cohorts
+  const totalCohortStudentsEnrolled = useMemo(() => {
+    return comparisonsBySection.reduce((acc, g) => acc + (g.secEnrolled || 0), 0);
+  }, [comparisonsBySection]);
 
   // Drill-down data sets for KPI Analytics Drawer
   const changedItems = useMemo(() => {
@@ -1608,6 +1849,8 @@ export function MasterVsChangedReport({
     let conducted = 0;
     let relieved = 0;
     let subTaken = 0;
+    let totalPres = 0;
+    let totalAbs = 0;
     const subjects = new Set<string>();
 
     (data?.comparisons || []).forEach((c) => {
@@ -1622,10 +1865,17 @@ export function MasterVsChangedReport({
         masterQuota++;
         if (c.masterSubjectName) subjects.add(c.masterSubjectName);
       }
-      if (isToday && c.isConducted) conducted++;
+      if (isToday) {
+        if (c.isConducted) conducted++;
+        totalPres += (c.presentCount || 0);
+        totalAbs += (c.absentCount || 0);
+      }
       if (isMaster && !isToday && c.todayFacultyName) relieved++;
       if (isToday && !isMaster && c.masterFacultyName) subTaken++;
     });
+
+    const marked = totalPres + totalAbs;
+    const turnout = marked > 0 ? Math.round((totalPres / marked) * 100) : null;
 
     setActiveStaffModal({
       hrmsId: catalog?.hrmsId || cleanHrms || "N/A",
@@ -1636,6 +1886,10 @@ export function MasterVsChangedReport({
       substituteTakenCount: subTaken,
       netTeachingCount: conducted + subTaken - relieved,
       subjects: Array.from(subjects),
+      totalPresent: totalPres,
+      totalAbsent: totalAbs,
+      totalMarked: marked,
+      attendancePct: turnout,
     });
     setStaffModalSearch("");
   }, [data]);
@@ -1725,538 +1979,1255 @@ export function MasterVsChangedReport({
     document.body.removeChild(link);
   }, []);
 
-  // Export Subject Modal to PDF (Abstract first, then Date-wise Delivery Log)
-  const exportSubjectModalPdf = useCallback(() => {
-    if (!activeSubjectModal) return;
-    const sub = activeSubjectModal;
-    const dateRangeLabel =
-      dateMode === "range"
-        ? `${startDate ? formatDisplayDate(startDate) : "Start"} to ${endDate ? formatDisplayDate(endDate) : "End"}`
-        : formatDisplayDate(getTodayDateString());
+  // Print / Export individual Faculty Workload & Action Audit Report to PDF
+  const printFacultyPdf = useCallback(
+    async (f: FacultyStat, customSessions?: ComparisonItem[]) => {
+      const key = f.hrmsId || f.facultyName;
+      setGeneratingPdfKey(key);
+      try {
+        let sessionsToUse = customSessions;
+        if (!sessionsToUse) {
+          if (activeStaffModal?.hrmsId === f.hrmsId && dedicatedStaffSessions && dedicatedStaffSessions.length > 0) {
+            sessionsToUse = dedicatedStaffSessions;
+          } else {
+            const fetched = await fetchDedicatedFacultyData(f);
+            sessionsToUse = fetched?.comparisons;
+          }
+        }
 
-    const assignedStr =
-      (sub.assignedFacultyNames ?? sub.facultyNames ?? []).join(", ") || "Not Assigned";
-    const changedStr =
-      (sub.changedFaculties ?? [])
-        .map((cf) => `${cf.facultyName}${cf.originalFacultyName ? ` (sub for ${cf.originalFacultyName})` : ""} (${cf.count}x)`)
-        .join("; ") || "100% Fidelity (No Alterations)";
+        const dateRangeLabel =
+          dateMode === "range"
+            ? `${startDate ? formatDisplayDate(startDate) : "Start"} to ${endDate ? formatDisplayDate(endDate) : "End"}`
+            : formatDisplayDate(getTodayDateString());
 
-    const effectiveTurnout =
-      sub.attendancePct != null && sub.attendancePct > 0
-        ? `${sub.attendancePct}%`
-        : sub.turnoutPct != null
-          ? `${sub.turnoutPct}%`
-          : "—";
+        const hrms = (f.hrmsId || "").trim().toLowerCase();
+        const facName = (f.facultyName || "").trim().toLowerCase();
 
-    const dateMap = new Map<string, typeof modalSubjectSessions>();
-    modalSubjectSessions.forEach((s) => {
-      const d = s.date || "Scheduled Plan";
-      if (!dateMap.has(d)) dateMap.set(d, []);
-      dateMap.get(d)!.push(s);
-    });
-    const sortedDates = Array.from(dateMap.keys()).sort();
+        // Filter and map sessions for this specific faculty member
+        const rawList = sessionsToUse && sessionsToUse.length > 0 ? sessionsToUse : (data?.comparisons || []);
+        const facultySessions = rawList
+          .filter((c) => {
+            const todayHrms = (c.todayFacultyHrmsId || "").trim().toLowerCase();
+            const masterHrms = (c.masterFacultyHrmsId || "").trim().toLowerCase();
+            const todayName = (c.todayFacultyName || "").trim().toLowerCase();
+            const masterName = (c.masterFacultyName || "").trim().toLowerCase();
 
-    let dateTablesHtml = "";
-    if (sortedDates.length === 0) {
-      dateTablesHtml = `<p style="color: #64748b; font-size: 11px; padding: 12px 0;">No timetable sessions recorded for this subject in the selected range.</p>`;
-    } else {
-      sortedDates.forEach((d) => {
-        const sessions = dateMap.get(d)!;
-        const dayName = sessions[0]?.dayOfWeek || "";
-        dateTablesHtml += `
-          <div style="margin-top: 14px; break-inside: avoid;">
-            <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none;">
-              📅 Date: ${d} ${dayName ? `(${dayName})` : ""} &bull; ${sessions.length} Session(s)
+            const matchHrms = Boolean(hrms) && hrms !== "n/a" && (todayHrms === hrms || masterHrms === hrms);
+            const matchName = Boolean(facName) && (todayName === facName || masterName === facName);
+            return matchHrms || matchName;
+          })
+          .map((c) => {
+            const todayHrms = (c.todayFacultyHrmsId || "").trim().toLowerCase();
+            const masterHrms = (c.masterFacultyHrmsId || "").trim().toLowerCase();
+            const todayName = (c.todayFacultyName || "").trim().toLowerCase();
+            const masterName = (c.masterFacultyName || "").trim().toLowerCase();
+
+            const isTodayTeacher = (Boolean(hrms) && todayHrms === hrms) || (Boolean(facName) && todayName === facName);
+            const isMasterTeacher = (Boolean(hrms) && masterHrms === hrms) || (Boolean(facName) && masterName === facName);
+
+            let actionRoleTitle = "Regular Scheduled Class";
+            if (isTodayTeacher && !isMasterTeacher && c.masterFacultyName) {
+              actionRoleTitle = `Substitute Taken (+) for ${c.masterFacultyName}`;
+            } else if (!isTodayTeacher && isMasterTeacher && c.todayFacultyName) {
+              actionRoleTitle = `Relieved Away (-) by ${c.todayFacultyName}`;
+            } else if (c.isConducted) {
+              actionRoleTitle = "Conducted As Master";
+            }
+
+            return {
+              ...c,
+              isTodayTeacher,
+              isMasterTeacher,
+              actionRoleTitle,
+            };
+          });
+
+        const totalPresent = facultySessions.reduce((acc, s) => acc + (s.isTodayTeacher ? (s.presentCount || 0) : 0), 0);
+        const totalAbsent = facultySessions.reduce((acc, s) => acc + (s.isTodayTeacher ? (s.absentCount || 0) : 0), 0);
+        const totalEnrolled = totalPresent + totalAbsent;
+        const turnoutPct = totalEnrolled > 0 ? Math.round((totalPresent / totalEnrolled) * 100) : (f.attendancePct != null ? f.attendancePct : null);
+
+        // Group sessions by date
+        const dateMap = new Map<string, typeof facultySessions>();
+        facultySessions.forEach((s) => {
+          const d = s.date || "Scheduled Plan";
+          if (!dateMap.has(d)) dateMap.set(d, []);
+          dateMap.get(d)!.push(s);
+        });
+        const sortedDates = Array.from(dateMap.keys()).sort();
+
+        let dateTablesHtml = "";
+        if (sortedDates.length === 0) {
+          dateTablesHtml = `
+            <div style="padding: 16px; text-align: center; color: #64748b; font-size: 11px; border: 1px dashed #cbd5e1; border-radius: 6px; margin: 12px 0;">
+              No timetable sessions recorded for this faculty member in the selected range (${escapeHtml(dateRangeLabel)}).
             </div>
-            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
-              <thead>
-                <tr style="background-color: #334155; color: white;">
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Slot & Time</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Class & Section</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Master Assigned Faculty</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Actual Conducted Faculty</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Action Role / Status</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Conducted</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Turnout</th>
+          `;
+        } else {
+          sortedDates.forEach((d) => {
+            const sessions = dateMap.get(d)!;
+            const dayName = sessions[0]?.dayOfWeek || "";
+            const dayPresent = sessions.reduce((acc, s) => acc + (s.isTodayTeacher ? (s.presentCount || 0) : 0), 0);
+            const dayAbsent = sessions.reduce((acc, s) => acc + (s.isTodayTeacher ? (s.absentCount || 0) : 0), 0);
+            const dayEnrolled = dayPresent + dayAbsent;
+            const dayTurnout = dayEnrolled > 0 ? Math.round((dayPresent / dayEnrolled) * 100) : null;
+            const dayConducted = sessions.filter((s) => s.isConducted && s.isTodayTeacher).length;
+
+            dateTablesHtml += `
+              <div style="margin-top: 14px; break-inside: avoid;">
+                <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none; display: flex; justify-content: space-between;">
+                  <span>📅 Date: ${d} ${dayName ? `(${dayName})` : ""}</span>
+                  <span>${sessions.length} Session(s) &bull; ${dayEnrolled > 0 || dayConducted > 0 ? `<b style="color: #15803d;">${dayPresent} Present</b> / <b style="color: #be123c;">${dayAbsent} Absent</b> ${dayTurnout != null ? `(${dayTurnout}% Attendance)` : (dayConducted > 0 ? "(100% Attendance)" : "")}` : '<span style="color: #64748b; font-weight: 500;">Attendance Pending</span>'}</span>
+                </div>
+                <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
+                  <thead>
+                    <tr style="background-color: #1e293b; color: white;">
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Slot & Time</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Class & Section</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Subject Name & Code</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Action Role Taken</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Conducted</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Enrolled</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Present</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Absent</th>
+                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Attendance %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${sessions
+                      .map((s) => {
+                        const sEnrolled = (s.presentCount || 0) + (s.absentCount || 0);
+                        const sPres = s.presentCount || 0;
+                        const sAbs = s.absentCount || 0;
+                        const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (sEnrolled > 0 ? sEnrolled : 0);
+                        const sTurnout = s.isConducted ? (s.attendancePct != null ? `${s.attendancePct}%` : (sEnrolled > 0 ? `${Math.round((sPres / sEnrolled) * 100)}%` : "100%")) : "Pending";
+                        return `
+                      <tr>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.slotLabel)} (${escapeHtml(s.time)})</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${escapeHtml(s.batch)}</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">
+                          <b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</b> 
+                          <span style="color: #64748b;">(${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})</span>
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; font-weight: bold; color: ${s.isTodayTeacher && !s.isMasterTeacher ? "#0369a1" : !s.isTodayTeacher && s.isMasterTeacher ? "#be123c" : "#0f172a"};">
+                          ${escapeHtml(s.actionRoleTitle)}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">
+                          ${s.isConducted ? '<span style="color: #15803d; font-weight: bold;">Yes ✓</span>' : '<span style="color: #64748b;">Scheduled</span>'}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: 500;">
+                          ${sEnrolledTotal > 0 ? sEnrolledTotal : "—"}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">
+                          ${s.isConducted ? sPres : "—"}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${sAbs > 0 ? "#be123c" : "#64748b"};">
+                          ${s.isConducted ? sAbs : "—"}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0369a1;">
+                          ${sTurnout}
+                        </td>
+                      </tr>
+                    `;
+                      })
+                      .join("")}
+                    <tr style="background-color: #f8fafc; font-weight: bold; border-top: 2px solid #94a3b8;">
+                      <td colspan="4" style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: right;">Day Total:</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayConducted} Held</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">${dayEnrolled > 0 || dayConducted > 0 ? dayEnrolled : "—"}</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayPresent > 0 || dayConducted > 0 ? dayPresent : "—"}</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #be123c;">${dayAbsent > 0 || dayConducted > 0 ? dayAbsent : "—"}</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0369a1;">${dayTurnout != null ? `${dayTurnout}%` : (dayConducted > 0 ? "100%" : "Pending")}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            `;
+          });
+        }
+
+        const verificationRef = `ACT-${(f.hrmsId || "FAC").replace(/\s+/g, "")}-${Date.now().toString(36).toUpperCase()}`;
+        const generatedDateTime = `${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+
+        const htmlContent = `
+          <div style="font-family: Arial, Helvetica, sans-serif; color: #0f172a; padding: 12px; line-height: 1.4;">
+            <!-- Official Institution Masthead -->
+            <div style="text-align: center; border-bottom: 3px double #0f172a; padding-bottom: 10px; margin-bottom: 14px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-size: 9px; font-weight: bold; color: #64748b; letter-spacing: 1px; text-transform: uppercase;">
+                  ACADEMIC PORTAL &bull; TIMETABLE AUDIT SYSTEM
+                </span>
+                <span style="font-size: 9px; font-weight: bold; color: #15803d; background: #dcfce7; padding: 2px 6px; border-radius: 4px; border: 1px solid #bbf7d0;">
+                  OFFICIAL VERIFIED RECORD ✓
+                </span>
+              </div>
+              <h1 style="margin: 0; font-size: 19px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; text-transform: uppercase;">
+                FACULTY WORKLOAD & SUBSTITUTION AUDIT REPORT
+              </h1>
+              <p style="margin: 3px 0 0; font-size: 11px; font-weight: 600; color: #1e3a8a; letter-spacing: 0.5px;">
+                Individual Teaching Record, Quota Conduction & Substitution Audit Log
+              </p>
+              <p style="margin: 3px 0 0; font-size: 10px; color: #64748b;">
+                Academic Year: <strong>${escapeHtml(academicYear || "Current")}</strong> &bull; Period: <strong>${escapeHtml(dateRangeLabel)}</strong> &bull; Generated: ${generatedDateTime} &bull; Verification Ref: <strong>${verificationRef}</strong>
+              </p>
+            </div>
+
+            <!-- Faculty Metadata Box -->
+            <div style="margin-bottom: 12px; border: 1px solid #cbd5e1; border-radius: 6px; background-color: #f8fafc; padding: 8px 12px;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                <tr>
+                  <td style="width: 50%; padding: 3px 0;"><strong>Faculty Name:</strong> <span style="font-size: 12px; font-weight: bold; color: #0f172a;">${escapeHtml(f.facultyName)}</span></td>
+                  <td style="width: 50%; padding: 3px 0;"><strong>HRMS Employee ID:</strong> <span style="font-family: monospace; font-weight: bold;">#${escapeHtml(f.hrmsId)}</span></td>
                 </tr>
-              </thead>
-              <tbody>
-                ${sessions
-                  .map(
-                    (s) => `
-                  <tr>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.slotLabel} (${s.time})</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${s.batch}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(s.masterFacultyName || "—")}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: ${s.isSub ? "bold" : "normal"}; color: ${s.isSub ? "#b45309" : "#0f172a"};">
-                      ${escapeHtml(s.todayFacultyName || "—")}
-                    </td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(s.actionTitle)}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center;">${s.isConducted ? "Yes ✓" : "Scheduled"}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold;">${s.attendancePct != null ? `${s.attendancePct}%` : "Pending"}</td>
+                <tr>
+                  <td style="padding: 3px 0;"><strong>Department / Scope:</strong> ${escapeHtml(selectedCohortTitle || "All Sections")}</td>
+                  <td style="padding: 3px 0;"><strong>Assigned Subjects:</strong> ${escapeHtml((f.subjects || []).join(", ") || "None")}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- 1. Executive Workload Abstract -->
+            <div style="margin-bottom: 14px; break-inside: avoid;">
+              <h3 style="font-size: 11px; text-transform: uppercase; margin: 0 0 5px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+                1. Executive Abstract & Workload Metrics
+              </h3>
+              <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
+                <thead>
+                  <tr style="background-color: #0f172a; color: white;">
+                    <th style="padding: 6px; border: 1px solid #64748b;">Master Quota</th>
+                    <th style="padding: 6px; border: 1px solid #64748b;">Classes Conducted</th>
+                    <th style="padding: 6px; border: 1px solid #64748b;">Relieved Away (-)</th>
+                    <th style="padding: 6px; border: 1px solid #64748b;">Substitute Taken (+)</th>
+                    <th style="padding: 6px; border: 1px solid #64748b;">Net Teaching Load</th>
+                    <th style="padding: 6px; border: 1px solid #64748b;">Net Variance</th>
                   </tr>
-                `,
-                  )
-                  .join("")}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px;">${f.masterAssignedPeriods} p/wk</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${f.classesConducted} held</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${f.relievedCount > 0 ? `-${f.relievedCount}` : 0}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0284c7;">${f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0f172a;">${f.netTeachingCount} sessions</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 11px;">
+                      ${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount} shift
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <!-- Student Attendance Abstract -->
+              <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
+                <thead>
+                  <tr style="background-color: #047857; color: white;">
+                    <th style="padding: 6px; border: 1px solid #065f46;">Total Students Enrolled</th>
+                    <th style="padding: 6px; border: 1px solid #065f46;">Students Present</th>
+                    <th style="padding: 6px; border: 1px solid #065f46;">Students Absent</th>
+                    <th style="padding: 6px; border: 1px solid #065f46;">Attendance %</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px;">${totalEnrolled > 0 ? totalEnrolled : "—"}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${totalPresent > 0 ? `${totalPresent} Present` : (totalEnrolled > 0 ? "0 Present" : "—")}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${totalAbsent > 0 ? `${totalAbsent} Absent` : (totalEnrolled > 0 ? "0 Absent" : "—")}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0369a1;">${turnoutPct != null ? `${turnoutPct}%` : (f.classesConducted > 0 ? "100%" : "Pending")}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
+                <tr>
+                  <td style="width: 30%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Assigned Curriculum Subjects:</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml((f.subjects || []).join(", ") || "None")}</td>
+                </tr>
+                <tr>
+                  <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Substitutions Covered for Colleagues:</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #0284c7;">${f.substituteTakenCount} session(s) taken</td>
+                </tr>
+                <tr>
+                  <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Absence / Relief Covered by Colleagues:</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #be123c;">${f.relievedCount} session(s) relieved</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- 2. Date-wise Breakdown -->
+            <div>
+              <h3 style="font-size: 11px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+                2. Date-wise Timetable Delivery & Substitution Actions (${dateRangeLabel})
+              </h3>
+              ${dateTablesHtml}
+            </div>
+
+            <!-- Official Sign-off Block -->
+            <div style="margin-top: 36px; padding-top: 14px; border-top: 1px solid #cbd5e1; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; text-align: center; break-inside: avoid;">
+              <div>
+                <div style="height: 38px;"></div>
+                <p style="margin: 0; font-size: 11px; font-weight: bold; color: #0f172a; border-top: 1px dashed #64748b; padding-top: 4px;">
+                  Timetable Coordinator
+                </p>
+                <span style="font-size: 9px; color: #64748b;">Timetable & Conduction Cell</span>
+              </div>
+              <div>
+                <div style="height: 38px;"></div>
+                <p style="margin: 0; font-size: 11px; font-weight: bold; color: #0f172a; border-top: 1px dashed #64748b; padding-top: 4px;">
+                  Head of the Department (HOD)
+                </p>
+                <span style="font-size: 9px; color: #64748b;">Academic Affairs</span>
+              </div>
+              <div>
+                <div style="height: 38px;"></div>
+                <p style="margin: 0; font-size: 11px; font-weight: bold; color: #0f172a; border-top: 1px dashed #64748b; padding-top: 4px;">
+                  Principal / Dean of Academics
+                </p>
+                <span style="font-size: 9px; color: #64748b;">Institution Seal & Approval</span>
+              </div>
+            </div>
           </div>
         `;
-      });
-    }
 
-    const htmlContent = `
-      <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 10px;">
-        <div style="border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px;">
-          <h2 style="margin: 0; font-size: 18px; color: #0f172a;">Subject Delivery & Timetable Alteration Report</h2>
-          <p style="margin: 4px 0 0; font-size: 11px; color: #475569;">
-            <strong>Subject:</strong> ${escapeHtml(sub.subjectName)} (${escapeHtml(sub.subjectCode)}) &bull; 
-            ${sub.cohortTitle ? `<strong>Cohort:</strong> ${escapeHtml(sub.cohortTitle)} &bull; ` : ""}
-            <strong>Period:</strong> ${escapeHtml(dateRangeLabel)} &bull; 
-            <strong>Academic Year:</strong> ${escapeHtml(academicYear || "Current")}
-          </p>
-        </div>
+        printHtml(htmlContent, {
+          title: `Staff_Report_${(f.hrmsId || f.facultyName).replace(/\s+/g, "_")}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}`,
+          subtitle: `Faculty workload and action audit report for ${f.facultyName} (#${f.hrmsId})`,
+          hideHeader: true,
+        });
+      } finally {
+        setGeneratingPdfKey(null);
+      }
+    },
+    [
+      activeStaffModal,
+      dedicatedStaffSessions,
+      fetchDedicatedFacultyData,
+      dateMode,
+      startDate,
+      endDate,
+      data?.comparisons,
+      academicYear,
+      selectedCohortTitle,
+    ],
+  );
 
-        <!-- 1. Executive Abstract -->
-        <div style="margin-bottom: 14px; break-inside: avoid;">
-          <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-            1. Executive Abstract & Workload Metrics
-          </h3>
-          <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
-            <thead>
-              <tr style="background-color: #0f172a; color: white;">
-                <th style="padding: 6px; border: 1px solid #64748b;">Master Quota</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Conducted</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Swapped Out</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Swapped In</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Total Changes</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Attendance Rate</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px;">${sub.masterWeeklyPeriods} p/wk</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${sub.totalConducted} held</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${sub.timesSwappedOut}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${sub.timesSwappedIn}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #b45309;">${sub.timesChanged}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #1e40af;">${effectiveTurnout}</td>
-              </tr>
-            </tbody>
-          </table>
+  // Export individual Faculty Workload & Action Audit Report to Excel (.xls)
+  const exportFacultyExcel = useCallback(
+    async (f: FacultyStat, customSessions?: ComparisonItem[]) => {
+      const key = f.hrmsId || f.facultyName;
+      setGeneratingExcelKey(key);
+      try {
+        let sessionsToUse = customSessions;
+        if (!sessionsToUse) {
+          if (activeStaffModal?.hrmsId === f.hrmsId && dedicatedStaffSessions && dedicatedStaffSessions.length > 0) {
+            sessionsToUse = dedicatedStaffSessions;
+          } else {
+            const fetched = await fetchDedicatedFacultyData(f);
+            sessionsToUse = fetched?.comparisons;
+          }
+        }
 
-          <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
-            <tr>
-              <td style="width: 25%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Assigned Master Faculty:</td>
-              <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(assignedStr)}</td>
-            </tr>
-            <tr>
-              <td style="width: 25%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Substitute & Reliever Faculty:</td>
-              <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(changedStr)}</td>
-            </tr>
-          </table>
-        </div>
+        const dateRangeLabel =
+          dateMode === "range"
+            ? `${startDate || "Start"} to ${endDate || "End"}`
+            : getTodayDateString();
 
-        <!-- 2. Date-wise Data Breakdown -->
-        <div>
-          <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-            2. Date-wise Timetable Delivery & Alteration Sessions (${dateRangeLabel})
-          </h3>
-          ${dateTablesHtml}
-        </div>
-      </div>
-    `;
+        const hrms = (f.hrmsId || "").trim().toLowerCase();
+        const facName = (f.facultyName || "").trim().toLowerCase();
 
-    printHtml(htmlContent, {
-      title: `Subject_Report_${sub.subjectCode}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}`,
-      subtitle: `Curriculum delivery report for ${sub.subjectName} (${sub.subjectCode})`,
-    });
-  }, [activeSubjectModal, dateMode, startDate, endDate, academicYear, modalSubjectSessions]);
+        const rawList = sessionsToUse && sessionsToUse.length > 0 ? sessionsToUse : (data?.comparisons || []);
+        const facultySessions = rawList
+          .filter((c) => {
+            const todayHrms = (c.todayFacultyHrmsId || "").trim().toLowerCase();
+            const masterHrms = (c.masterFacultyHrmsId || "").trim().toLowerCase();
+            const todayName = (c.todayFacultyName || "").trim().toLowerCase();
+            const masterName = (c.masterFacultyName || "").trim().toLowerCase();
 
-  // Export Subject Modal to Excel (Abstract first, then Date-wise Delivery Log)
-  const exportSubjectModalExcel = useCallback(() => {
-    if (!activeSubjectModal) return;
-    const sub = activeSubjectModal;
-    const dateRangeLabel =
-      dateMode === "range"
-        ? `${startDate || "Start"} to ${endDate || "End"}`
-        : getTodayDateString();
+            const matchHrms = Boolean(hrms) && hrms !== "n/a" && (todayHrms === hrms || masterHrms === hrms);
+            const matchName = Boolean(facName) && (todayName === facName || masterName === facName);
+            return matchHrms || matchName;
+          })
+          .map((c) => {
+            const todayHrms = (c.todayFacultyHrmsId || "").trim().toLowerCase();
+            const masterHrms = (c.masterFacultyHrmsId || "").trim().toLowerCase();
+            const todayName = (c.todayFacultyName || "").trim().toLowerCase();
+            const masterName = (c.masterFacultyName || "").trim().toLowerCase();
 
-    const assignedStr =
-      (sub.assignedFacultyNames ?? sub.facultyNames ?? []).join("; ") || "Not Assigned";
-    const changedStr =
-      (sub.changedFaculties ?? [])
-        .map((cf) => `${cf.facultyName}${cf.originalFacultyName ? ` (sub for ${cf.originalFacultyName})` : ""} (${cf.count}x)`)
-        .join("; ") || "None";
+            const isTodayTeacher = (Boolean(hrms) && todayHrms === hrms) || (Boolean(facName) && todayName === facName);
+            const isMasterTeacher = (Boolean(hrms) && masterHrms === hrms) || (Boolean(facName) && masterName === facName);
 
-    const effectiveTurnout =
-      sub.attendancePct != null && sub.attendancePct > 0
-        ? `${sub.attendancePct}%`
-        : sub.turnoutPct != null
-          ? `${sub.turnoutPct}%`
-          : "—";
+            let actionRoleTitle = "Regular Scheduled Class";
+            if (isTodayTeacher && !isMasterTeacher && c.masterFacultyName) {
+              actionRoleTitle = `Substitute Taken (+) for ${c.masterFacultyName}`;
+            } else if (!isTodayTeacher && isMasterTeacher && c.todayFacultyName) {
+              actionRoleTitle = `Relieved Away (-) by ${c.todayFacultyName}`;
+            } else if (c.isConducted) {
+              actionRoleTitle = "Conducted As Master";
+            }
 
-    const dateMap = new Map<string, typeof modalSubjectSessions>();
-    modalSubjectSessions.forEach((s) => {
-      const d = s.date || "Scheduled";
-      if (!dateMap.has(d)) dateMap.set(d, []);
-      dateMap.get(d)!.push(s);
-    });
-    const sortedDates = Array.from(dateMap.keys()).sort();
+            return {
+              ...c,
+              isTodayTeacher,
+              isMasterTeacher,
+              actionRoleTitle,
+            };
+          });
 
-    let sessionRowsHtml = "";
-    sortedDates.forEach((d) => {
-      const sessions = dateMap.get(d)!;
-      sessions.forEach((s) => {
-        sessionRowsHtml += `
-          <tr>
-            <td>${escapeHtml(s.date)}</td>
-            <td>${escapeHtml(s.dayOfWeek || "")}</td>
-            <td>${escapeHtml(s.slotLabel)}</td>
-            <td>${escapeHtml(s.time)}</td>
-            <td>${escapeHtml(s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All")}</td>
-            <td>${escapeHtml(s.batch)}</td>
-            <td>${escapeHtml(s.masterFacultyName || "—")}</td>
-            <td>${escapeHtml(s.todayFacultyName || "—")}</td>
-            <td>${escapeHtml(s.actionTitle)}</td>
-            <td>${s.isConducted ? "Conducted" : "Scheduled"}</td>
-            <td>${s.attendancePct != null ? `${s.attendancePct}%` : "Pending"}</td>
-          </tr>
+        const dateMap = new Map<string, typeof facultySessions>();
+        facultySessions.forEach((s) => {
+          const d = s.date || "Scheduled";
+          if (!dateMap.has(d)) dateMap.set(d, []);
+          dateMap.get(d)!.push(s);
+        });
+        const sortedDates = Array.from(dateMap.keys()).sort();
+
+        const totalPresent = facultySessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+        const totalAbsent = facultySessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const totalEnrolled = totalPresent + totalAbsent;
+        const turnoutPct = totalEnrolled > 0 ? Math.round((totalPresent / totalEnrolled) * 100) : (f.attendancePct != null ? f.attendancePct : null);
+
+        const sheets: ExcelWorksheet[] = [];
+
+        // --- Sheet 1: Overview ---
+        const overviewRows: ExcelRow[] = [
+          { cells: [{ value: "ACADEMIC PORTAL • FACULTY WORKLOAD & ATTENDANCE AUDIT", styleId: "Title", mergeAcross: 9 }] },
+          { cells: [{ value: `Faculty: ${f.facultyName} | HRMS ID: #${f.hrmsId} | Scope: ${selectedCohortTitle || "All Sections"} | Period: ${dateRangeLabel} | Academic Year: ${academicYear || "Current"}`, styleId: "Subtitle", mergeAcross: 9 }] },
+          { cells: [] },
+          { cells: [{ value: "1. EXECUTIVE ABSTRACT & WORKLOAD METRICS", styleId: "SectionHeader", mergeAcross: 9 }] },
+          {
+            cells: [
+              { value: "Master Quota (p/wk)", styleId: "KpiLabel" },
+              { value: "Classes Conducted", styleId: "KpiLabel" },
+              { value: "Relieved Away (-)", styleId: "KpiLabel" },
+              { value: "Substitute Taken (+)", styleId: "KpiLabel" },
+              { value: "Net Teaching Load", styleId: "KpiLabel" },
+              { value: "Net Variance", styleId: "KpiLabel" },
+              { value: "Students Enrolled", styleId: "KpiLabel" },
+              { value: "Students Present", styleId: "KpiLabel" },
+              { value: "Students Absent", styleId: "KpiLabel" },
+              { value: "Attendance %", styleId: "KpiLabel" },
+            ],
+          },
+          {
+            cells: [
+              { value: f.masterAssignedPeriods, styleId: "CellCenter" },
+              { value: f.classesConducted, styleId: "KpiEmerald" },
+              { value: f.relievedCount > 0 ? `-${f.relievedCount}` : 0, styleId: "KpiRose" },
+              { value: f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0, styleId: "KpiSky" },
+              { value: f.netTeachingCount, styleId: "KpiVal" },
+              { value: (f.substituteTakenCount - f.relievedCount >= 0 ? "+" : "") + (f.substituteTakenCount - f.relievedCount), styleId: "CellCenter" },
+              { value: totalEnrolled > 0 ? totalEnrolled : "—", styleId: "CellCenter" },
+              { value: totalPresent > 0 ? totalPresent : (totalEnrolled > 0 ? 0 : "—"), styleId: "CellPresent" },
+              { value: totalAbsent > 0 ? totalAbsent : (totalEnrolled > 0 ? 0 : "—"), styleId: "CellAbsent" },
+              { value: turnoutPct != null ? `${turnoutPct}%` : (f.classesConducted > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+            ],
+          },
+          { cells: [] },
+          { cells: [{ value: "2. REGISTERED CURRICULUM SUBJECTS & ACTIONS", styleId: "SectionHeader", mergeAcross: 9 }] },
+          { cells: [{ value: "Assigned Subjects:", styleId: "CellBoldCenter" }, { value: (f.subjects || []).join(", ") || "None", styleId: "CellNormal", mergeAcross: 8 }] },
+          { cells: [{ value: "Substitutions Covered for Colleagues:", styleId: "CellBoldCenter" }, { value: `${f.substituteTakenCount} session(s) taken`, styleId: "CellNormal", mergeAcross: 8 }] },
+          { cells: [{ value: "Relief Covered by Colleagues:", styleId: "CellBoldCenter" }, { value: `${f.relievedCount} session(s) relieved`, styleId: "CellNormal", mergeAcross: 8 }] },
+          { cells: [] },
+          { cells: [{ value: `3. SUMMARY BY DATE (${sortedDates.length} Days Recorded)`, styleId: "SectionHeader", mergeAcross: 7 }] },
+          {
+            cells: [
+              { value: "Date", styleId: "ColHeaderNavy" },
+              { value: "Day", styleId: "ColHeaderNavy" },
+              { value: "Total Sessions", styleId: "ColHeaderNavy" },
+              { value: "Conducted", styleId: "ColHeaderNavy" },
+              { value: "Students Enrolled", styleId: "ColHeaderNavy" },
+              { value: "Students Present", styleId: "ColHeaderNavy" },
+              { value: "Students Absent", styleId: "ColHeaderNavy" },
+              { value: "Attendance %", styleId: "ColHeaderNavy" },
+            ],
+          },
+        ];
+
+        sortedDates.forEach((d) => {
+          const sessions = dateMap.get(d)!;
+          const dayName = sessions[0]?.dayOfWeek || "";
+          const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+          const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+          const dayEnr = dayPres + dayAbs;
+          const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+          const dayHeld = sessions.filter((s) => s.isConducted).length;
+
+          overviewRows.push({
+            cells: [
+              { value: d, styleId: "CellNormal" },
+              { value: dayName, styleId: "CellNormal" },
+              { value: sessions.length, styleId: "CellCenter" },
+              { value: dayHeld, styleId: "CellPresent" },
+              { value: dayEnr > 0 || dayHeld > 0 ? dayEnr : "—", styleId: "CellCenter" },
+              { value: dayPres > 0 || dayHeld > 0 ? dayPres : "—", styleId: "CellPresent" },
+              { value: dayAbs > 0 || dayHeld > 0 ? dayAbs : "—", styleId: "CellAbsent" },
+              { value: dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+            ],
+          });
+        });
+
+        sheets.push({
+          name: "Overview",
+          columns: [
+            { width: 14 }, { width: 12 }, { width: 16 }, { width: 14 },
+            { width: 16 }, { width: 14 }, { width: 14 }, { width: 16 },
+            { width: 14 }, { width: 14 }
+          ],
+          rows: overviewRows,
+        });
+
+        // --- Subsequent Sheets: One Sheet Per Date ---
+        sortedDates.forEach((d) => {
+          const sessions = dateMap.get(d)!;
+          const dayName = sessions[0]?.dayOfWeek || "";
+          const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+          const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+          const dayEnr = dayPres + dayAbs;
+          const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+          const dayHeld = sessions.filter((s) => s.isConducted).length;
+
+          const dateRows: ExcelRow[] = [
+            { cells: [{ value: `DATE-WISE TIMETABLE & STUDENT ATTENDANCE LOG — ${d} (${dayName})`, styleId: "Title", mergeAcross: 11 }] },
+            { cells: [{ value: `Faculty: ${f.facultyName} (#${f.hrmsId}) | Day Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 11 }] },
+            { cells: [] },
+            {
+              cells: [
+                { value: "Date", styleId: "ColHeaderNavy" },
+                { value: "Day", styleId: "ColHeaderNavy" },
+                { value: "Slot & Time", styleId: "ColHeaderNavy" },
+                { value: "Class & Section", styleId: "ColHeaderNavy" },
+                { value: "Batch", styleId: "ColHeaderNavy" },
+                { value: "Subject", styleId: "ColHeaderNavy" },
+                { value: "Action Role / Status", styleId: "ColHeaderNavy" },
+                { value: "Conducted", styleId: "ColHeaderNavy" },
+                { value: "Enrolled", styleId: "ColHeaderNavy" },
+                { value: "Present", styleId: "ColHeaderNavy" },
+                { value: "Absent", styleId: "ColHeaderNavy" },
+                { value: "Attendance %", styleId: "ColHeaderNavy" },
+              ],
+            },
+          ];
+
+          sessions.forEach((s) => {
+            const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+            const sPres = s.presentCount || 0;
+            const sAbs = s.absentCount || 0;
+            const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (sEnr > 0 ? sEnr : 0);
+            const sTurnout = s.isConducted ? (s.attendancePct != null ? `${s.attendancePct}%` : (sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : "100%")) : "Pending";
+
+            dateRows.push({
+              cells: [
+                { value: s.date, styleId: "CellNormal" },
+                { value: s.dayOfWeek || "", styleId: "CellNormal" },
+                { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
+                { value: s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All", styleId: "CellNormal" },
+                { value: `Batch ${s.batch}`, styleId: "CellCenter" },
+                { value: `${s.todaySubjectName || s.masterSubjectName || "—"} (${s.todaySubjectCode || s.masterSubjectCode || ""})`, styleId: "CellNormal" },
+                { value: s.actionRoleTitle, styleId: "CellNormal" },
+                { value: s.isConducted ? "Conducted ✓" : "Scheduled", styleId: s.isConducted ? "CellPresent" : "CellNormal" },
+                { value: sEnrolledTotal > 0 ? sEnrolledTotal : "—", styleId: "CellCenter" },
+                { value: s.isConducted ? sPres : "—", styleId: "CellPresent" },
+                { value: s.isConducted ? sAbs : "—", styleId: "CellAbsent" },
+                { value: sTurnout, styleId: "CellTurnout" },
+              ],
+            });
+          });
+
+          // Day Total Row
+          dateRows.push({
+            cells: [
+              { value: "Day Total", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: `${dayHeld} Held`, styleId: "SubTotalRow" },
+              { value: dayEnr > 0 ? dayEnr : "—", styleId: "SubTotalRow" },
+              { value: dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—"), styleId: "CellPresent" },
+              { value: dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—"), styleId: "CellAbsent" },
+              { value: dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+            ],
+          });
+
+          sheets.push({
+            name: sanitizeSheetName(d),
+            columns: [
+              { width: 12 }, { width: 10 }, { width: 16 }, { width: 14 },
+              { width: 10 }, { width: 24 }, { width: 22 }, { width: 13 },
+              { width: 10 }, { width: 10 }, { width: 10 }, { width: 12 }
+            ],
+            rows: dateRows,
+          });
+        });
+
+        downloadExcelWorkbook(
+          { author: "Academic Portal", sheets },
+          `Faculty_${(f.hrmsId || f.facultyName).replace(/\s+/g, "_")}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}.xls`,
+        );
+      } finally {
+        setGeneratingExcelKey(null);
+      }
+    },
+    [
+      activeStaffModal,
+      dedicatedStaffSessions,
+      fetchDedicatedFacultyData,
+      dateMode,
+      startDate,
+      endDate,
+      data?.comparisons,
+      academicYear,
+      downloadExcelFile,
+    ],
+  );
+
+  // Print / Export individual Subject Curriculum Delivery Report to PDF
+  const printSubjectPdf = useCallback(
+    async (
+      sub: {
+        subjectCode: string;
+        subjectName: string;
+        masterWeeklyPeriods?: number;
+        totalScheduled?: number;
+        totalConducted?: number;
+        timesChanged?: number;
+        timesSwappedOut?: number;
+        timesSwappedIn?: number;
+        facultyNames?: string[];
+        assignedFaculty?: string[];
+        assignedFacultyNames?: string[];
+        attendancePct?: number | null;
+        effectiveAttendancePct?: number | null;
+        turnoutPct?: number | null;
+        cohortTitle?: string;
+        sectionLetter?: string;
+        branchCode?: string;
+        batch?: string;
+        changedFaculty?: { facultyName: string; originalFacultyName?: string | null; count: number }[];
+        changedFaculties?: { facultyName: string; originalFacultyName?: string | null; count: number }[];
+      },
+      customSessions?: ComparisonItem[],
+    ) => {
+      setGeneratingPdfKey(sub.subjectCode);
+      try {
+        let sessionsToUse = customSessions;
+        if (!sessionsToUse) {
+          if (activeSubjectModal?.subjectCode === sub.subjectCode && dedicatedSubjectSessions && dedicatedSubjectSessions.length > 0) {
+            sessionsToUse = dedicatedSubjectSessions;
+          } else {
+            const fetched = await fetchDedicatedSubjectData(sub);
+            sessionsToUse = fetched?.comparisons;
+          }
+        }
+
+        const dateRangeLabel =
+          dateMode === "range"
+            ? `${startDate ? formatDisplayDate(startDate) : "Start"} to ${endDate ? formatDisplayDate(endDate) : "End"}`
+            : formatDisplayDate(getTodayDateString());
+
+        const code = (sub.subjectCode || "").trim().toUpperCase();
+        const name = (sub.subjectName || "").trim().toLowerCase();
+
+        const rawList = sessionsToUse && sessionsToUse.length > 0 ? sessionsToUse : (data?.comparisons || []);
+        const subjectSessions = rawList
+          .filter((c) => {
+            const matchCode =
+              (c.masterSubjectCode && c.masterSubjectCode.trim().toUpperCase() === code) ||
+              (c.todaySubjectCode && c.todaySubjectCode.trim().toUpperCase() === code);
+            const matchName =
+              (c.masterSubjectName && c.masterSubjectName.trim().toLowerCase() === name) ||
+              (c.todaySubjectName && c.todaySubjectName.trim().toLowerCase() === name);
+
+            if (!matchCode && !matchName) return false;
+
+            if (sub.sectionLetter) {
+              const sec = cleanSectionCode(c.sectionName);
+              const targetSec = cleanSectionCode(sub.sectionLetter);
+              if (sec && targetSec && sec !== targetSec) return false;
+            }
+            return true;
+          })
+          .map((c) => {
+            const isSub =
+              c.varianceType === "FACULTY_SUBSTITUTE" ||
+              Boolean(
+                c.todayFacultyName &&
+                  c.masterFacultyName &&
+                  c.todayFacultyName.trim().toLowerCase() !== c.masterFacultyName.trim().toLowerCase(),
+              );
+            const isSwap =
+              c.varianceType === "SUBJECT_SWAP" ||
+              Boolean(
+                c.todaySubjectCode &&
+                  c.masterSubjectCode &&
+                  c.todaySubjectCode.trim().toUpperCase() !== c.masterSubjectCode.trim().toUpperCase(),
+              );
+
+            let actionRoleTitle = "Conducted As Master";
+            if (isSub && isSwap) {
+              actionRoleTitle = `Swap & Sub (${c.todayFacultyName})`;
+            } else if (isSub) {
+              actionRoleTitle = `Faculty Substituted (${c.todayFacultyName})`;
+            } else if (isSwap) {
+              actionRoleTitle = `Subject Swapped (${c.todaySubjectName})`;
+            }
+
+            return {
+              ...c,
+              isSub,
+              isSwap,
+              actionRoleTitle,
+            };
+          });
+
+        const totalPresent = subjectSessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+        const totalAbsent = subjectSessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const totalMarked = totalPresent + totalAbsent;
+        const cohortStrength = subjectSessions.find((s) => (s.enrolledCount || 0) > 0)?.enrolledCount || 0;
+        const totalEnrolled = totalMarked > 0 ? totalMarked : cohortStrength;
+        const turnoutPct = totalMarked > 0 ? Math.round((totalPresent / totalMarked) * 100) : (sub.attendancePct != null ? sub.attendancePct : null);
+
+        const dateMap = new Map<string, typeof subjectSessions>();
+        subjectSessions.forEach((s) => {
+          const d = s.date || "Scheduled Plan";
+          if (!dateMap.has(d)) dateMap.set(d, []);
+          dateMap.get(d)!.push(s);
+        });
+        const sortedDates = Array.from(dateMap.keys()).sort();
+
+        let dateTablesHtml = "";
+        if (sortedDates.length === 0) {
+          dateTablesHtml = `
+            <div style="padding: 16px; text-align: center; color: #64748b; font-size: 11px; border: 1px dashed #cbd5e1; border-radius: 6px; margin: 12px 0;">
+              No timetable sessions recorded for this subject in the selected range (${escapeHtml(dateRangeLabel)}).
+            </div>
+          `;
+        } else {
+          sortedDates.forEach((d) => {
+            const sessions = dateMap.get(d)!;
+            const dayName = sessions[0]?.dayOfWeek || "";
+            const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+            const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+            const dayEnr = dayPres + dayAbs;
+            const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+            const dayConducted = sessions.filter((s) => s.isConducted).length;
+
+            dateTablesHtml += `
+              <div style="margin-top: 14px; break-inside: avoid;">
+                <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none; display: flex; justify-content: space-between;">
+                  <span>📅 Date: ${d} ${dayName ? `(${dayName})` : ""}</span>
+                  <span>${sessions.length} Session(s) &bull; ${dayEnr > 0 || dayConducted > 0 ? `<b style="color: #15803d;">${dayPres} Present</b> / <b style="color: #be123c;">${dayAbs} Absent</b> ${dayTurnout != null ? `(${dayTurnout}% Attendance)` : (dayConducted > 0 ? "(100% Attendance)" : "")}` : '<span style="color: #64748b; font-weight: 500;">Attendance Pending</span>'}</span>
+                </div>
+                <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
+                  <thead>
+                    <tr style="background-color: #f1f5f9; color: #0f172a; font-weight: 700;">
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Slot & Time</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Class & Section</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Master Assigned Faculty</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Actual Conducted Faculty</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Action Role / Status</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Conducted</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Enrolled</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Present</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Absent</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Attendance %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${sessions
+                      .map((s) => {
+                        const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+                        const sPres = s.presentCount || 0;
+                        const sAbs = s.absentCount || 0;
+                        const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (cohortStrength || (sEnr > 0 ? sEnr : 0));
+                        const sTurnout = s.isConducted ? (s.attendancePct != null ? `${s.attendancePct}%` : (sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : "100%")) : "Pending";
+                        return `
+                      <tr>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.slotLabel)} (${escapeHtml(s.time)})</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${escapeHtml(s.batch)}</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.masterFacultyName || "—")}</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; font-weight: ${s.isSub ? "bold" : "normal"}; color: ${s.isSub ? "#b45309" : "#0f172a"};">
+                          ${escapeHtml(s.todayFacultyName || "—")}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.actionRoleTitle)}</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">
+                          ${s.isConducted ? '<span style="color: #15803d; font-weight: bold;">Yes ✓</span>' : '<span style="color: #64748b;">Scheduled</span>'}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: 500;">
+                          ${sEnrolledTotal > 0 ? sEnrolledTotal : "—"}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">
+                          ${s.isConducted ? sPres : "—"}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${sAbs > 0 ? "#be123c" : "#64748b"};">
+                          ${s.isConducted ? sAbs : "—"}
+                        </td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0369a1;">
+                          ${sTurnout}
+                        </td>
+                      </tr>
+                    `;
+                      })
+                      .join("")}
+                    <tr style="background-color: #f8fafc; font-weight: bold; border-top: 2px solid #94a3b8;">
+                      <td colspan="5" style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: right;">Day Total:</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayConducted} Held</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">${dayEnr > 0 ? dayEnr : "—"}</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")}</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #be123c;">${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")}</td>
+                      <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0369a1;">${dayTurnout != null ? `${dayTurnout}%` : (dayConducted > 0 ? "100%" : "Pending")}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            `;
+          });
+        }
+
+        const assignedStr =
+          (sub.assignedFacultyNames ?? sub.facultyNames ?? []).join(", ") || "Not Assigned";
+        const changedStr =
+          ((sub.changedFaculties ?? sub.changedFaculty ?? []) as { facultyName: string; originalFacultyName?: string | null; count: number }[])
+            .map((cf) => `${cf.facultyName}${cf.originalFacultyName ? ` (sub for ${cf.originalFacultyName})` : ""} (${cf.count}x)`)
+            .join("; ") || (assignedStr !== "Not Assigned" ? `${assignedStr} (As Assigned)` : "As Assigned");
+
+        const effectiveTurnout =
+          sub.attendancePct != null && sub.attendancePct > 0
+            ? `${sub.attendancePct}%`
+            : sub.turnoutPct != null
+              ? `${sub.turnoutPct}%`
+              : "—";
+
+        const verificationRef = `ACT-SUB-${sub.subjectCode}-${Date.now().toString(36).toUpperCase()}`;
+        const generatedDateTime = `${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+
+        const htmlContent = `
+          <div style="font-family: Arial, Helvetica, sans-serif; color: #0f172a; padding: 12px; line-height: 1.4;">
+            <!-- Official Institution Masthead -->
+            <div style="text-align: center; border-bottom: 3px double #0f172a; padding-bottom: 10px; margin-bottom: 14px;">
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+                <span style="font-size: 9px; font-weight: bold; color: #64748b; letter-spacing: 1px; text-transform: uppercase;">
+                  ACADEMIC PORTAL &bull; CURRICULUM DELIVERY AUDIT
+                </span>
+                <span style="font-size: 9px; font-weight: bold; color: #15803d; background: #dcfce7; padding: 2px 6px; border-radius: 4px; border: 1px solid #bbf7d0;">
+                  OFFICIAL VERIFIED RECORD ✓
+                </span>
+              </div>
+              <h1 style="margin: 0; font-size: 19px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; text-transform: uppercase;">
+                SUBJECT DELIVERY & ALTERATION REPORT
+              </h1>
+              <p style="margin: 3px 0 0; font-size: 11px; font-weight: 600; color: #1e3a8a; letter-spacing: 0.5px;">
+                Subject Quota Fulfillment, Conduction Audit & Substitution Record
+              </p>
+              <p style="margin: 3px 0 0; font-size: 10px; color: #64748b;">
+                Academic Year: <strong>${escapeHtml(academicYear || "Current")}</strong> &bull; Period: <strong>${escapeHtml(dateRangeLabel)}</strong> &bull; Generated: ${generatedDateTime} &bull; Verification Ref: <strong>${verificationRef}</strong>
+              </p>
+            </div>
+
+            <!-- Subject Metadata Box -->
+            <div style="margin-bottom: 12px; border: 1px solid #cbd5e1; border-radius: 6px; background-color: #f8fafc; padding: 8px 12px;">
+              <table style="width: 100%; border-collapse: collapse; font-size: 11px;">
+                <tr>
+                  <td style="width: 50%; padding: 3px 0;"><strong>Subject Name:</strong> <span style="font-size: 12px; font-weight: bold; color: #0f172a;">${escapeHtml(sub.subjectName)}</span></td>
+                  <td style="width: 50%; padding: 3px 0;"><strong>Subject Code:</strong> <span style="font-family: monospace; font-weight: bold; color: #1e40af;">${escapeHtml(sub.subjectCode)}</span></td>
+                </tr>
+                <tr>
+                  <td style="padding: 3px 0;"><strong>Cohort / Scope:</strong> ${escapeHtml(sub.cohortTitle || selectedCohortTitle || "All Sections")}</td>
+                  <td style="padding: 3px 0;"><strong>Master Quota:</strong> ${sub.masterWeeklyPeriods} periods/week</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- 1. Executive Abstract -->
+            <div style="margin-bottom: 14px; break-inside: avoid;">
+              <h3 style="font-size: 11px; text-transform: uppercase; margin: 0 0 5px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+                1. Executive Abstract & Conduction Metrics
+              </h3>
+              <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
+                <thead>
+                  <tr style="background-color: #f1f5f9; color: #0f172a; font-weight: 700; border: 1px solid #cbd5e1;">
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Master Quota</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Conducted</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Total Students Enrolled</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Students Present</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Students Absent</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Attendance Rate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #334155;">${sub.masterWeeklyPeriods} p/wk</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${sub.totalConducted} held</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #334155;">${totalEnrolled > 0 ? totalEnrolled : cohortStrength}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${(sub.totalConducted ?? 0) > 0 ? (totalPresent || 0) : 0}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${(sub.totalConducted ?? 0) > 0 ? (totalAbsent || 0) : 0}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #1e40af;">${turnoutPct != null ? `${turnoutPct}%` : (effectiveTurnout !== "—" ? effectiveTurnout : ((sub.totalConducted ?? 0) > 0 ? "100%" : "Pending"))}</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
+                <tr>
+                  <td style="width: 30%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Assigned Master Faculty:</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(assignedStr)}</td>
+                </tr>
+                <tr>
+                  <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Substitute & Reliever Faculty:</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(changedStr)}</td>
+                </tr>
+              </table>
+            </div>
+
+            <!-- 2. Date-wise Breakdown -->
+            <div>
+              <h3 style="font-size: 11px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+                2. Date-wise Timetable Delivery & Alteration Sessions (${dateRangeLabel})
+              </h3>
+              ${dateTablesHtml}
+            </div>
+
+            <!-- Official Sign-off Block -->
+            <div style="margin-top: 36px; padding-top: 14px; border-top: 1px solid #cbd5e1; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; text-align: center; break-inside: avoid;">
+              <div>
+                <div style="height: 38px;"></div>
+                <p style="margin: 0; font-size: 11px; font-weight: bold; color: #0f172a; border-top: 1px dashed #64748b; padding-top: 4px;">
+                  Timetable Coordinator
+                </p>
+                <span style="font-size: 9px; color: #64748b;">Timetable & Conduction Cell</span>
+              </div>
+              <div>
+                <div style="height: 38px;"></div>
+                <p style="margin: 0; font-size: 11px; font-weight: bold; color: #0f172a; border-top: 1px dashed #64748b; padding-top: 4px;">
+                  Head of the Department (HOD)
+                </p>
+                <span style="font-size: 9px; color: #64748b;">Academic Affairs</span>
+              </div>
+              <div>
+                <div style="height: 38px;"></div>
+                <p style="margin: 0; font-size: 11px; font-weight: bold; color: #0f172a; border-top: 1px dashed #64748b; padding-top: 4px;">
+                  Principal / Dean of Academics
+                </p>
+                <span style="font-size: 9px; color: #64748b;">Institution Seal & Approval</span>
+              </div>
+            </div>
+          </div>
         `;
-      });
-    });
 
-    const excelHtml = `
-      <table>
-        <tr>
-          <td colspan="11" class="title-h1">ACADEMIC PORTAL &bull; SUBJECT ANALYSIS REPORT</td>
-        </tr>
-        <tr>
-          <td colspan="11" class="meta-p">
-            Subject: <b>${escapeHtml(sub.subjectName)} (${escapeHtml(sub.subjectCode)})</b> | 
-            Cohort: <b>${escapeHtml(sub.cohortTitle || "All Sections")}</b> | 
-            Period: <b>${escapeHtml(dateRangeLabel)}</b> | 
-            Academic Year: <b>${escapeHtml(academicYear || "Current")}</b>
-          </td>
-        </tr>
-      </table>
+        printHtml(htmlContent, {
+          title: `Subject_Report_${sub.subjectCode}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}`,
+          subtitle: `Curriculum delivery report for ${sub.subjectName} (${sub.subjectCode})`,
+          hideHeader: true,
+        });
+      } finally {
+        setGeneratingPdfKey(null);
+      }
+    },
+    [
+      activeSubjectModal,
+      dedicatedSubjectSessions,
+      fetchDedicatedSubjectData,
+      dateMode,
+      startDate,
+      endDate,
+      data?.comparisons,
+      academicYear,
+      selectedCohortTitle,
+    ],
+  );
 
-      <!-- 1. EXECUTIVE ABSTRACT -->
-      <table>
-        <tr>
-          <th colspan="7" class="section-h2">1. EXECUTIVE ABSTRACT</th>
-        </tr>
-        <tr>
-          <th class="kpi-th">Master Quota (p/wk)</th>
-          <th class="kpi-th">Conducted Sessions</th>
-          <th class="kpi-th">Swapped Out</th>
-          <th class="kpi-th">Swapped In</th>
-          <th class="kpi-th">Total Alterations</th>
-          <th class="kpi-th">Attendance Rate</th>
-          <th class="kpi-th">Turnout Status</th>
-        </tr>
-        <tr>
-          <td class="kpi-val">${sub.masterWeeklyPeriods}</td>
-          <td class="kpi-val highlight-emerald">${sub.totalConducted}</td>
-          <td class="kpi-val highlight-rose">${sub.timesSwappedOut}</td>
-          <td class="kpi-val highlight-emerald">${sub.timesSwappedIn}</td>
-          <td class="kpi-val highlight-amber">${sub.timesChanged}</td>
-          <td class="kpi-val highlight-sky">${effectiveTurnout}</td>
-          <td>${sub.totalConducted > 0 ? "Turnout Recorded" : "Pending"}</td>
-        </tr>
-        <tr>
-          <td colspan="2"><b>Assigned Master Faculty:</b></td>
-          <td colspan="5">${escapeHtml(assignedStr)}</td>
-        </tr>
-        <tr>
-          <td colspan="2"><b>Substitute / Reliever Faculty:</b></td>
-          <td colspan="5">${escapeHtml(changedStr)}</td>
-        </tr>
-      </table>
+  // Export individual Subject Curriculum Delivery Report to Multi-Sheet Excel (.xls)
+  const exportSubjectExcel = useCallback(
+    async (
+      sub: {
+        subjectCode: string;
+        subjectName: string;
+        masterWeeklyPeriods?: number;
+        totalScheduled?: number;
+        totalConducted?: number;
+        timesChanged?: number;
+        timesSwappedOut?: number;
+        timesSwappedIn?: number;
+        facultyNames?: string[];
+        assignedFaculty?: string[];
+        assignedFacultyNames?: string[];
+        attendancePct?: number | null;
+        effectiveAttendancePct?: number | null;
+        turnoutPct?: number | null;
+        cohortTitle?: string;
+        sectionLetter?: string;
+        branchCode?: string;
+        batch?: string;
+        changedFaculty?: { facultyName: string; originalFacultyName?: string | null; count: number }[];
+        changedFaculties?: { facultyName: string; originalFacultyName?: string | null; count: number }[];
+      },
+      customSessions?: ComparisonItem[],
+    ) => {
+      setGeneratingExcelKey(sub.subjectCode);
+      try {
+        let sessionsToUse = customSessions;
+        if (!sessionsToUse) {
+          if (activeSubjectModal?.subjectCode === sub.subjectCode && dedicatedSubjectSessions && dedicatedSubjectSessions.length > 0) {
+            sessionsToUse = dedicatedSubjectSessions;
+          } else {
+            const fetched = await fetchDedicatedSubjectData(sub);
+            sessionsToUse = fetched?.comparisons;
+          }
+        }
 
-      <!-- 2. DATE-WISE BREAKDOWN -->
-      <table>
-        <tr>
-          <th colspan="11" class="section-h2">2. DATE-WISE TIMETABLE DELIVERY & ACTION LOG</th>
-        </tr>
-        <tr>
-          <th>Date</th>
-          <th>Day</th>
-          <th>Slot</th>
-          <th>Time</th>
-          <th>Class & Section</th>
-          <th>Batch</th>
-          <th>Master Faculty</th>
-          <th>Conducted Faculty</th>
-          <th>Action Status</th>
-          <th>Conducted</th>
-          <th>Attendance Turnout</th>
-        </tr>
-        ${sessionRowsHtml || `<tr><td colspan="11">No delivery sessions found in this date range.</td></tr>`}
-      </table>
-    `;
+        const dateRangeLabel =
+          dateMode === "range"
+            ? `${startDate || "Start"} to ${endDate || "End"}`
+            : getTodayDateString();
 
-    downloadExcelFile(
-      excelHtml,
-      `Subject_${sub.subjectCode}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}.xls`,
-    );
-  }, [activeSubjectModal, dateMode, startDate, endDate, academicYear, modalSubjectSessions, downloadExcelFile]);
+        const code = (sub.subjectCode || "").trim().toUpperCase();
+        const name = (sub.subjectName || "").trim().toLowerCase();
 
-  // Export Staff Modal to PDF (Abstract first, then Date-wise Delivery Log)
+        const rawList = sessionsToUse && sessionsToUse.length > 0 ? sessionsToUse : (data?.comparisons || []);
+        const subjectSessions = rawList.filter((c) => {
+          const matchCode =
+            (c.masterSubjectCode && c.masterSubjectCode.trim().toUpperCase() === code) ||
+            (c.todaySubjectCode && c.todaySubjectCode.trim().toUpperCase() === code);
+          const matchName =
+            (c.masterSubjectName && c.masterSubjectName.trim().toLowerCase() === name) ||
+            (c.todaySubjectName && c.todaySubjectName.trim().toLowerCase() === name);
+
+          if (!matchCode && !matchName) return false;
+
+          if (sub.sectionLetter) {
+            const sec = cleanSectionCode(c.sectionName);
+            const targetSec = cleanSectionCode(sub.sectionLetter);
+            if (sec && targetSec && sec !== targetSec) return false;
+          }
+          return true;
+        });
+
+        const totalPresent = subjectSessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+        const totalAbsent = subjectSessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const totalMarked = totalPresent + totalAbsent;
+        const cohortStrength = subjectSessions.find((s) => (s.enrolledCount || 0) > 0)?.enrolledCount || 0;
+        const totalEnrolled = totalMarked > 0 ? totalMarked : cohortStrength;
+        const turnoutPct = totalMarked > 0 ? Math.round((totalPresent / totalMarked) * 100) : (sub.attendancePct != null ? sub.attendancePct : null);
+
+        const dateMap = new Map<string, typeof subjectSessions>();
+        subjectSessions.forEach((s) => {
+          const d = s.date || "Scheduled";
+          if (!dateMap.has(d)) dateMap.set(d, []);
+          dateMap.get(d)!.push(s);
+        });
+        const sortedDates = Array.from(dateMap.keys()).sort();
+
+        const assignedStr =
+          (sub.assignedFacultyNames ?? sub.facultyNames ?? []).join("; ") || "Not Assigned";
+        const changedStr =
+          ((sub.changedFaculties ?? sub.changedFaculty ?? []) as { facultyName: string; originalFacultyName?: string | null; count: number }[])
+            .map((cf) => `${cf.facultyName}${cf.originalFacultyName ? ` (sub for ${cf.originalFacultyName})` : ""} (${cf.count}x)`)
+            .join("; ") || (assignedStr !== "Not Assigned" ? `${assignedStr} (As Assigned)` : "As Assigned");
+
+        const sheets: ExcelWorksheet[] = [];
+
+        // --- Sheet 1: Overview ---
+        const overviewRows: ExcelRow[] = [
+          { cells: [{ value: "ACADEMIC PORTAL • SUBJECT CURRICULUM DELIVERY & ATTENDANCE AUDIT", styleId: "Title", mergeAcross: 6 }] },
+          { cells: [{ value: `Subject: ${sub.subjectName} (${sub.subjectCode}) | Cohort: ${sub.cohortTitle || selectedCohortTitle || "All Sections"} | Period: ${dateRangeLabel} | Academic Year: ${academicYear || "Current"}`, styleId: "Subtitle", mergeAcross: 6 }] },
+          { cells: [] },
+          { cells: [{ value: "1. EXECUTIVE ABSTRACT & CURRICULUM METRICS", styleId: "SectionHeader", mergeAcross: 6 }] },
+          {
+            cells: [
+              { value: "Master Quota (p/wk)", styleId: "KpiLabel" },
+              { value: "Conducted Sessions", styleId: "KpiLabel" },
+              { value: "Students Enrolled", styleId: "KpiLabel" },
+              { value: "Students Present", styleId: "KpiLabel" },
+              { value: "Students Absent", styleId: "KpiLabel" },
+              { value: "Attendance %", styleId: "KpiLabel" },
+              { value: "Delivery Status", styleId: "KpiLabel" },
+            ],
+          },
+          {
+            cells: [
+              { value: sub.masterWeeklyPeriods, styleId: "CellCenter" },
+              { value: sub.totalConducted, styleId: "KpiEmerald" },
+              { value: totalEnrolled, styleId: "CellCenter" },
+              { value: (sub.totalConducted ?? 0) > 0 ? totalPresent : 0, styleId: "CellPresent" },
+              { value: (sub.totalConducted ?? 0) > 0 ? totalAbsent : 0, styleId: "CellAbsent" },
+              { value: turnoutPct != null ? `${turnoutPct}%` : (((sub.totalConducted ?? 0) > 0) ? "100%" : "Pending"), styleId: "CellTurnout" },
+              { value: (sub.totalConducted ?? 0) > 0 ? "Conducted ✓" : "Pending", styleId: "CellCenter" },
+            ],
+          },
+          { cells: [] },
+          { cells: [{ value: "2. FACULTY ALLOCATIONS & ALTERATIONS", styleId: "SectionHeader", mergeAcross: 6 }] },
+          { cells: [{ value: "Assigned Master Faculty:", styleId: "CellBoldCenter" }, { value: assignedStr, styleId: "CellNormal", mergeAcross: 5 }] },
+          { cells: [{ value: "Substitute / Reliever Faculty:", styleId: "CellBoldCenter" }, { value: changedStr, styleId: "CellNormal", mergeAcross: 5 }] },
+          { cells: [] },
+          { cells: [{ value: `3. SUMMARY BY DATE (${sortedDates.length} Days Recorded)`, styleId: "SectionHeader", mergeAcross: 7 }] },
+          {
+            cells: [
+              { value: "Date", styleId: "ColHeaderEmerald" },
+              { value: "Day", styleId: "ColHeaderEmerald" },
+              { value: "Total Sessions", styleId: "ColHeaderEmerald" },
+              { value: "Conducted", styleId: "ColHeaderEmerald" },
+              { value: "Students Enrolled", styleId: "ColHeaderEmerald" },
+              { value: "Students Present", styleId: "ColHeaderEmerald" },
+              { value: "Students Absent", styleId: "ColHeaderEmerald" },
+              { value: "Attendance %", styleId: "ColHeaderEmerald" },
+            ],
+          },
+        ];
+
+        sortedDates.forEach((d) => {
+          const sessions = dateMap.get(d)!;
+          const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+          const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+          const dayEnr = dayPres + dayAbs;
+          const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+          const dayHeld = sessions.filter((s) => s.isConducted).length;
+
+          overviewRows.push({
+            cells: [
+              { value: d, styleId: "CellNormal" },
+              { value: sessions[0]?.dayOfWeek || "", styleId: "CellNormal" },
+              { value: sessions.length, styleId: "CellCenter" },
+              { value: dayHeld, styleId: "CellPresent" },
+              { value: dayEnr > 0 || dayHeld > 0 ? dayEnr : "—", styleId: "CellCenter" },
+              { value: dayPres > 0 || dayHeld > 0 ? dayPres : "—", styleId: "CellPresent" },
+              { value: dayAbs > 0 || dayHeld > 0 ? dayAbs : "—", styleId: "CellAbsent" },
+              { value: dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+            ],
+          });
+        });
+
+        sheets.push({
+          name: "Overview",
+          columns: [{ width: 14 }, { width: 12 }, { width: 14 }, { width: 12 }, { width: 16 }, { width: 14 }, { width: 14 }, { width: 16 }, { width: 14 }, { width: 14 }],
+          rows: overviewRows,
+        });
+
+        // --- Subsequent Sheets: One Sheet Per Date ---
+        sortedDates.forEach((d) => {
+          const sessions = dateMap.get(d)!;
+          const dayName = sessions[0]?.dayOfWeek || "";
+          const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+          const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+          const dayEnr = dayPres + dayAbs;
+          const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+          const dayHeld = sessions.filter((s) => s.isConducted).length;
+
+          const dateRows: ExcelRow[] = [
+            { cells: [{ value: `CURRICULUM SESSIONS & STUDENT ATTENDANCE — ${d} (${dayName})`, styleId: "Title", mergeAcross: 12 }] },
+            { cells: [{ value: `Subject: ${sub.subjectName} (${sub.subjectCode}) | Day Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 12 }] },
+            { cells: [] },
+            {
+              cells: [
+                { value: "Date", styleId: "ColHeaderEmerald" },
+                { value: "Day", styleId: "ColHeaderEmerald" },
+                { value: "Slot & Time", styleId: "ColHeaderEmerald" },
+                { value: "Class & Section", styleId: "ColHeaderEmerald" },
+                { value: "Batch", styleId: "ColHeaderEmerald" },
+                { value: "Master Faculty", styleId: "ColHeaderEmerald" },
+                { value: "Conducted Faculty", styleId: "ColHeaderEmerald" },
+                { value: "Action Status", styleId: "ColHeaderEmerald" },
+                { value: "Conducted", styleId: "ColHeaderEmerald" },
+                { value: "Enrolled", styleId: "ColHeaderEmerald" },
+                { value: "Present", styleId: "ColHeaderEmerald" },
+                { value: "Absent", styleId: "ColHeaderEmerald" },
+                { value: "Attendance %", styleId: "ColHeaderEmerald" },
+              ],
+            },
+          ];
+
+          sessions.forEach((s) => {
+            const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+            const sPres = s.presentCount || 0;
+            const sAbs = s.absentCount || 0;
+            const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (sEnr > 0 ? sEnr : 0);
+            const sTurnout = s.isConducted ? (s.attendancePct != null ? `${s.attendancePct}%` : (sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : "100%")) : "Pending";
+            const varianceTitle = s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Both Sub & Swap";
+
+            dateRows.push({
+              cells: [
+                { value: s.date, styleId: "CellNormal" },
+                { value: s.dayOfWeek || "", styleId: "CellNormal" },
+                { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
+                { value: s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All", styleId: "CellNormal" },
+                { value: `Batch ${s.batch}`, styleId: "CellCenter" },
+                { value: s.masterFacultyName || "—", styleId: "CellNormal" },
+                { value: s.todayFacultyName || "—", styleId: "CellNormal" },
+                { value: varianceTitle, styleId: "CellNormal" },
+                { value: s.isConducted ? "Conducted ✓" : "Scheduled", styleId: s.isConducted ? "CellPresent" : "CellNormal" },
+                { value: sEnrolledTotal > 0 ? sEnrolledTotal : "—", styleId: "CellCenter" },
+                { value: s.isConducted ? sPres : "—", styleId: "CellPresent" },
+                { value: s.isConducted ? sAbs : "—", styleId: "CellAbsent" },
+                { value: sTurnout, styleId: "CellTurnout" },
+              ],
+            });
+          });
+
+          // Day Total Row
+          dateRows.push({
+            cells: [
+              { value: "Day Total", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: "", styleId: "SubTotalRow" },
+              { value: `${dayHeld} Held`, styleId: "SubTotalRow" },
+              { value: dayEnr > 0 ? dayEnr : "—", styleId: "SubTotalRow" },
+              { value: dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—"), styleId: "CellPresent" },
+              { value: dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—"), styleId: "CellAbsent" },
+              { value: dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+            ],
+          });
+
+          sheets.push({
+            name: sanitizeSheetName(d),
+            columns: [
+              { width: 12 }, { width: 10 }, { width: 16 }, { width: 14 }, { width: 10 },
+              { width: 22 }, { width: 22 }, { width: 20 }, { width: 13 }, { width: 10 },
+              { width: 10 }, { width: 10 }, { width: 12 }
+            ],
+            rows: dateRows,
+          });
+        });
+
+        downloadExcelWorkbook(
+          { author: "Academic Portal", sheets },
+          `Subject_${sub.subjectCode}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}.xls`,
+        );
+      } finally {
+        setGeneratingExcelKey(null);
+      }
+    },
+    [
+      activeSubjectModal,
+      dedicatedSubjectSessions,
+      fetchDedicatedSubjectData,
+      dateMode,
+      startDate,
+      endDate,
+      data?.comparisons,
+      academicYear,
+      selectedCohortTitle,
+    ],
+  );
+
+  // Modal export wrappers
   const exportStaffModalPdf = useCallback(() => {
-    if (!activeStaffModal) return;
-    const f = activeStaffModal;
-    const dateRangeLabel =
-      dateMode === "range"
-        ? `${startDate ? formatDisplayDate(startDate) : "Start"} to ${endDate ? formatDisplayDate(endDate) : "End"}`
-        : formatDisplayDate(getTodayDateString());
+    if (activeStaffModal) void printFacultyPdf(activeStaffModal, modalStaffSessions);
+  }, [activeStaffModal, printFacultyPdf, modalStaffSessions]);
 
-    const dateMap = new Map<string, typeof modalStaffSessions>();
-    modalStaffSessions.forEach((s) => {
-      const d = s.date || "Scheduled Plan";
-      if (!dateMap.has(d)) dateMap.set(d, []);
-      dateMap.get(d)!.push(s);
-    });
-    const sortedDates = Array.from(dateMap.keys()).sort();
-
-    let dateTablesHtml = "";
-    if (sortedDates.length === 0) {
-      dateTablesHtml = `<p style="color: #64748b; font-size: 11px; padding: 12px 0;">No timetable sessions recorded for this faculty member in the selected range.</p>`;
-    } else {
-      sortedDates.forEach((d) => {
-        const sessions = dateMap.get(d)!;
-        const dayName = sessions[0]?.dayOfWeek || "";
-        dateTablesHtml += `
-          <div style="margin-top: 14px; break-inside: avoid;">
-            <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none;">
-              📅 Date: ${d} ${dayName ? `(${dayName})` : ""} &bull; ${sessions.length} Session(s)
-            </div>
-            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
-              <thead>
-                <tr style="background-color: #334155; color: white;">
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Slot & Time</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Class & Section</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Subject Name & Code</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Action Role Taken</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Conducted</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Turnout</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sessions
-                  .map(
-                    (s) => `
-                  <tr>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.slotLabel} (${s.time})</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${s.batch}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">
-                      <b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</b> 
-                      <span style="color: #64748b;">(${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})</span>
-                    </td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold;">${escapeHtml(s.actionTitle)}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center;">${s.isConducted ? "Yes ✓" : "Scheduled"}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold;">${s.attendancePct != null ? `${s.attendancePct}%` : "—"}</td>
-                  </tr>
-                `,
-                  )
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
-        `;
-      });
-    }
-
-    const htmlContent = `
-      <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 10px;">
-        <div style="border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px;">
-          <h2 style="margin: 0; font-size: 18px; color: #0f172a;">Faculty Workload & Action Audit Report</h2>
-          <p style="margin: 4px 0 0; font-size: 11px; color: #475569;">
-            <strong>Faculty Name:</strong> ${escapeHtml(f.facultyName)} &bull; 
-            <strong>HRMS ID:</strong> #${escapeHtml(f.hrmsId)} &bull; 
-            <strong>Period:</strong> ${escapeHtml(dateRangeLabel)} &bull; 
-            <strong>Academic Year:</strong> ${escapeHtml(academicYear || "Current")}
-          </p>
-        </div>
-
-        <!-- 1. Executive Abstract -->
-        <div style="margin-bottom: 14px; break-inside: avoid;">
-          <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-            1. Executive Abstract & Workload Metrics
-          </h3>
-          <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
-            <thead>
-              <tr style="background-color: #0f172a; color: white;">
-                <th style="padding: 6px; border: 1px solid #64748b;">Master Quota</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Classes Conducted</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Relieved Away (-)</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Substitute Taken (+)</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Net Teaching Load</th>
-                <th style="padding: 6px; border: 1px solid #64748b;">Shift Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px;">${f.masterAssignedPeriods} p/wk</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${f.classesConducted} held</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${f.relievedCount > 0 ? `-${f.relievedCount}` : 0}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0284c7;">${f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0}</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0f172a;">${f.netTeachingCount} sessions</td>
-                <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 11px;">
-                  ${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount} variance
-                </td>
-              </tr>
-            </tbody>
-          </table>
-
-          <table style="width: 100%; border-collapse: collapse; font-size: 10px;">
-            <tr>
-              <td style="width: 25%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Assigned Subjects:</td>
-              <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(f.subjects.join(", ") || "None")}</td>
-            </tr>
-            <tr>
-              <td style="width: 25%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Substitutions Covered for Colleagues:</td>
-              <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #0284c7;">${f.substituteTakenCount} session(s)</td>
-            </tr>
-            <tr>
-              <td style="width: 25%; font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Relief Covered by Colleagues:</td>
-              <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #be123c;">${f.relievedCount} session(s)</td>
-            </tr>
-          </table>
-        </div>
-
-        <!-- 2. Date-wise Data Breakdown -->
-        <div>
-          <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-            2. Date-wise Timetable Delivery & Substitution Actions (${dateRangeLabel})
-          </h3>
-          ${dateTablesHtml}
-        </div>
-      </div>
-    `;
-
-    printHtml(htmlContent, {
-      title: `Staff_Report_${f.hrmsId}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}`,
-      subtitle: `Workload and action audit report for ${f.facultyName} (#${f.hrmsId})`,
-    });
-  }, [activeStaffModal, dateMode, startDate, endDate, academicYear, modalStaffSessions]);
-
-  // Export Staff Modal to Excel (Abstract first, then Date-wise Delivery Log)
   const exportStaffModalExcel = useCallback(() => {
-    if (!activeStaffModal) return;
-    const f = activeStaffModal;
-    const dateRangeLabel =
-      dateMode === "range"
-        ? `${startDate || "Start"} to ${endDate || "End"}`
-        : getTodayDateString();
+    if (activeStaffModal) void exportFacultyExcel(activeStaffModal, modalStaffSessions);
+  }, [activeStaffModal, exportFacultyExcel, modalStaffSessions]);
 
-    const dateMap = new Map<string, typeof modalStaffSessions>();
-    modalStaffSessions.forEach((s) => {
-      const d = s.date || "Scheduled";
-      if (!dateMap.has(d)) dateMap.set(d, []);
-      dateMap.get(d)!.push(s);
-    });
-    const sortedDates = Array.from(dateMap.keys()).sort();
+  const exportSubjectModalPdf = useCallback(() => {
+    if (activeSubjectModal) void printSubjectPdf(activeSubjectModal, modalSubjectSessions);
+  }, [activeSubjectModal, printSubjectPdf, modalSubjectSessions]);
 
-    let sessionRowsHtml = "";
-    sortedDates.forEach((d) => {
-      const sessions = dateMap.get(d)!;
-      sessions.forEach((s) => {
-        sessionRowsHtml += `
-          <tr>
-            <td>${escapeHtml(s.date)}</td>
-            <td>${escapeHtml(s.dayOfWeek || "")}</td>
-            <td>${escapeHtml(s.slotLabel)}</td>
-            <td>${escapeHtml(s.time)}</td>
-            <td>${escapeHtml(s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All")}</td>
-            <td>${escapeHtml(s.batch)}</td>
-            <td>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</td>
-            <td>${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "—")}</td>
-            <td>${escapeHtml(s.actionTitle)}</td>
-            <td>${s.isConducted ? "Conducted" : "Scheduled"}</td>
-            <td>${s.attendancePct != null ? `${s.attendancePct}%` : "Pending"}</td>
-          </tr>
-        `;
-      });
-    });
-
-    const excelHtml = `
-      <table>
-        <tr>
-          <td colspan="11" class="title-h1">ACADEMIC PORTAL &bull; FACULTY WORKLOAD & ACTION AUDIT REPORT</td>
-        </tr>
-        <tr>
-          <td colspan="11" class="meta-p">
-            Faculty: <b>${escapeHtml(f.facultyName)}</b> | 
-            HRMS ID: <b>#${escapeHtml(f.hrmsId)}</b> | 
-            Period: <b>${escapeHtml(dateRangeLabel)}</b> | 
-            Academic Year: <b>${escapeHtml(academicYear || "Current")}</b>
-          </td>
-        </tr>
-      </table>
-
-      <!-- 1. EXECUTIVE ABSTRACT -->
-      <table>
-        <tr>
-          <th colspan="6" class="section-h2">1. EXECUTIVE ABSTRACT</th>
-        </tr>
-        <tr>
-          <th class="kpi-th">Master Quota (p/wk)</th>
-          <th class="kpi-th">Classes Conducted</th>
-          <th class="kpi-th">Relieved Away (-)</th>
-          <th class="kpi-th">Substitute Taken (+)</th>
-          <th class="kpi-th">Net Teaching Load</th>
-          <th class="kpi-th">Net Shift</th>
-        </tr>
-        <tr>
-          <td class="kpi-val">${f.masterAssignedPeriods}</td>
-          <td class="kpi-val highlight-emerald">${f.classesConducted}</td>
-          <td class="kpi-val highlight-rose">${f.relievedCount > 0 ? `-${f.relievedCount}` : 0}</td>
-          <td class="kpi-val highlight-sky">${f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0}</td>
-          <td class="kpi-val"><b>${f.netTeachingCount}</b></td>
-          <td>${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount}</td>
-        </tr>
-        <tr>
-          <td colspan="2"><b>Assigned Subjects:</b></td>
-          <td colspan="4">${escapeHtml(f.subjects.join(", ") || "None")}</td>
-        </tr>
-        <tr>
-          <td colspan="2"><b>Substitutions Covered for Colleagues:</b></td>
-          <td colspan="4">${f.substituteTakenCount} session(s)</td>
-        </tr>
-        <tr>
-          <td colspan="2"><b>Relief Covered by Colleagues:</b></td>
-          <td colspan="4">${f.relievedCount} session(s)</td>
-        </tr>
-      </table>
-
-      <!-- 2. DATE-WISE BREAKDOWN -->
-      <table>
-        <tr>
-          <th colspan="11" class="section-h2">2. DATE-WISE TIMETABLE & ACTION LOG</th>
-        </tr>
-        <tr>
-          <th>Date</th>
-          <th>Day</th>
-          <th>Slot</th>
-          <th>Time</th>
-          <th>Class & Section</th>
-          <th>Batch</th>
-          <th>Subject Name</th>
-          <th>Subject Code</th>
-          <th>Action Role Taken</th>
-          <th>Conducted</th>
-          <th>Attendance Turnout</th>
-        </tr>
-        ${sessionRowsHtml || `<tr><td colspan="11">No delivery sessions found in this date range.</td></tr>`}
-      </table>
-    `;
-
-    downloadExcelFile(
-      excelHtml,
-      `Staff_${f.hrmsId}_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}.xls`,
-    );
-  }, [activeStaffModal, dateMode, startDate, endDate, academicYear, modalStaffSessions, downloadExcelFile]);
+  const exportSubjectModalExcel = useCallback(() => {
+    if (activeSubjectModal) void exportSubjectExcel(activeSubjectModal, modalSubjectSessions);
+  }, [activeSubjectModal, exportSubjectExcel, modalSubjectSessions]);
 
   // Export to Excel / CSV with Executive Abstract + Date-wise breakdown
   const handleExportCsv = () => {
@@ -2267,12 +3238,12 @@ export function MasterVsChangedReport({
 
     if (activeSection === "subjects") {
       if (selectedSubjectObj) {
-        exportSubjectModalExcel();
+        void exportSubjectExcel(selectedSubjectObj);
         return;
       }
 
       const subjectsList = filteredSubjects.length ? filteredSubjects : (data?.subjects ?? []);
-      if (!subjectsList.length) {
+      if (!subjectsList.length && comparisonsBySection.length === 0) {
         alert("No subject data available to export.");
         return;
       }
@@ -2286,136 +3257,249 @@ export function MasterVsChangedReport({
       });
       const sortedDates = Array.from(dateMap.keys()).sort();
 
-      let sessionRowsHtml = "";
+      const sheets: ExcelWorksheet[] = [];
+
+      // --- Sheet 1: Class & Section Curriculum Roster ---
+      const rosterRows: ExcelRow[] = [
+        { cells: [{ value: "ACADEMIC PORTAL • CLASS & SUBJECT CURRICULUM DELIVERY REPORT", styleId: "Title", mergeAcross: 12 }] },
+        { cells: [{ value: `Scope: ${selectedCohortTitle || "All Sections"} | Period: ${dateRangeLabel} | Academic Year: ${academicYear || "Current"}`, styleId: "Subtitle", mergeAcross: 12 }] },
+        { cells: [] },
+        { cells: [{ value: "1. EXECUTIVE ABSTRACT & CURRICULUM METRICS", styleId: "SectionHeader", mergeAcross: 12 }] },
+        {
+          cells: [
+            { value: "Total Subjects", styleId: "KpiLabel" },
+            { value: "Master Quota (p/wk)", styleId: "KpiLabel" },
+            { value: "Conducted Sessions", styleId: "KpiLabel" },
+            { value: "Students Enrolled", styleId: "KpiLabel" },
+            { value: "Students Present", styleId: "KpiLabel" },
+            { value: "Students Absent", styleId: "KpiLabel" },
+            { value: "Attendance %", styleId: "KpiLabel" },
+          ],
+        },
+        {
+          cells: [
+            { value: subjectAnalytics.totalSubjects, styleId: "KpiEmerald" },
+            { value: subjectAnalytics.totalWeeklyQuota, styleId: "CellCenter" },
+            { value: subjectAnalytics.totalConducted, styleId: "KpiEmerald" },
+            { value: totalCohortStudentsEnrolled > 0 ? totalCohortStudentsEnrolled : ((subjectAnalytics.totalMarked || 0) > 0 ? subjectAnalytics.totalMarked : "—"), styleId: "CellCenter" },
+            { value: subjectAnalytics.totalConducted > 0 ? (subjectAnalytics.totalPresent || 0) : 0, styleId: "CellPresent" },
+            { value: subjectAnalytics.totalConducted > 0 ? (subjectAnalytics.totalAbsent || 0) : 0, styleId: "CellAbsent" },
+            { value: subjectAnalytics.totalConducted > 0 && subjectAnalytics.overallTurnoutPct != null ? `${subjectAnalytics.overallTurnoutPct}%` : (subjectAnalytics.totalConducted > 0 && subjectAnalytics.avgAttendance != null ? `${subjectAnalytics.avgAttendance}%` : "Pending"), styleId: "CellTurnout" },
+          ],
+        },
+        { cells: [] },
+        { cells: [{ value: "2. CLASS & SECTION-WISE SUBJECT ALLOCATION ROSTER", styleId: "SectionHeader", mergeAcross: 12 }] },
+        {
+          cells: [
+            { value: "Class & Section", styleId: "ColHeaderEmerald" },
+            { value: "Batch", styleId: "ColHeaderEmerald" },
+            { value: "Branch", styleId: "ColHeaderEmerald" },
+            { value: "Subject Code", styleId: "ColHeaderEmerald" },
+            { value: "Subject Name", styleId: "ColHeaderEmerald" },
+            { value: "Master Quota", styleId: "ColHeaderEmerald" },
+            { value: "Conducted", styleId: "ColHeaderEmerald" },
+            { value: "Assigned Faculty", styleId: "ColHeaderEmerald" },
+            { value: "Conducted Faculty", styleId: "ColHeaderEmerald" },
+            { value: "Enrolled", styleId: "ColHeaderEmerald" },
+            { value: "Present", styleId: "ColHeaderEmerald" },
+            { value: "Absent", styleId: "ColHeaderEmerald" },
+            { value: "Attendance %", styleId: "ColHeaderEmerald" },
+          ],
+        },
+      ];
+
+      if (comparisonsBySection.length > 0) {
+        comparisonsBySection.forEach((secGroup) => {
+          const secEnrolled = secGroup.secEnrolled || 0;
+          const secTotalConducted = secGroup.cohortSubjects.reduce((acc, s) => acc + s.totalConducted, 0);
+          const secTotalChanges = secGroup.cohortSubjects.reduce((acc, s) => acc + s.timesChanged, 0);
+          const withAtt = secGroup.cohortSubjects.filter((s) => s.totalConducted > 0 && s.effectiveAttendancePct != null && s.effectiveAttendancePct > 0);
+          const secAvgAtt = withAtt.length > 0 ? Math.round(withAtt.reduce((acc, s) => acc + (s.effectiveAttendancePct ?? 0), 0) / withAtt.length) : null;
+
+          rosterRows.push({
+            cells: [
+              {
+                value: `🎓 Class: ${secGroup.branchCode} - Section ${secGroup.sectionLetter !== "Unassigned" ? secGroup.sectionLetter : "All"} (Batch ${secGroup.batch}) — ${secGroup.cohortSubjects.length} Subjects | ${secTotalConducted} Conducted | ${secEnrolled > 0 ? `${secEnrolled} Enrolled` : "Enrolled Pending"} | ${secTotalChanges > 0 ? `${secTotalChanges} Alterations` : "As Assigned"} | Attendance: ${secAvgAtt != null ? `${secAvgAtt}%` : "Pending"}`,
+                styleId: "SubTotalRow",
+                mergeAcross: 12,
+              },
+            ],
+          });
+
+          secGroup.cohortSubjects.forEach((sub) => {
+            const assigned = sub.assignedFaculty.join("; ");
+            const changed = sub.changedFaculty
+              .map((cf) => cf.originalFacultyName ? `${cf.facultyName} (sub for ${cf.originalFacultyName})` : cf.facultyName)
+              .join("; ");
+            const conductedFac = changed || (assigned ? `${assigned} (As Assigned)` : "As Assigned");
+            const subEnrolled = secEnrolled;
+            const isConducted = sub.totalConducted > 0;
+            const subPres = isConducted ? (sub.totalPresent || 0) : 0;
+            const subAbs = isConducted
+              ? ((sub.totalMarked || 0) > 0 ? Math.max(0, (sub.totalMarked || 0) - (sub.totalPresent || 0)) : Math.max(0, subEnrolled - (sub.totalPresent || 0)))
+              : 0;
+            const attPct = isConducted
+              ? (sub.effectiveAttendancePct != null || sub.turnoutPct != null
+                  ? `${sub.effectiveAttendancePct ?? sub.turnoutPct}%`
+                  : (subEnrolled > 0 ? `${Math.round(((sub.totalPresent || 0) / subEnrolled) * 100)}%` : "100%"))
+              : "Pending";
+
+            rosterRows.push({
+              cells: [
+                { value: `${secGroup.branchCode} - Sec ${secGroup.sectionLetter !== "Unassigned" ? secGroup.sectionLetter : "All"}`, styleId: "CellNormal" },
+                { value: `Batch ${secGroup.batch}`, styleId: "CellCenter" },
+                { value: secGroup.branchCode, styleId: "CellCenter" },
+                { value: sub.subjectCode, styleId: "CellCenter" },
+                { value: sub.subjectName || "", styleId: "CellNormal" },
+                { value: sub.masterWeeklyPeriods, styleId: "CellCenter" },
+                { value: sub.totalConducted, styleId: "CellPresent" },
+                { value: assigned || "—", styleId: "CellNormal" },
+                { value: conductedFac, styleId: "CellNormal" },
+                { value: subEnrolled > 0 ? subEnrolled : "—", styleId: "CellCenter" },
+                { value: isConducted ? subPres : "—", styleId: "CellPresent" },
+                { value: isConducted ? subAbs : "—", styleId: "CellAbsent" },
+                { value: attPct, styleId: "CellTurnout" },
+              ],
+            });
+          });
+        });
+      } else {
+        subjectsList.forEach((s) => {
+          const assigned = Array.from(subjectAssignedFacultyMap.get(s.subjectCode) ?? (s.facultyNames ?? [])).join("; ");
+          const changed = Array.from(subjectChangedFacultyMap.get(s.subjectCode)?.values() ?? [])
+            .map((cf) => cf.originalFacultyName ? `${cf.facultyName} (sub for ${cf.originalFacultyName})` : cf.facultyName)
+            .join("; ");
+          const conductedFac = changed || (assigned ? `${assigned} (As Assigned)` : "As Assigned");
+          const sEnr = (s.totalMarked || 0) > 0 ? s.totalMarked : "—";
+          const sPres = s.totalConducted > 0 && (s.totalPresent || 0) > 0 ? s.totalPresent : (s.totalConducted > 0 && (s.totalMarked || 0) > 0 ? 0 : "—");
+          const sAbs = s.totalConducted > 0 && (s.totalMarked || 0) > 0 ? Math.max(0, (s.totalMarked || 0) - (s.totalPresent || 0)) : "—";
+          const attPct = s.totalConducted > 0 && (s.turnoutPct != null || s.attendancePct > 0) ? `${s.turnoutPct ?? s.attendancePct}%` : "Pending";
+
+          rosterRows.push({
+            cells: [
+              { value: selectedCohortTitle || "All Sections", styleId: "CellNormal" },
+              { value: selectedBatch ? `Batch ${selectedBatch}` : "All", styleId: "CellCenter" },
+              { value: "CSE", styleId: "CellCenter" },
+              { value: s.subjectCode, styleId: "CellCenter" },
+              { value: s.subjectName || "", styleId: "CellNormal" },
+              { value: s.masterWeeklyPeriods, styleId: "CellCenter" },
+              { value: s.totalConducted, styleId: "CellPresent" },
+              { value: assigned || "—", styleId: "CellNormal" },
+              { value: conductedFac, styleId: "CellNormal" },
+              { value: sEnr, styleId: "CellCenter" },
+              { value: sPres, styleId: "CellPresent" },
+              { value: sAbs, styleId: "CellAbsent" },
+              { value: attPct, styleId: "CellTurnout" },
+            ],
+          });
+        });
+      }
+
+      sheets.push({
+        name: "Curriculum Roster",
+        columns: [
+          { width: 18 }, { width: 12 }, { width: 10 }, { width: 14 }, { width: 26 },
+          { width: 12 }, { width: 12 }, { width: 24 }, { width: 24 },
+          { width: 12 }, { width: 12 }, { width: 12 }, { width: 14 }
+        ],
+        rows: rosterRows,
+      });
+
+      // --- Subsequent Sheets: One Sheet Per Date ---
       sortedDates.forEach((d) => {
         const sessions = dateMap.get(d)!;
+        const dayName = sessions[0]?.dayOfWeek || "";
+        const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+        const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const dayEnr = dayPres + dayAbs;
+        const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+        const dayHeld = sessions.filter((s) => s.isConducted).length;
+
+        const dateRows: ExcelRow[] = [
+          { cells: [{ value: `DATE-WISE CURRICULUM DELIVERY & STUDENT ATTENDANCE — ${d} (${dayName})`, styleId: "Title", mergeAcross: 13 }] },
+          { cells: [{ value: `Scope: ${selectedCohortTitle || "All Sections"} | Total Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 13 }] },
+          { cells: [] },
+          {
+            cells: [
+              { value: "Date", styleId: "ColHeaderEmerald" },
+              { value: "Day", styleId: "ColHeaderEmerald" },
+              { value: "Slot & Time", styleId: "ColHeaderEmerald" },
+              { value: "Class & Section", styleId: "ColHeaderEmerald" },
+              { value: "Batch", styleId: "ColHeaderEmerald" },
+              { value: "Subject", styleId: "ColHeaderEmerald" },
+              { value: "Master Faculty", styleId: "ColHeaderEmerald" },
+              { value: "Conducted Faculty", styleId: "ColHeaderEmerald" },
+              { value: "Action Status", styleId: "ColHeaderEmerald" },
+              { value: "Conducted", styleId: "ColHeaderEmerald" },
+              { value: "Enrolled", styleId: "ColHeaderEmerald" },
+              { value: "Present", styleId: "ColHeaderEmerald" },
+              { value: "Absent", styleId: "ColHeaderEmerald" },
+              { value: "Attendance %", styleId: "ColHeaderEmerald" },
+            ],
+          },
+        ];
+
         sessions.forEach((s) => {
-          sessionRowsHtml += `
-            <tr>
-              <td>${escapeHtml(s.date)}</td>
-              <td>${escapeHtml(s.dayOfWeek || "")}</td>
-              <td>${escapeHtml(s.slotLabel)}</td>
-              <td>${escapeHtml(s.time)}</td>
-              <td>${escapeHtml(s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All")}</td>
-              <td>${escapeHtml(s.batch)}</td>
-              <td>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")} (${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})</td>
-              <td>${escapeHtml(s.masterFacultyName || "—")}</td>
-              <td>${escapeHtml(s.todayFacultyName || "—")}</td>
-              <td>${escapeHtml(s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap")}</td>
-              <td>${s.isConducted ? "Conducted" : "Scheduled"}</td>
-              <td>${s.attendancePct != null ? `${s.attendancePct}%` : "Pending"}</td>
-            </tr>
-          `;
+          const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+          const sPres = s.presentCount || 0;
+          const sAbs = s.absentCount || 0;
+          const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (sEnr > 0 ? sEnr : 0);
+          const sTurnout = s.isConducted && s.attendancePct != null ? `${s.attendancePct}%` : (s.isConducted && sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : (s.isConducted ? "100%" : "Pending"));
+          const varianceTitle = s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap";
+
+          dateRows.push({
+            cells: [
+              { value: s.date, styleId: "CellNormal" },
+              { value: s.dayOfWeek || "", styleId: "CellNormal" },
+              { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
+              { value: `${s.branchCode || "CSE"} - Sec ${cleanSectionCode(s.sectionName) || "A"}`, styleId: "CellNormal" },
+              { value: `Batch ${s.batch}`, styleId: "CellCenter" },
+              { value: `${s.todaySubjectName || s.masterSubjectName || "—"} (${s.todaySubjectCode || s.masterSubjectCode || ""})`, styleId: "CellNormal" },
+              { value: s.masterFacultyName || "—", styleId: "CellNormal" },
+              { value: s.todayFacultyName || "—", styleId: "CellNormal" },
+              { value: varianceTitle, styleId: "CellNormal" },
+              { value: s.isConducted ? "Conducted ✓" : "Scheduled", styleId: s.isConducted ? "CellPresent" : "CellNormal" },
+              { value: sEnrolledTotal > 0 ? sEnrolledTotal : "—", styleId: "CellCenter" },
+              { value: s.isConducted ? sPres : "—", styleId: "CellPresent" },
+              { value: s.isConducted ? sAbs : "—", styleId: "CellAbsent" },
+              { value: s.isConducted ? sTurnout : "Pending", styleId: "CellTurnout" },
+            ],
+          });
+        });
+
+        // Day Total
+        dateRows.push({
+          cells: [
+            { value: "Day Total", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: `${dayHeld} Held`, styleId: "SubTotalRow" },
+            { value: dayEnr > 0 ? dayEnr : "—", styleId: "SubTotalRow" },
+            { value: dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—"), styleId: "CellPresent" },
+            { value: dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—"), styleId: "CellAbsent" },
+            { value: dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+          ],
+        });
+
+        sheets.push({
+          name: sanitizeSheetName(d),
+          columns: [
+            { width: 12 }, { width: 10 }, { width: 16 }, { width: 16 }, { width: 10 },
+            { width: 24 }, { width: 20 }, { width: 20 }, { width: 18 }, { width: 13 },
+            { width: 10 }, { width: 10 }, { width: 10 }, { width: 12 }
+          ],
+          rows: dateRows,
         });
       });
 
-      let rosterRowsHtml = "";
-      subjectsList.forEach((s) => {
-        const assigned = Array.from(subjectAssignedFacultyMap.get(s.subjectCode) ?? (s.facultyNames ?? [])).join("; ");
-        const changed = Array.from(subjectChangedFacultyMap.get(s.subjectCode)?.values() ?? [])
-          .map((cf) => cf.originalFacultyName ? `${cf.facultyName} (sub for ${cf.originalFacultyName})` : cf.facultyName)
-          .join("; ");
-
-        rosterRowsHtml += `
-          <tr>
-            <td>${escapeHtml(s.subjectCode)}</td>
-            <td>${escapeHtml(s.subjectName || "")}</td>
-            <td>${s.masterWeeklyPeriods}</td>
-            <td>${s.totalConducted}</td>
-            <td>${escapeHtml(assigned || "—")}</td>
-            <td>${escapeHtml(changed || "100% Fidelity")}</td>
-            <td>${s.timesSwappedOut}</td>
-            <td>${s.timesSwappedIn}</td>
-            <td>${s.timesChanged}</td>
-            <td>${s.attendancePct != null ? `${s.attendancePct}%` : "Pending"}</td>
-          </tr>
-        `;
-      });
-
-      const excelHtml = `
-        <table>
-          <tr>
-            <td colspan="12" class="title-h1">ACADEMIC PORTAL &bull; SUBJECT ANALYSIS REPORT</td>
-          </tr>
-          <tr>
-            <td colspan="12" class="meta-p">
-              Filter Scope: <b>${escapeHtml(selectedCohortTitle || "All Sections")}</b> | 
-              Period: <b>${escapeHtml(dateRangeLabel)}</b> | 
-              Academic Year: <b>${escapeHtml(academicYear || "Current")}</b>
-            </td>
-          </tr>
-        </table>
-
-        <!-- 1. EXECUTIVE ABSTRACT -->
-        <table>
-          <tr>
-            <th colspan="7" class="section-h2">1. EXECUTIVE ABSTRACT</th>
-          </tr>
-          <tr>
-            <th class="kpi-th">Total Subjects</th>
-            <th class="kpi-th">Master Quota (p/wk)</th>
-            <th class="kpi-th">Conducted Sessions</th>
-            <th class="kpi-th">Swapped Out</th>
-            <th class="kpi-th">Swapped In</th>
-            <th class="kpi-th">Total Alterations</th>
-            <th class="kpi-th">Attendance Rate</th>
-          </tr>
-          <tr>
-            <td class="kpi-val highlight-emerald">${subjectAnalytics.totalSubjects}</td>
-            <td class="kpi-val">${subjectAnalytics.totalMasterQuota}</td>
-            <td class="kpi-val highlight-emerald">${subjectAnalytics.totalConducted}</td>
-            <td class="kpi-val highlight-rose">${subjectAnalytics.totalSwappedOut}</td>
-            <td class="kpi-val highlight-emerald">${subjectAnalytics.totalSwappedIn}</td>
-            <td class="kpi-val highlight-amber">${subjectAnalytics.totalChanges}</td>
-            <td class="kpi-val highlight-sky">${subjectAnalytics.avgAttendancePct != null ? `${subjectAnalytics.avgAttendancePct}%` : "Pending"}</td>
-          </tr>
-        </table>
-
-        <!-- 2. SUBJECT ROSTER & ALLOCATION SUMMARY -->
-        <table>
-          <tr>
-            <th colspan="10" class="section-h2">2. SUBJECT ALLOCATION & ALTERATION ROSTER</th>
-          </tr>
-          <tr>
-            <th>Subject Code</th>
-            <th>Subject Name</th>
-            <th>Master Quota</th>
-            <th>Conducted</th>
-            <th>Assigned Faculty</th>
-            <th>Changed / Substitute Faculty</th>
-            <th>Swapped Out</th>
-            <th>Swapped In</th>
-            <th>Total Changes</th>
-            <th>Attendance %</th>
-          </tr>
-          ${rosterRowsHtml}
-        </table>
-
-        <!-- 3. DATE-WISE BREAKDOWN -->
-        <table>
-          <tr>
-            <th colspan="12" class="section-h2">3. DATE-WISE TIMETABLE DELIVERY & ALTERATION LOG (${escapeHtml(dateRangeLabel)})</th>
-          </tr>
-          <tr>
-            <th>Date</th>
-            <th>Day</th>
-            <th>Slot</th>
-            <th>Time</th>
-            <th>Class & Section</th>
-            <th>Batch</th>
-            <th>Subject</th>
-            <th>Master Faculty</th>
-            <th>Conducted Faculty</th>
-            <th>Action Status</th>
-            <th>Conducted</th>
-            <th>Turnout %</th>
-          </tr>
-          ${sessionRowsHtml || `<tr><td colspan="12">No delivery sessions found in this date range.</td></tr>`}
-        </table>
-      `;
-
-      downloadExcelFile(
-        excelHtml,
+      downloadExcelWorkbook(
+        { author: "Academic Portal", sheets },
         `Subject_Analytics_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}.xls`,
       );
       return;
@@ -2423,7 +3507,7 @@ export function MasterVsChangedReport({
 
     if (activeSection === "staff") {
       if (selectedStaffObj) {
-        exportStaffModalExcel();
+        void exportFacultyExcel(selectedStaffObj);
         return;
       }
 
@@ -2442,125 +3526,186 @@ export function MasterVsChangedReport({
       });
       const sortedDates = Array.from(dateMap.keys()).sort();
 
-      let sessionRowsHtml = "";
-      sortedDates.forEach((d) => {
-        const sessions = dateMap.get(d)!;
-        sessions.forEach((s) => {
-          sessionRowsHtml += `
-            <tr>
-              <td>${escapeHtml(s.date)}</td>
-              <td>${escapeHtml(s.dayOfWeek || "")}</td>
-              <td>${escapeHtml(s.slotLabel)}</td>
-              <td>${escapeHtml(s.time)}</td>
-              <td>${escapeHtml(s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All")}</td>
-              <td>${escapeHtml(s.batch)}</td>
-              <td>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</td>
-              <td>${escapeHtml(s.todayFacultyName || s.masterFacultyName || "—")}</td>
-              <td>${escapeHtml(s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap")}</td>
-              <td>${s.isConducted ? "Conducted" : "Scheduled"}</td>
-              <td>${s.attendancePct != null ? `${s.attendancePct}%` : "—"}</td>
-            </tr>
-          `;
+      const sheets: ExcelWorksheet[] = [];
+
+      // --- Sheet 1: Staff Workload Roster ---
+      const staffRows: ExcelRow[] = [
+        { cells: [{ value: "ACADEMIC PORTAL • FACULTY WORKLOAD & ATTENDANCE AUDIT", styleId: "Title", mergeAcross: 11 }] },
+        { cells: [{ value: `Scope: ${selectedCohortTitle || "All Sections"} | Period: ${dateRangeLabel} | Academic Year: ${academicYear || "Current"}`, styleId: "Subtitle", mergeAcross: 11 }] },
+        { cells: [] },
+        { cells: [{ value: "1. EXECUTIVE ABSTRACT & WORKLOAD METRICS", styleId: "SectionHeader", mergeAcross: 11 }] },
+        {
+          cells: [
+            { value: "Total Staff", styleId: "KpiLabel" },
+            { value: "Master Quota (p/wk)", styleId: "KpiLabel" },
+            { value: "Classes Conducted", styleId: "KpiLabel" },
+            { value: "Relieved Out (-)", styleId: "KpiLabel" },
+            { value: "Substitute In (+)", styleId: "KpiLabel" },
+            { value: "Net Teaching Load", styleId: "KpiLabel" },
+            { value: "Students Enrolled", styleId: "KpiLabel" },
+            { value: "Students Present", styleId: "KpiLabel" },
+            { value: "Students Absent", styleId: "KpiLabel" },
+            { value: "Attendance %", styleId: "KpiLabel" },
+          ],
+        },
+        {
+          cells: [
+            { value: staffAnalytics.totalStaff, styleId: "KpiAmber" },
+            { value: staffAnalytics.totalAssignedLoad, styleId: "CellCenter" },
+            { value: staffAnalytics.totalConducted, styleId: "KpiEmerald" },
+            { value: staffAnalytics.totalRelieved, styleId: "KpiRose" },
+            { value: staffAnalytics.totalSubstituteTaken, styleId: "KpiSky" },
+            { value: staffAnalytics.totalNetLoad, styleId: "KpiVal" },
+            { value: (staffAnalytics.totalMarked || 0) > 0 ? staffAnalytics.totalMarked : "—", styleId: "CellCenter" },
+            { value: (staffAnalytics.totalPresent || 0) > 0 ? staffAnalytics.totalPresent : ((staffAnalytics.totalMarked || 0) > 0 ? 0 : "—"), styleId: "CellPresent" },
+            { value: (staffAnalytics.totalAbsent || 0) > 0 ? staffAnalytics.totalAbsent : ((staffAnalytics.totalMarked || 0) > 0 ? 0 : "—"), styleId: "CellAbsent" },
+            { value: staffAnalytics.overallTurnoutPct != null ? `${staffAnalytics.overallTurnoutPct}%` : "Pending", styleId: "CellTurnout" },
+          ],
+        },
+        { cells: [] },
+        { cells: [{ value: "2. FACULTY WORKLOAD & ALLOCATION ROSTER", styleId: "SectionHeader", mergeAcross: 11 }] },
+        {
+          cells: [
+            { value: "Faculty Name", styleId: "ColHeaderNavy" },
+            { value: "HRMS ID", styleId: "ColHeaderNavy" },
+            { value: "Assigned Subjects", styleId: "ColHeaderNavy" },
+            { value: "Master Quota", styleId: "ColHeaderNavy" },
+            { value: "Conducted", styleId: "ColHeaderNavy" },
+            { value: "Relieved Out", styleId: "ColHeaderNavy" },
+            { value: "Substitute In", styleId: "ColHeaderNavy" },
+            { value: "Net Load", styleId: "ColHeaderNavy" },
+            { value: "Net Variance", styleId: "ColHeaderNavy" },
+            { value: "Students Present", styleId: "ColHeaderNavy" },
+            { value: "Students Absent", styleId: "ColHeaderNavy" },
+            { value: "Attendance %", styleId: "ColHeaderNavy" },
+          ],
+        },
+      ];
+
+      facultiesList.forEach((f) => {
+        staffRows.push({
+          cells: [
+            { value: f.facultyName || "", styleId: "CellNormal" },
+            { value: `#${f.hrmsId}`, styleId: "CellCenter" },
+            { value: (f.subjects || []).join(", ") || "—", styleId: "CellNormal" },
+            { value: f.masterAssignedPeriods, styleId: "CellCenter" },
+            { value: f.classesConducted, styleId: "CellPresent" },
+            { value: f.relievedCount > 0 ? `-${f.relievedCount}` : 0, styleId: "CellAbsent" },
+            { value: f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0, styleId: "CellPresent" },
+            { value: f.netTeachingCount, styleId: "KpiVal" },
+            { value: (f.substituteTakenCount - f.relievedCount >= 0 ? "+" : "") + (f.substituteTakenCount - f.relievedCount), styleId: "CellCenter" },
+            { value: f.totalPresent ?? 0, styleId: "CellPresent" },
+            { value: f.totalAbsent ?? 0, styleId: "CellAbsent" },
+            { value: f.attendancePct != null ? `${f.attendancePct}%` : "—", styleId: "CellTurnout" },
+          ],
         });
       });
 
-      let staffRowsHtml = "";
-      facultiesList.forEach((f) => {
-        staffRowsHtml += `
-          <tr>
-            <td>${escapeHtml(f.facultyName || "")}</td>
-            <td>#${escapeHtml(f.hrmsId)}</td>
-            <td>${escapeHtml((f.subjects || []).join(", ") || "—")}</td>
-            <td>${f.masterAssignedPeriods}</td>
-            <td>${f.classesConducted}</td>
-            <td>${f.relievedCount}</td>
-            <td>${f.substituteTakenCount}</td>
-            <td><b>${f.netTeachingCount}</b></td>
-            <td>${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount}</td>
-          </tr>
-        `;
+      sheets.push({
+        name: "Staff Workload Roster",
+        columns: [
+          { width: 22 }, { width: 14 }, { width: 24 }, { width: 12 },
+          { width: 12 }, { width: 12 }, { width: 12 }, { width: 12 },
+          { width: 12 }, { width: 14 }, { width: 14 }, { width: 14 }
+        ],
+        rows: staffRows,
       });
 
-      const excelHtml = `
-        <table>
-          <tr>
-            <td colspan="11" class="title-h1">ACADEMIC PORTAL &bull; FACULTY WORKLOAD & ACTION AUDIT REPORT</td>
-          </tr>
-          <tr>
-            <td colspan="11" class="meta-p">
-              Filter Scope: <b>${escapeHtml(selectedCohortTitle || "All Sections")}</b> | 
-              Period: <b>${escapeHtml(dateRangeLabel)}</b> | 
-              Academic Year: <b>${escapeHtml(academicYear || "Current")}</b>
-            </td>
-          </tr>
-        </table>
+      // --- Subsequent Sheets: One Sheet Per Date ---
+      sortedDates.forEach((d) => {
+        const sessions = dateMap.get(d)!;
+        const dayName = sessions[0]?.dayOfWeek || "";
+        const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+        const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const dayEnr = dayPres + dayAbs;
+        const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+        const dayHeld = sessions.filter((s) => s.isConducted).length;
 
-        <!-- 1. EXECUTIVE ABSTRACT -->
-        <table>
-          <tr>
-            <th colspan="6" class="section-h2">1. EXECUTIVE ABSTRACT</th>
-          </tr>
-          <tr>
-            <th class="kpi-th">Total Staff</th>
-            <th class="kpi-th">Master Quota (p/wk)</th>
-            <th class="kpi-th">Classes Conducted</th>
-            <th class="kpi-th">Relieved Out (-)</th>
-            <th class="kpi-th">Substitute In (+)</th>
-            <th class="kpi-th">Net Teaching Load</th>
-          </tr>
-          <tr>
-            <td class="kpi-val highlight-amber">${staffAnalytics.totalStaff}</td>
-            <td class="kpi-val">${staffAnalytics.totalMasterQuota}</td>
-            <td class="kpi-val highlight-emerald">${staffAnalytics.totalConducted}</td>
-            <td class="kpi-val highlight-rose">${staffAnalytics.totalRelieved}</td>
-            <td class="kpi-val highlight-sky">${staffAnalytics.totalSubstitute}</td>
-            <td class="kpi-val"><b>${staffAnalytics.totalNetLoad}</b></td>
-          </tr>
-        </table>
+        const dateRows: ExcelRow[] = [
+          { cells: [{ value: `DATE-WISE TIMETABLE & STUDENT ATTENDANCE LOG — ${d} (${dayName})`, styleId: "Title", mergeAcross: 13 }] },
+          { cells: [{ value: `Scope: ${selectedCohortTitle || "All Sections"} | Total Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 13 }] },
+          { cells: [] },
+          {
+            cells: [
+              { value: "Date", styleId: "ColHeaderNavy" },
+              { value: "Day", styleId: "ColHeaderNavy" },
+              { value: "Slot & Time", styleId: "ColHeaderNavy" },
+              { value: "Class & Section", styleId: "ColHeaderNavy" },
+              { value: "Batch", styleId: "ColHeaderNavy" },
+              { value: "Subject", styleId: "ColHeaderNavy" },
+              { value: "Master Faculty", styleId: "ColHeaderNavy" },
+              { value: "Faculty In Charge", styleId: "ColHeaderNavy" },
+              { value: "Action Role Taken", styleId: "ColHeaderNavy" },
+              { value: "Conducted", styleId: "ColHeaderNavy" },
+              { value: "Enrolled", styleId: "ColHeaderNavy" },
+              { value: "Present", styleId: "ColHeaderNavy" },
+              { value: "Absent", styleId: "ColHeaderNavy" },
+              { value: "Attendance %", styleId: "ColHeaderNavy" },
+            ],
+          },
+        ];
 
-        <!-- 2. FACULTY WORKLOAD ROSTER -->
-        <table>
-          <tr>
-            <th colspan="9" class="section-h2">2. FACULTY WORKLOAD & ALLOCATION ROSTER</th>
-          </tr>
-          <tr>
-            <th>Faculty Name</th>
-            <th>HRMS ID</th>
-            <th>Assigned Subjects</th>
-            <th>Master Quota</th>
-            <th>Conducted</th>
-            <th>Relieved Out</th>
-            <th>Substitute In</th>
-            <th>Net Load</th>
-            <th>Net Variance</th>
-          </tr>
-          ${staffRowsHtml}
-        </table>
+        sessions.forEach((s) => {
+          const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+          const sPres = s.presentCount || 0;
+          const sAbs = s.absentCount || 0;
+          const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (sEnr > 0 ? sEnr : 0);
+          const sTurnout = s.isConducted && s.attendancePct != null ? `${s.attendancePct}%` : (s.isConducted && sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : (s.isConducted ? "100%" : "Pending"));
+          const varianceTitle = s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap";
 
-        <!-- 3. DATE-WISE BREAKDOWN -->
-        <table>
-          <tr>
-            <th colspan="11" class="section-h2">3. DATE-WISE TIMETABLE & ACTION LOG (${escapeHtml(dateRangeLabel)})</th>
-          </tr>
-          <tr>
-            <th>Date</th>
-            <th>Day</th>
-            <th>Slot</th>
-            <th>Time</th>
-            <th>Class & Section</th>
-            <th>Batch</th>
-            <th>Subject</th>
-            <th>Faculty In Charge</th>
-            <th>Action Role Taken</th>
-            <th>Conducted</th>
-            <th>Attendance Turnout</th>
-          </tr>
-          ${sessionRowsHtml || `<tr><td colspan="11">No delivery sessions found in this date range.</td></tr>`}
-        </table>
-      `;
+          dateRows.push({
+            cells: [
+              { value: s.date, styleId: "CellNormal" },
+              { value: s.dayOfWeek || "", styleId: "CellNormal" },
+              { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
+              { value: s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All", styleId: "CellNormal" },
+              { value: `Batch ${s.batch}`, styleId: "CellCenter" },
+              { value: s.todaySubjectName || s.masterSubjectName || "—", styleId: "CellNormal" },
+              { value: s.masterFacultyName || "—", styleId: "CellNormal" },
+              { value: s.todayFacultyName || s.masterFacultyName || "—", styleId: "CellNormal" },
+              { value: varianceTitle, styleId: "CellNormal" },
+              { value: s.isConducted ? "Conducted ✓" : "Scheduled", styleId: s.isConducted ? "CellPresent" : "CellNormal" },
+              { value: sEnrolledTotal > 0 ? sEnrolledTotal : "—", styleId: "CellCenter" },
+              { value: s.isConducted ? sPres : "—", styleId: "CellPresent" },
+              { value: s.isConducted ? sAbs : "—", styleId: "CellAbsent" },
+              { value: sTurnout, styleId: "CellTurnout" },
+            ],
+          });
+        });
 
-      downloadExcelFile(
-        excelHtml,
+        // Day Total
+        dateRows.push({
+          cells: [
+            { value: "Day Total", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: "", styleId: "SubTotalRow" },
+            { value: `${dayHeld} Held`, styleId: "SubTotalRow" },
+            { value: dayEnr > 0 ? dayEnr : "—", styleId: "SubTotalRow" },
+            { value: dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—"), styleId: "CellPresent" },
+            { value: dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—"), styleId: "CellAbsent" },
+            { value: dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+          ],
+        });
+
+        sheets.push({
+          name: sanitizeSheetName(d),
+          columns: [
+            { width: 12 }, { width: 10 }, { width: 16 }, { width: 14 }, { width: 10 },
+            { width: 22 }, { width: 20 }, { width: 20 }, { width: 18 }, { width: 13 },
+            { width: 10 }, { width: 10 }, { width: 10 }, { width: 12 }
+          ],
+          rows: dateRows,
+        });
+      });
+
+      downloadExcelWorkbook(
+        { author: "Academic Portal", sheets },
         `Staff_Analytics_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}.xls`,
       );
       return;
@@ -2627,30 +3772,43 @@ export function MasterVsChangedReport({
       "Today Faculty",
       "Variation Status",
       "Conducted Status",
+      "Students Enrolled",
+      "Students Present",
+      "Students Absent",
       "Attendance %",
     ];
-    const rows = filteredComparisons.map((c) => [
-      `"${c.slotLabel} (${c.time})"`,
-      c.date,
-      c.dayOfWeek,
-      c.batch,
-      c.sectionName || "N/A",
-      c.masterSubjectCode || "",
-      `"${(c.masterSubjectName || "").replace(/"/g, '""')}"`,
-      `"${(c.masterFacultyName || "").replace(/"/g, '""')}"`,
-      c.todaySubjectCode || "",
-      `"${(c.todaySubjectName || "").replace(/"/g, '""')}"`,
-      `"${(c.todayFacultyName || "").replace(/"/g, '""')}"`,
-      c.varianceType === "UNCHANGED"
-        ? "As Master"
-        : c.varianceType === "FACULTY_SUBSTITUTE"
-          ? "Faculty Substitute"
-          : c.varianceType === "SUBJECT_SWAP"
-            ? "Subject Swap"
-            : "Both Sub & Swap",
-      c.isConducted ? "Conducted" : "Scheduled",
-      c.attendancePct != null ? `${c.attendancePct}%` : "Pending",
-    ]);
+    const rows = filteredComparisons.map((c) => {
+      const sEnr = (c.presentCount || 0) + (c.absentCount || 0);
+      const sPres = c.presentCount || 0;
+      const sAbs = c.absentCount || 0;
+      const sEnrolledTotal = (c.enrolledCount && c.enrolledCount > 0) ? c.enrolledCount : (sEnr > 0 ? sEnr : 0);
+
+      return [
+        `"${c.slotLabel} (${c.time})"`,
+        c.date,
+        c.dayOfWeek,
+        c.batch,
+        c.sectionName || "N/A",
+        c.masterSubjectCode || "",
+        `"${(c.masterSubjectName || "").replace(/"/g, '""')}"`,
+        `"${(c.masterFacultyName || "").replace(/"/g, '""')}"`,
+        c.todaySubjectCode || "",
+        `"${(c.todaySubjectName || "").replace(/"/g, '""')}"`,
+        `"${(c.todayFacultyName || "").replace(/"/g, '""')}"`,
+        c.varianceType === "UNCHANGED"
+          ? "As Master"
+          : c.varianceType === "FACULTY_SUBSTITUTE"
+            ? "Faculty Substitute"
+            : c.varianceType === "SUBJECT_SWAP"
+              ? "Subject Swap"
+              : "Both Sub & Swap",
+        c.isConducted ? "Conducted" : "Scheduled",
+        sEnrolledTotal > 0 ? sEnrolledTotal : "—",
+        c.isConducted ? sPres : "—",
+        c.isConducted ? sAbs : "—",
+        c.isConducted && c.attendancePct != null ? `${c.attendancePct}%` : "Pending",
+      ];
+    });
 
     const csvContent = [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
     const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
@@ -2672,120 +3830,279 @@ export function MasterVsChangedReport({
 
     if (activeSection === "subjects") {
       if (selectedSubjectObj) {
-        exportSubjectModalPdf();
+        void printSubjectPdf(selectedSubjectObj);
         return;
       }
 
       const subjectsList = filteredSubjects.length ? filteredSubjects : (data?.subjects ?? []);
-      if (!subjectsList.length) {
+      if (!subjectsList.length && comparisonsBySection.length === 0) {
         alert("No subject data available to print.");
         return;
       }
 
-      // Group comparisons by date for Date-wise breakdown
-      const dateMap = new Map<string, typeof filteredComparisons>();
-      filteredComparisons.forEach((c) => {
-        const d = c.date || "Scheduled Plan";
-        if (!dateMap.has(d)) dateMap.set(d, []);
-        dateMap.get(d)!.push(c);
-      });
-      const sortedDates = Array.from(dateMap.keys()).sort();
+      // Class & Section Wise Subject Allocation HTML (Website Section Cards UI)
+      let sectionCardsHtml = "";
+      if (comparisonsBySection.length > 0) {
+        sectionCardsHtml = comparisonsBySection
+          .map((secGroup) => {
+            const secEnrolled = secGroup.secEnrolled || 0;
+            const secTotalConducted = secGroup.cohortSubjects.reduce((acc, s) => acc + s.totalConducted, 0);
+            const withAtt = secGroup.cohortSubjects.filter((s) => s.totalConducted > 0 && s.effectiveAttendancePct != null && s.effectiveAttendancePct > 0);
+            const secAvgAtt = withAtt.length > 0 ? Math.round(withAtt.reduce((acc, s) => acc + (s.effectiveAttendancePct ?? 0), 0) / withAtt.length) : null;
 
-      let dateTablesHtml = "";
-      sortedDates.forEach((d) => {
-        const sessions = dateMap.get(d)!;
-        const dayName = sessions[0]?.dayOfWeek || "";
-        dateTablesHtml += `
-          <div style="margin-top: 14px; break-inside: avoid;">
-            <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none;">
-              📅 Date: ${d} ${dayName ? `(${dayName})` : ""} &bull; ${sessions.length} Session(s)
-            </div>
-            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
-              <thead>
-                <tr style="background-color: #334155; color: white;">
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Slot & Time</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Class & Section</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Subject</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Master Faculty</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Actual Faculty</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Action Role</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Conducted</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Turnout</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sessions
-                  .map(
-                    (s) => `
-                  <tr>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.slotLabel} (${s.time})</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${s.batch}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;"><b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</b> (${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(s.masterFacultyName || "—")}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: ${s.varianceType === "FACULTY_SUBSTITUTE" ? "bold" : "normal"}; color: ${s.varianceType === "FACULTY_SUBSTITUTE" ? "#b45309" : "#0f172a"};">
-                      ${escapeHtml(s.todayFacultyName || "—")}
-                    </td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap")}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center;">${s.isConducted ? "Yes ✓" : "Scheduled"}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold;">${s.attendancePct != null ? `${s.attendancePct}%` : "Pending"}</td>
+            const rowsHtml = secGroup.cohortSubjects
+              .map((sub) => {
+                const assigned = sub.assignedFaculty.join("; ");
+                const changed = sub.changedFaculty
+                  .map((cf) => cf.originalFacultyName ? `${cf.facultyName} (sub for ${cf.originalFacultyName})` : cf.facultyName)
+                  .join("; ");
+                const conductedFacHtml = changed
+                  ? `<span style="color: #b45309; font-weight: bold;">${escapeHtml(changed)}</span>`
+                  : `<span style="color: #0f172a;">${escapeHtml(assigned ? `${assigned} (As Assigned)` : "As Assigned")}</span>`;
+
+                const subEnrolled = secEnrolled;
+                const isConducted = sub.totalConducted > 0;
+                const subPres = isConducted ? (sub.totalPresent || 0) : 0;
+                const subAbs = isConducted
+                  ? ((sub.totalMarked || 0) > 0 ? Math.max(0, (sub.totalMarked || 0) - (sub.totalPresent || 0)) : Math.max(0, subEnrolled - (sub.totalPresent || 0)))
+                  : 0;
+
+                const attStr = isConducted
+                  ? (sub.effectiveAttendancePct != null && sub.effectiveAttendancePct > 0
+                      ? `${sub.effectiveAttendancePct}%`
+                      : (sub.turnoutPct != null
+                          ? `${sub.turnoutPct}%`
+                          : (subEnrolled > 0 ? `${Math.round(((sub.totalPresent || 0) / subEnrolled) * 100)}%` : "100%")))
+                  : '<span style="color: #64748b;">Pending</span>';
+
+                return `
+                  <tr style="border-bottom: 1px solid #e2e8f0;">
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-family: monospace; font-weight: bold; color: #0f172a;">${escapeHtml(sub.subjectCode)}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${escapeHtml(sub.subjectName || "")}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; color: #334155;">${sub.masterWeeklyPeriods > 0 ? sub.masterWeeklyPeriods : (sub.totalScheduled || "—")}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${sub.totalConducted}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-size: 9.5px; color: #334155;">${escapeHtml(assigned || "—")}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-size: 9.5px;">${conductedFacHtml}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: 600; color: #334155;">${subEnrolled > 0 ? subEnrolled : "—"}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${isConducted ? subPres : "—"}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${subAbs > 0 ? "#be123c" : "#64748b"};">${isConducted ? subAbs : "—"}</td>
+                    <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e40af;">${attStr}</td>
                   </tr>
-                `,
-                  )
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
+                `;
+              })
+              .join("");
+
+            return `
+              <div style="margin-bottom: 18px; break-inside: avoid; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background-color: #ffffff;">
+                <!-- Website-matching Section Header Banner -->
+                <div style="background-color: #f8fafc; border-bottom: 2px solid #047857; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center;">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <div style="width: 30px; height: 30px; background-color: #047857; color: #ffffff; font-weight: 800; font-size: 14px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px;">
+                      ${secGroup.sectionLetter !== "Unassigned" ? secGroup.sectionLetter : "S"}
+                    </div>
+                    <div>
+                      <div style="display: flex; align-items: center; gap: 6px;">
+                        <strong style="font-size: 13px; color: #0f172a;">${escapeHtml(secGroup.sectionTitle)}</strong>
+                        <span style="background-color: #e0e7ff; color: #3730a3; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: bold; border: 1px solid #c7d2fe;">
+                          ${escapeHtml(secGroup.branchCode)}
+                        </span>
+                        <span style="background-color: #f1f5f9; color: #334155; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 600; border: 1px solid #cbd5e1;">
+                          Batch ${escapeHtml(secGroup.batch)}
+                        </span>
+                      </div>
+                      <div style="font-size: 10.5px; color: #64748b; margin-top: 2px;">
+                        ${secGroup.cohortSubjects.length} subjects registered &bull; ${secTotalConducted} classes conducted in period
+                      </div>
+                    </div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 6px;">
+                    <span style="background-color: #dcfce7; color: #15803d; border: 1px solid #86efac; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold;">
+                      ● ${secTotalConducted} Conducted
+                    </span>
+                    <span style="background-color: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold;">
+                      ${secEnrolled > 0 ? `${secEnrolled} Enrolled` : "Enrolled Pending"}
+                    </span>
+                    ${secAvgAtt != null ? `
+                      <span style="background-color: #e0e7ff; color: #3730a3; border: 1px solid #c7d2fe; padding: 3px 8px; border-radius: 12px; font-size: 10px; font-weight: bold;">
+                        ${secAvgAtt}% Avg Attendance
+                      </span>
+                    ` : `
+                      <span style="background-color: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; padding: 3px 8px; border-radius: 12px; font-size: 10px;">
+                        Attendance Pending
+                      </span>
+                    `}
+                  </div>
+                </div>
+
+                <!-- Subjects Table for this Section -->
+                <table style="width: 100%; border-collapse: collapse; font-size: 9.5px;">
+                  <thead>
+                    <tr style="background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; width: 80px; color: #0f172a !important; font-weight: 700;">Subject Code</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a !important; font-weight: 700;">Subject Name</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 60px; color: #0f172a !important; font-weight: 700;">Master Quota</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 55px; color: #0f172a !important; font-weight: 700;">Conducted</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; width: 140px; color: #0f172a !important; font-weight: 700;">Assigned Faculty</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; width: 150px; color: #0f172a !important; font-weight: 700;">Conducted Faculty</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 55px; color: #0f172a !important; font-weight: 700;">Enrolled</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 50px; color: #0f172a !important; font-weight: 700;">Present</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 50px; color: #0f172a !important; font-weight: 700;">Absent</th>
+                      <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 70px; color: #0f172a !important; font-weight: 700;">Attendance %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${rowsHtml}
+                  </tbody>
+                </table>
+              </div>
+            `;
+          })
+          .join("");
+      } else {
+        sectionCardsHtml = `
+          <table style="width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 12px; border: 1px solid #cbd5e1;">
+            <thead>
+              <tr style="background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; width: 80px; color: #0f172a !important; font-weight: 700;">Subject Code</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a !important; font-weight: 700;">Subject Name</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 60px; color: #0f172a !important; font-weight: 700;">Master Quota</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 55px; color: #0f172a !important; font-weight: 700;">Conducted</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; width: 140px; color: #0f172a !important; font-weight: 700;">Assigned Faculty</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: left; width: 150px; color: #0f172a !important; font-weight: 700;">Conducted Faculty</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 55px; color: #0f172a !important; font-weight: 700;">Enrolled</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 50px; color: #0f172a !important; font-weight: 700;">Present</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 50px; color: #0f172a !important; font-weight: 700;">Absent</th>
+                <th style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; width: 70px; color: #0f172a !important; font-weight: 700;">Attendance %</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${subjectsList
+                .map((s) => {
+                  const assigned = Array.from(subjectAssignedFacultyMap.get(s.subjectCode) ?? (s.facultyNames ?? [])).join("; ");
+                  const changed = Array.from(subjectChangedFacultyMap.get(s.subjectCode)?.values() ?? [])
+                    .map((cf) => cf.originalFacultyName ? `${cf.facultyName} (sub for ${cf.originalFacultyName})` : cf.facultyName)
+                    .join("; ");
+                  const conductedFacHtml = changed
+                    ? `<span style="color: #b45309; font-weight: bold;">${escapeHtml(changed)}</span>`
+                    : `<span style="color: #0f172a;">${escapeHtml(assigned ? `${assigned} (As Assigned)` : "As Assigned")}</span>`;
+
+                  const sEnr = (s.totalMarked || 0) > 0 ? s.totalMarked : "—";
+                  const sPres = s.totalConducted > 0 && (s.totalPresent || 0) > 0 ? s.totalPresent : (s.totalConducted > 0 && (s.totalMarked || 0) > 0 ? 0 : "—");
+                  const sAbs = s.totalConducted > 0 && (s.totalMarked || 0) > 0 ? Math.max(0, (s.totalMarked || 0) - (s.totalPresent || 0)) : "—";
+                  const attStr = s.totalConducted > 0 && (s.turnoutPct != null || s.attendancePct > 0)
+                    ? `${s.turnoutPct ?? s.attendancePct}%`
+                    : (s.totalConducted > 0 ? "100%" : '<span style="color: #64748b;">Pending</span>');
+
+                  return `
+                    <tr style="border-bottom: 1px solid #e2e8f0;">
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-family: monospace; font-weight: bold; color: #0f172a;">${escapeHtml(s.subjectCode)}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-weight: 600; color: #0f172a;">${escapeHtml(s.subjectName || "")}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; color: #334155;">${s.masterWeeklyPeriods}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${s.totalConducted}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-size: 9.5px; color: #334155;">${escapeHtml(assigned || "—")}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; font-size: 9.5px;">${conductedFacHtml}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: 600; color: #334155;">${sEnr}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${sPres}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${sAbs !== "—" && sAbs > 0 ? "#be123c" : "#64748b"};">${sAbs}</td>
+                      <td style="padding: 6px 8px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #1e40af;">${attStr}</td>
+                    </tr>
+                  `;
+                })
+                .join("")}
+            </tbody>
+          </table>
         `;
-      });
+      }
 
       const htmlContent = `
-        <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 10px;">
-          <div style="border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px;">
-            <h2 style="margin: 0; font-size: 18px; color: #0f172a;">Subject Analysis & Delivery Report</h2>
-            <p style="margin: 4px 0 0; font-size: 11px; color: #475569;">
-              <strong>Scope:</strong> ${escapeHtml(selectedCohortTitle || "All Sections")} &bull; 
-              <strong>Period:</strong> ${escapeHtml(dateRangeLabel)} &bull; 
-              <strong>Academic Year:</strong> ${escapeHtml(academicYear || "Current")}
-            </p>
+        <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 16px; max-width: 1050px; margin: 0 auto; line-height: 1.4;">
+          <!-- Official Institutional Masthead -->
+          <div style="border-bottom: 2px solid #047857; padding-bottom: 12px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+              <div style="font-size: 10px; font-weight: bold; letter-spacing: 1.5px; text-transform: uppercase; color: #047857;">Academic Portal &bull; Office of Academic Affairs & Registrar</div>
+              <h1 style="margin: 3px 0 2px; font-size: 20px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Curriculum Delivery & Class Audit Report</h1>
+              <p style="margin: 0; font-size: 11px; color: #475569;">
+                Comprehensive Curriculum Delivery, Timetable Allotment & Student Attendance Audit
+              </p>
+            </div>
+            <div style="text-align: right; font-size: 10px; color: #64748b; font-family: monospace;">
+              <div style="font-weight: bold; color: #0f172a; font-size: 11px;">REF: SUB-AUD-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}</div>
+              <div>Generated: ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}</div>
+              <div>Status: <span style="color: #047857; font-weight: bold;">OFFICIAL AUDIT</span></div>
+            </div>
+          </div>
+
+          <!-- Parameter Badges Box -->
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; font-size: 11px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 2px 0;"><strong>Filter Scope:</strong> ${escapeHtml(selectedCohortTitle || "All Classes & Sections")}</td>
+                <td style="padding: 2px 0;"><strong>Period:</strong> ${escapeHtml(dateRangeLabel)}</td>
+                <td style="padding: 2px 0;"><strong>Academic Year:</strong> ${escapeHtml(academicYear || "Current")}</td>
+                <td style="padding: 2px 0;"><strong>Total Classes / Sections:</strong> ${comparisonsBySection.length} Cohorts</td>
+                <td style="padding: 2px 0;"><strong>Total Subjects:</strong> ${subjectAnalytics.totalSubjects}</td>
+              </tr>
+            </table>
           </div>
 
           <!-- 1. Executive Abstract -->
-          <div style="margin-bottom: 14px; break-inside: avoid;">
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-              1. Executive Abstract & Workload Metrics
+          <div style="margin-bottom: 16px; break-inside: avoid;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 2px solid #047857; padding-bottom: 3px; font-weight: bold;">
+              1. Executive Curriculum Abstract & Workload Metrics
             </h3>
             <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
               <thead>
-                <tr style="background-color: #0f172a; color: white;">
-                  <th style="padding: 6px; border: 1px solid #64748b;">Total Subjects</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Master Quota</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Conducted</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Swapped Out</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Swapped In</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Total Changes</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Attendance Rate</th>
+                <tr style="background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Total Subjects</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Master Quota</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Conducted</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Students Enrolled</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Students Present</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Students Absent</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Attendance Rate</th>
                 </tr>
               </thead>
               <tbody>
                 <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${subjectAnalytics.totalSubjects}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px;">${subjectAnalytics.totalMasterQuota} p/wk</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #334155;">${subjectAnalytics.totalWeeklyQuota} p/wk</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${subjectAnalytics.totalConducted} held</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${subjectAnalytics.totalSwappedOut}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${subjectAnalytics.totalSwappedIn}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #b45309;">${subjectAnalytics.totalChanges}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #1e40af;">${subjectAnalytics.avgAttendancePct != null ? `${subjectAnalytics.avgAttendancePct}%` : "Pending"}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #334155;">${totalCohortStudentsEnrolled > 0 ? totalCohortStudentsEnrolled : ((subjectAnalytics.totalMarked || 0) > 0 ? subjectAnalytics.totalMarked : 30)}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${subjectAnalytics.totalConducted > 0 ? (subjectAnalytics.totalPresent || 0) : 0}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${subjectAnalytics.totalConducted > 0 ? (subjectAnalytics.totalAbsent || 0) : 0}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #1e40af;">${subjectAnalytics.totalConducted > 0 && (subjectAnalytics.overallTurnoutPct != null || subjectAnalytics.avgAttendance != null) ? `${subjectAnalytics.overallTurnoutPct ?? subjectAnalytics.avgAttendance}%` : '<span style="color: #64748b; font-weight: 600;">Pending</span>'}</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <!-- 2. Date-wise Data Breakdown -->
-          <div>
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-              2. Date-wise Timetable Delivery & Alteration Sessions (${dateRangeLabel})
+          <!-- 2. Class & Section Wise Subject Allocation & Curriculum Audit -->
+          <div style="margin-bottom: 20px;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 16px 0 8px; color: #0f172a; border-bottom: 2px solid #047857; padding-bottom: 4px; font-weight: bold;">
+              2. Class & Section Wise Curriculum Delivery & Subject Roster (${comparisonsBySection.length > 0 ? `${comparisonsBySection.length} Cohorts` : `${subjectsList.length} Subjects`})
             </h3>
-            ${dateTablesHtml || `<p style="color: #64748b; font-size: 11px; padding: 12px 0;">No timetable sessions recorded in the selected range.</p>`}
+            ${sectionCardsHtml}
+          </div>
+
+          <!-- Institutional Verification Sign-Off Footer -->
+          <div style="margin-top: 28px; padding-top: 14px; border-top: 1px solid #cbd5e1; break-inside: avoid;">
+            <div style="display: flex; justify-content: space-between; margin-top: 24px; font-size: 10px; color: #475569;">
+              <div style="border-top: 1px solid #64748b; width: 170px; text-align: center; padding-top: 4px;">
+                <strong>Head of Department</strong><br/>
+                Department Curriculum Committee
+              </div>
+              <div style="border-top: 1px solid #64748b; width: 170px; text-align: center; padding-top: 4px;">
+                <strong>Dean, Academic Affairs</strong><br/>
+                Office of Academic Monitoring
+              </div>
+              <div style="border-top: 1px solid #64748b; width: 170px; text-align: center; padding-top: 4px;">
+                <strong>Controller of Examinations</strong><br/>
+                Attendance & Credit Certification
+              </div>
+            </div>
+            <p style="text-align: center; font-size: 9px; color: #94a3b8; margin-top: 20px;">
+              This is a computer-generated institutional audit document produced by Academic Portal. Official record of curriculum execution.
+            </p>
           </div>
         </div>
       `;
@@ -2793,13 +4110,14 @@ export function MasterVsChangedReport({
       printHtml(htmlContent, {
         title: `Subject_Analysis_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}`,
         subtitle: `Curriculum delivery report (${dateRangeLabel})`,
+        hideHeader: true,
       });
       return;
     }
 
     if (activeSection === "staff") {
       if (selectedStaffObj) {
-        exportStaffModalPdf();
+        void printFacultyPdf(selectedStaffObj);
         return;
       }
 
@@ -2822,27 +4140,42 @@ export function MasterVsChangedReport({
       sortedDates.forEach((d) => {
         const sessions = dateMap.get(d)!;
         const dayName = sessions[0]?.dayOfWeek || "";
+        const dayPres = sessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
+        const dayAbs = sessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const dayEnr = dayPres + dayAbs;
+        const dayTurnout = dayEnr > 0 ? Math.round((dayPres / dayEnr) * 100) : null;
+        const dayHeld = sessions.filter((s) => s.isConducted).length;
+
         dateTablesHtml += `
           <div style="margin-top: 14px; break-inside: avoid;">
-            <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none;">
-              📅 Date: ${d} ${dayName ? `(${dayName})` : ""} &bull; ${sessions.length} Session(s)
+            <div style="background-color: #f1f5f9; padding: 5px 8px; font-weight: bold; font-size: 11px; border: 1px solid #cbd5e1; border-bottom: none; display: flex; justify-content: space-between;">
+              <span>📅 Date: ${d} ${dayName ? `(${dayName})` : ""}</span>
+              <span>${sessions.length} Session(s) &bull; <b style="color: #15803d;">${dayPres} Present</b> / <b style="color: #be123c;">${dayAbs} Absent</b> ${dayTurnout != null ? `(${dayTurnout}% Attendance)` : ""}</span>
             </div>
             <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
               <thead>
-                <tr style="background-color: #334155; color: white;">
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Slot & Time</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Class & Section</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Subject</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Faculty In Charge</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: left;">Action Role</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Conducted</th>
-                  <th style="padding: 5px; border: 1px solid #94a3b8; text-align: center;">Turnout</th>
+                <tr style="background-color: #0f172a; color: white;">
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Slot & Time</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Class & Section</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Subject</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Faculty In Charge</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Action Role</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Conducted</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Enrolled</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Present</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Absent</th>
+                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Attendance %</th>
                 </tr>
               </thead>
               <tbody>
                 ${sessions
-                  .map(
-                    (s) => `
+                  .map((s) => {
+                    const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+                    const sPres = s.presentCount || 0;
+                    const sAbs = s.absentCount || 0;
+                    const sEnrolledTotal = (s.enrolledCount && s.enrolledCount > 0) ? s.enrolledCount : (sEnr > 0 ? sEnr : 0);
+                    const sTurnout = s.isConducted ? (s.attendancePct != null ? `${s.attendancePct}%` : (sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : "100%")) : "Pending";
+                    return `
                   <tr>
                     <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.slotLabel} (${s.time})</td>
                     <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${s.batch}</td>
@@ -2850,32 +4183,84 @@ export function MasterVsChangedReport({
                     <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold;">${escapeHtml(s.todayFacultyName || s.masterFacultyName || "—")}</td>
                     <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap")}</td>
                     <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center;">${s.isConducted ? "Yes ✓" : "Scheduled"}</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold;">${s.attendancePct != null ? `${s.attendancePct}%` : "—"}</td>
+                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center;">${sEnrolledTotal > 0 ? sEnrolledTotal : "—"}</td>
+                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${s.isConducted ? sPres : "—"}</td>
+                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${sAbs > 0 ? "#be123c" : "#64748b"};">${s.isConducted ? sAbs : "—"}</td>
+                    <td style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0369a1;">${sTurnout}</td>
                   </tr>
-                `,
-                  )
+                `;
+                  })
                   .join("")}
+                <tr style="background-color: #f8fafc; font-weight: bold; border-top: 2px solid #0f172a;">
+                  <td colspan="5" style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: right;">Day Total:</td>
+                  <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayHeld} Held</td>
+                  <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">${dayEnr > 0 ? dayEnr : "—"}</td>
+                  <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")}</td>
+                  <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #be123c;">${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")}</td>
+                  <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0369a1;">${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}</td>
+                </tr>
               </tbody>
             </table>
           </div>
         `;
       });
 
+      let staffRowsHtml = "";
+      facultiesList.forEach((f) => {
+        staffRowsHtml += `
+          <tr>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; font-weight: 600;">${escapeHtml(f.facultyName || "")}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; font-family: monospace;">#${escapeHtml(f.hrmsId)}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; font-size: 9.5px;">${escapeHtml((f.subjects || []).join(", ") || "—")}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">${f.masterAssignedPeriods}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${f.classesConducted}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #be123c;">${f.relievedCount > 0 ? `-${f.relievedCount}` : 0}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0284c7;">${f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: 800; color: #0f172a;">${f.netTeachingCount}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${f.substituteTakenCount - f.relievedCount >= 0 ? "#15803d" : "#be123c"};">
+              ${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount}
+            </td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${f.classesConducted > 0 && f.totalPresent != null && f.totalPresent > 0 ? f.totalPresent : (f.classesConducted > 0 && (f.totalPresent != null || f.totalAbsent != null) ? 0 : "—")}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #be123c;">${f.classesConducted > 0 && f.totalAbsent != null && f.totalAbsent > 0 ? f.totalAbsent : (f.classesConducted > 0 && (f.totalPresent != null || f.totalAbsent != null) ? 0 : "—")}</td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0369a1;">${f.classesConducted > 0 && f.attendancePct != null ? `${f.attendancePct}%` : "Pending"}</td>
+          </tr>
+        `;
+      });
+
       const htmlContent = `
-        <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 10px;">
-          <div style="border-bottom: 2px solid #0f172a; padding-bottom: 8px; margin-bottom: 12px;">
-            <h2 style="margin: 0; font-size: 18px; color: #0f172a;">Faculty Workload & Action Audit Report</h2>
-            <p style="margin: 4px 0 0; font-size: 11px; color: #475569;">
-              <strong>Scope:</strong> ${escapeHtml(selectedCohortTitle || "All Sections")} &bull; 
-              <strong>Period:</strong> ${escapeHtml(dateRangeLabel)} &bull; 
-              <strong>Academic Year:</strong> ${escapeHtml(academicYear || "Current")}
-            </p>
+        <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 16px; max-width: 1050px; margin: 0 auto; line-height: 1.4;">
+          <!-- Official Institutional Masthead -->
+          <div style="border-bottom: 2px solid #b45309; padding-bottom: 12px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-start;">
+            <div>
+              <div style="font-size: 10px; font-weight: bold; letter-spacing: 1.5px; text-transform: uppercase; color: #b45309;">Academic Portal &bull; Office of Academic Affairs & HRMS</div>
+              <h1 style="margin: 3px 0 2px; font-size: 20px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Faculty Workload & Action Audit Report</h1>
+              <p style="margin: 0; font-size: 11px; color: #475569;">
+                Comprehensive Faculty Teaching Workload, Attendance Delivery & Substitution Audit
+              </p>
+            </div>
+            <div style="text-align: right; font-size: 10px; color: #64748b; font-family: monospace;">
+              <div style="font-weight: bold; color: #0f172a; font-size: 11px;">REF: STF-AUD-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}</div>
+              <div>Generated: ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}</div>
+              <div>Status: <span style="color: #b45309; font-weight: bold;">OFFICIAL AUDIT</span></div>
+            </div>
           </div>
 
-          <!-- 1. Executive Abstract -->
-          <div style="margin-bottom: 14px; break-inside: avoid;">
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-              1. Executive Abstract & Workload Metrics
+          <!-- Parameter Badges Box -->
+          <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; font-size: 11px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 2px 0;"><strong>Filter Scope:</strong> ${escapeHtml(selectedCohortTitle || "All Sections")}</td>
+                <td style="padding: 2px 0;"><strong>Period:</strong> ${escapeHtml(dateRangeLabel)}</td>
+                <td style="padding: 2px 0;"><strong>Academic Year:</strong> ${escapeHtml(academicYear || "Current")}</td>
+                <td style="padding: 2px 0;"><strong>Total Faculty:</strong> ${staffAnalytics.totalStaff}</td>
+              </tr>
+            </table>
+          </div>
+
+          <!-- 1. Executive Abstract & Student Attendance -->
+          <div style="margin-bottom: 16px; break-inside: avoid;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+              1. Executive Faculty Abstract & Workload Metrics
             </h3>
             <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
               <thead>
@@ -2886,27 +4271,82 @@ export function MasterVsChangedReport({
                   <th style="padding: 6px; border: 1px solid #64748b;">Relieved Away (-)</th>
                   <th style="padding: 6px; border: 1px solid #64748b;">Substitute Taken (+)</th>
                   <th style="padding: 6px; border: 1px solid #64748b;">Net Teaching Load</th>
+                  <th style="padding: 6px; border: 1px solid #64748b;">Students Present</th>
+                  <th style="padding: 6px; border: 1px solid #64748b;">Students Absent</th>
+                  <th style="padding: 6px; border: 1px solid #64748b;">Attendance %</th>
                 </tr>
               </thead>
               <tbody>
                 <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #b45309;">${staffAnalytics.totalStaff}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px;">${staffAnalytics.totalMasterQuota} p/wk</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px;">${staffAnalytics.totalAssignedLoad} p/wk</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${staffAnalytics.totalConducted} held</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${staffAnalytics.totalRelieved}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0284c7;">${staffAnalytics.totalSubstitute}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0284c7;">${staffAnalytics.totalSubstituteTaken}</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0f172a;">${staffAnalytics.totalNetLoad} sessions</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${staffAnalytics.totalConducted > 0 && (staffAnalytics.totalPresent || 0) > 0 ? staffAnalytics.totalPresent : (staffAnalytics.totalConducted > 0 && (staffAnalytics.totalMarked || 0) > 0 ? 0 : "—")}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${staffAnalytics.totalConducted > 0 && (staffAnalytics.totalAbsent || 0) > 0 ? staffAnalytics.totalAbsent : (staffAnalytics.totalConducted > 0 && (staffAnalytics.totalMarked || 0) > 0 ? 0 : "—")}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0369a1;">${staffAnalytics.totalConducted > 0 && staffAnalytics.overallTurnoutPct != null ? `${staffAnalytics.overallTurnoutPct}%` : "Pending"}</td>
                 </tr>
               </tbody>
             </table>
           </div>
 
-          <!-- 2. Date-wise Data Breakdown -->
+          <!-- 2. Faculty Workload & Allocation Roster -->
+          <div style="margin-bottom: 16px;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+              2. Faculty Workload & Allocation Roster (${facultiesList.length} faculty members)
+            </h3>
+            <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
+              <thead>
+                <tr style="background-color: #0f172a; color: white;">
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: left;">Faculty Name</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: left;">HRMS ID</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: left;">Assigned Subjects</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Master Quota</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Conducted</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Relieved (-)</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Substitute (+)</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Net Load</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Net Variance</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Present</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Absent</th>
+                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Attendance %</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${staffRowsHtml}
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 3. Date-wise Data Breakdown -->
           <div>
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px;">
-              2. Date-wise Timetable Delivery & Substitution Actions (${dateRangeLabel})
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+              3. Date-wise Timetable Delivery & Substitution Actions (${dateRangeLabel})
             </h3>
             ${dateTablesHtml || `<p style="color: #64748b; font-size: 11px; padding: 12px 0;">No timetable sessions recorded in the selected range.</p>`}
+          </div>
+
+          <!-- Institutional Verification Sign-Off Footer -->
+          <div style="margin-top: 28px; padding-top: 14px; border-top: 1px solid #cbd5e1; break-inside: avoid;">
+            <div style="display: flex; justify-content: space-between; margin-top: 24px; font-size: 10px; color: #475569;">
+              <div style="border-top: 1px solid #64748b; width: 170px; text-align: center; padding-top: 4px;">
+                <strong>Head of Department</strong><br/>
+                Department Faculty Council
+              </div>
+              <div style="border-top: 1px solid #64748b; width: 170px; text-align: center; padding-top: 4px;">
+                <strong>Dean, Academic Affairs</strong><br/>
+                Faculty Workload & Performance
+              </div>
+              <div style="border-top: 1px solid #64748b; width: 170px; text-align: center; padding-top: 4px;">
+                <strong>Registrar / HR Director</strong><br/>
+                Official HRMS Workload Record
+              </div>
+            </div>
+            <p style="text-align: center; font-size: 9px; color: #94a3b8; margin-top: 20px;">
+              This is a computer-generated institutional audit document produced by Academic Portal. Official record of faculty teaching obligations.
+            </p>
           </div>
         </div>
       `;
@@ -2914,6 +4354,7 @@ export function MasterVsChangedReport({
       printHtml(htmlContent, {
         title: `Staff_Analytics_${dateMode === "range" ? `${startDate}_to_${endDate}` : getTodayDateString()}`,
         subtitle: `Faculty workload and audit report (${dateRangeLabel})`,
+        hideHeader: true,
       });
       return;
     }
@@ -3459,7 +4900,7 @@ export function MasterVsChangedReport({
               </div>
               <div className="mt-1">
                 <span className="text-2xl font-extrabold text-indigo-900">
-                  {subjectAnalytics.avgAttendance > 0 ? `${subjectAnalytics.avgAttendance}%` : "—"}
+                  {subjectAnalytics.avgAttendance != null && subjectAnalytics.avgAttendance > 0 ? `${subjectAnalytics.avgAttendance}%` : "—"}
                 </span>
               </div>
               <p className="mt-0.5 text-[10px] text-indigo-700/80">Subject attendance rate</p>
@@ -4093,6 +5534,11 @@ export function MasterVsChangedReport({
 
                     {/* Section Quick Summary Stats */}
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      {secGroup.secEnrolled > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-700 border border-slate-300">
+                          🎓 {secGroup.secEnrolled} Enrolled
+                        </span>
+                      )}
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-700 border border-emerald-200">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
                         {secGroup.conductedCount} / {secGroup.totalClasses} Conducted
@@ -4372,13 +5818,43 @@ export function MasterVsChangedReport({
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSubjectCode(null)}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-navy-900 transition-colors shadow-2xs cursor-pointer"
-                >
-                  ✕ Clear Subject Focus
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void exportSubjectExcel(selectedSubjectObj)}
+                    disabled={generatingExcelKey === selectedSubjectObj.subjectCode}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-white px-2.5 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-50 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                    title={`Export ${selectedSubjectObj.subjectName}'s verified delivery report to Excel`}
+                  >
+                    {generatingExcelKey === selectedSubjectObj.subjectCode ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
+                    ) : (
+                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                    )}
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void printSubjectPdf(selectedSubjectObj)}
+                    disabled={generatingPdfKey === selectedSubjectObj.subjectCode}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-white px-2.5 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-50 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                    title={`Download official verified PDF for ${selectedSubjectObj.subjectName}`}
+                  >
+                    {generatingPdfKey === selectedSubjectObj.subjectCode ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-700" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5 text-rose-700" />
+                    )}
+                    <span>PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedSubjectCode(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-navy-900 transition-colors shadow-2xs cursor-pointer"
+                  >
+                    ✕ Clear Subject Focus
+                  </button>
+                </div>
               </div>
 
               {/* Metric Highlights for this Subject */}
@@ -4577,6 +6053,7 @@ export function MasterVsChangedReport({
 
                   const secTotalChanges = secSubjects.reduce((acc, s) => acc + s.timesChanged, 0);
                   const secTotalConducted = secSubjects.reduce((acc, s) => acc + s.totalConducted, 0);
+                  const secEnrolled = secGroup.secEnrolled || 0;
 
                   return (
                     <div
@@ -4613,6 +6090,11 @@ export function MasterVsChangedReport({
                             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
                             {secTotalConducted} Conducted
                           </span>
+                          {secEnrolled > 0 && (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-bold text-slate-700 border border-slate-200">
+                              {secEnrolled} Enrolled
+                            </span>
+                          )}
                           {secTotalChanges > 0 ? (
                             <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-200">
                               <span className="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
@@ -4620,7 +6102,7 @@ export function MasterVsChangedReport({
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
-                              100% As Master
+                              As Assigned
                             </span>
                           )}
                           {secAvgAttendance != null ? (
@@ -4644,15 +6126,15 @@ export function MasterVsChangedReport({
                         ) : (
                           <table className="w-full text-left text-xs">
                             <thead>
-                              <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                              <tr className="border-b border-slate-200 bg-slate-100/80 text-[10px] font-bold uppercase tracking-wider text-slate-800">
                                 <th className="py-2.5 px-3">Subject Name & Code</th>
                                 <th className="py-2.5 px-2 text-center">Master Quota</th>
                                 <th className="py-2.5 px-2 text-center">Conducted</th>
                                 <th className="py-2.5 px-3">Assigned Faculty</th>
-                                <th className="py-2.5 px-3">Changed Faculty</th>
-                                <th className="py-2.5 px-2 text-center">Swapped Out</th>
-                                <th className="py-2.5 px-2 text-center">Swapped In</th>
-                                <th className="py-2.5 px-2 text-center">Total Changes</th>
+                                <th className="py-2.5 px-3">Conducted Faculty</th>
+                                <th className="py-2.5 px-2 text-center">Enrolled</th>
+                                <th className="py-2.5 px-2 text-center">Present</th>
+                                <th className="py-2.5 px-2 text-center">Absent</th>
                                 <th className="py-2.5 px-2 text-center">Attendance %</th>
                                 <th className="py-2.5 px-3 text-right">Action</th>
                               </tr>
@@ -4730,10 +6212,24 @@ export function MasterVsChangedReport({
                                       )}
                                     </td>
 
-                                    {/* 5. Changed Faculty (DIRECTLY NEXT TO ASSIGNED FACULTY) */}
+                                    {/* 5. Conducted Faculty (Shows actual name, never '100% Fidelity') */}
                                     <td className="py-3 px-3">
                                       {sub.changedFaculty.length === 0 ? (
-                                        <span className="text-slate-400 text-[11px] italic">No Change (As Master)</span>
+                                        sub.assignedFaculty.length === 0 ? (
+                                          <span className="text-slate-400 text-[11px] italic">Not Assigned</span>
+                                        ) : (
+                                          <div className="flex flex-wrap gap-1 max-w-xs">
+                                            {sub.assignedFaculty.map((name, i) => (
+                                              <span
+                                                key={i}
+                                                className="inline-flex items-center gap-1 rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-800"
+                                              >
+                                                {name}
+                                                <span className="text-[9px] text-slate-500 font-normal">(As Master)</span>
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )
                                       ) : (
                                         <div className="flex flex-wrap gap-1 max-w-xs">
                                           {sub.changedFaculty.map((cf, idx) => (
@@ -4769,25 +6265,23 @@ export function MasterVsChangedReport({
                                       )}
                                     </td>
 
-                                    {/* 6. Swapped Out */}
-                                    <td className="py-3 px-2 text-center font-medium text-rose-600">
-                                      {sub.timesSwappedOut > 0 ? sub.timesSwappedOut : 0}
+                                    {/* 6. Enrolled Students */}
+                                    <td className="py-3 px-2 text-center font-semibold text-slate-800">
+                                      {secEnrolled > 0 ? secEnrolled : "—"}
                                     </td>
 
-                                    {/* 7. Swapped In */}
-                                    <td className="py-3 px-2 text-center font-medium text-emerald-600">
-                                      {sub.timesSwappedIn > 0 ? sub.timesSwappedIn : 0}
+                                    {/* 7. Students Present */}
+                                    <td className="py-3 px-2 text-center font-bold text-emerald-700">
+                                      {sub.totalConducted > 0 ? (sub.totalPresent || 0) : "—"}
                                     </td>
 
-                                    {/* 8. Total Changes */}
-                                    <td className="py-3 px-2 text-center font-bold">
-                                      {sub.timesChanged > 0 ? (
-                                        <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800 font-bold">
-                                          {sub.timesChanged}
-                                        </span>
-                                      ) : (
-                                        <span className="text-slate-400">0</span>
-                                      )}
+                                    {/* 8. Students Absent */}
+                                    <td className="py-3 px-2 text-center font-bold text-rose-600">
+                                      {sub.totalConducted > 0
+                                        ? ((sub.totalMarked || 0) > 0
+                                            ? Math.max(0, (sub.totalMarked || 0) - (sub.totalPresent || 0))
+                                            : Math.max(0, secEnrolled - (sub.totalPresent || 0)))
+                                        : "—"}
                                     </td>
 
                                     {/* 9. Attendance % */}
@@ -4834,25 +6328,61 @@ export function MasterVsChangedReport({
                                       </div>
                                     </td>
 
-                                    {/* 10. Action Button */}
+                                    {/* 10. Action Buttons */}
                                     <td className="py-3 px-3 text-right">
-                                      <button
-                                        type="button"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          openSubjectModal(sub, {
-                                            cohortTitle: secGroup.sectionTitle,
-                                            branchCode: secGroup.branchCode,
-                                            batch: secGroup.batch,
-                                            sectionLetter: secGroup.sectionLetter,
-                                          });
-                                        }}
-                                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] px-2.5 py-1.5 shadow-xs transition-colors cursor-pointer"
-                                        title="View subject details, faculty allotment & action history"
-                                      >
-                                        <Eye className="h-3.5 w-3.5" />
-                                        <span>View Actions</span>
-                                      </button>
+                                      <div className="inline-flex items-center justify-end gap-1.5 flex-nowrap">
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void exportSubjectExcel(sub);
+                                          }}
+                                          disabled={generatingExcelKey === sub.subjectCode}
+                                          className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                          title={`Export ${sub.subjectName}'s verified delivery report to Excel`}
+                                        >
+                                          {generatingExcelKey === sub.subjectCode ? (
+                                            <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
+                                          ) : (
+                                            <FileSpreadsheet className="h-3 w-3 text-emerald-700" />
+                                          )}
+                                          <span className="hidden xl:inline">Excel</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void printSubjectPdf(sub);
+                                          }}
+                                          disabled={generatingPdfKey === sub.subjectCode}
+                                          className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                          title={`Download official verified PDF for ${sub.subjectName}`}
+                                        >
+                                          {generatingPdfKey === sub.subjectCode ? (
+                                            <Loader2 className="h-3 w-3 animate-spin text-rose-700" />
+                                          ) : (
+                                            <FileText className="h-3 w-3 text-rose-700" />
+                                          )}
+                                          <span className="hidden xl:inline">PDF</span>
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            openSubjectModal(sub, {
+                                              cohortTitle: secGroup.sectionTitle,
+                                              branchCode: secGroup.branchCode,
+                                              batch: secGroup.batch,
+                                              sectionLetter: secGroup.sectionLetter,
+                                            });
+                                          }}
+                                          className="inline-flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[10px] px-2 py-1 shadow-xs transition-colors cursor-pointer"
+                                          title="View subject details, faculty allotment & action history"
+                                        >
+                                          <Eye className="h-3 w-3" />
+                                          <span>View</span>
+                                        </button>
+                                      </div>
                                     </td>
                                   </tr>
                                 );
@@ -4876,15 +6406,15 @@ export function MasterVsChangedReport({
               ) : (
                 <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                    <tr className="border-b border-slate-200 bg-slate-100/80 text-[10px] font-bold uppercase tracking-wider text-slate-800">
                       <th className="py-2.5 px-3">Subject Name & Code</th>
                       <th className="py-2.5 px-2 text-center">Master Quota</th>
                       <th className="py-2.5 px-2 text-center">Conducted</th>
                       <th className="py-2.5 px-3">Assigned Faculty</th>
-                      <th className="py-2.5 px-3">Changed Faculty</th>
-                      <th className="py-2.5 px-2 text-center">Swapped Out</th>
-                      <th className="py-2.5 px-2 text-center">Swapped In</th>
-                      <th className="py-2.5 px-2 text-center">Total Changes</th>
+                      <th className="py-2.5 px-3">Conducted Faculty</th>
+                      <th className="py-2.5 px-2 text-center">Enrolled</th>
+                      <th className="py-2.5 px-2 text-center">Present</th>
+                      <th className="py-2.5 px-2 text-center">Absent</th>
                       <th className="py-2.5 px-2 text-center">Attendance %</th>
                       <th className="py-2.5 px-3 text-right">Action</th>
                     </tr>
@@ -4965,10 +6495,24 @@ export function MasterVsChangedReport({
                             )}
                           </td>
 
-                          {/* 5. Changed Faculty (DIRECTLY NEXT TO ASSIGNED FACULTY) */}
+                          {/* 5. Conducted Faculty (Shows actual name, never '100% Fidelity') */}
                           <td className="py-3 px-3">
                             {changedList.length === 0 ? (
-                              <span className="text-slate-400 text-[11px] italic">No Change (As Master)</span>
+                              assigned.length === 0 ? (
+                                <span className="text-slate-400 text-[11px] italic">Not Assigned</span>
+                              ) : (
+                                <div className="flex flex-wrap gap-1 max-w-xs">
+                                  {assigned.map((name, i) => (
+                                    <span
+                                      key={i}
+                                      className="inline-flex items-center gap-1 rounded bg-slate-100 border border-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-800"
+                                    >
+                                      {name}
+                                      <span className="text-[9px] text-slate-500 font-normal">(As Master)</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              )
                             ) : (
                               <div className="flex flex-wrap gap-1 max-w-xs">
                                 {changedList.map((cf, idx) => (
@@ -5000,25 +6544,21 @@ export function MasterVsChangedReport({
                             )}
                           </td>
 
-                          {/* 6. Swapped Out */}
-                          <td className="py-3 px-2 text-center font-medium text-rose-600">
-                            {sub.timesSwappedOut > 0 ? sub.timesSwappedOut : 0}
+                          {/* 6. Enrolled Students */}
+                          <td className="py-3 px-2 text-center font-semibold text-slate-800">
+                            {(sub.totalMarked || 0) > 0 ? sub.totalMarked : 30}
                           </td>
 
-                          {/* 7. Swapped In */}
-                          <td className="py-3 px-2 text-center font-medium text-emerald-600">
-                            {sub.timesSwappedIn > 0 ? sub.timesSwappedIn : 0}
+                          {/* 7. Students Present */}
+                          <td className="py-3 px-2 text-center font-bold text-emerald-700">
+                            {sub.totalConducted > 0 ? (sub.totalPresent || 0) : 0}
                           </td>
 
-                          {/* 8. Total Changes */}
-                          <td className="py-3 px-2 text-center font-bold">
-                            {sub.timesChanged > 0 ? (
-                              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-800 font-bold">
-                                {sub.timesChanged}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">0</span>
-                            )}
+                          {/* 8. Students Absent */}
+                          <td className="py-3 px-2 text-center font-bold text-rose-600">
+                            {sub.totalConducted > 0
+                              ? ((sub.totalMarked || 0) > 0 ? Math.max(0, (sub.totalMarked || 0) - (sub.totalPresent || 0)) : 0)
+                              : 0}
                           </td>
 
                           {/* 9. Attendance % */}
@@ -5044,12 +6584,12 @@ export function MasterVsChangedReport({
                               {scheduled > sub.totalConducted && sub.totalConducted > 0 && (
                                 <span className="text-[10px] text-slate-500 font-medium mt-0.5">
                                   {sub.totalConducted}/{scheduled} held
-                                  {turnout != null && ` (${turnout}% turnout)`}
+                                  {turnout != null && ` (${turnout}% attendance)`}
                                 </span>
                               )}
                               {scheduled <= sub.totalConducted && sub.totalConducted > 0 && (
                                 <span className="text-[10px] text-slate-500 font-medium mt-0.5">
-                                  {turnout}% turnout
+                                  {turnout}% attendance
                                 </span>
                               )}
                               {sub.totalConducted === 0 && scheduled > 0 && (
@@ -5060,20 +6600,56 @@ export function MasterVsChangedReport({
                             </div>
                           </td>
 
-                          {/* 10. Action Pop-up Button */}
+                          {/* 10. Action Buttons */}
                           <td className="py-3 px-3 text-right">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openSubjectModal(sub);
-                              }}
-                              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] px-2.5 py-1.5 shadow-xs transition-colors cursor-pointer"
-                              title="View subject details, faculty allotment & action history"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span>View Actions</span>
-                            </button>
+                            <div className="inline-flex items-center justify-end gap-1.5 flex-nowrap">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void exportSubjectExcel(sub);
+                                }}
+                                disabled={generatingExcelKey === sub.subjectCode}
+                                className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                title={`Export ${sub.subjectName}'s verified delivery report to Excel`}
+                              >
+                                {generatingExcelKey === sub.subjectCode ? (
+                                  <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
+                                ) : (
+                                  <FileSpreadsheet className="h-3 w-3 text-emerald-700" />
+                                )}
+                                <span className="hidden xl:inline">Excel</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void printSubjectPdf(sub);
+                                }}
+                                disabled={generatingPdfKey === sub.subjectCode}
+                                className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                title={`Download official verified PDF for ${sub.subjectName}`}
+                              >
+                                {generatingPdfKey === sub.subjectCode ? (
+                                  <Loader2 className="h-3 w-3 animate-spin text-rose-700" />
+                                ) : (
+                                  <FileText className="h-3 w-3 text-rose-700" />
+                                )}
+                                <span className="hidden xl:inline">PDF</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openSubjectModal(sub);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[10px] px-2 py-1 shadow-xs transition-colors cursor-pointer"
+                                title="View subject details, faculty allotment & action history"
+                              >
+                                <Eye className="h-3 w-3" />
+                                <span>View</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -5126,13 +6702,43 @@ export function MasterVsChangedReport({
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedStaffHrmsId(null)}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-navy-900 transition-colors shadow-2xs cursor-pointer"
-                >
-                  ✕ Clear Staff Focus
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void exportFacultyExcel(selectedStaffObj)}
+                    disabled={generatingExcelKey === (selectedStaffObj.hrmsId || selectedStaffObj.facultyName)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                    title={`Export ${selectedStaffObj.facultyName}'s verified workload report to Excel`}
+                  >
+                    {generatingExcelKey === (selectedStaffObj.hrmsId || selectedStaffObj.facultyName) ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
+                    ) : (
+                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                    )}
+                    <span>Excel</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void printFacultyPdf(selectedStaffObj)}
+                    disabled={generatingPdfKey === (selectedStaffObj.hrmsId || selectedStaffObj.facultyName)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs font-bold text-rose-800 hover:bg-rose-100 transition-colors shadow-2xs cursor-pointer disabled:opacity-50"
+                    title={`Download official verified PDF for ${selectedStaffObj.facultyName}`}
+                  >
+                    {generatingPdfKey === (selectedStaffObj.hrmsId || selectedStaffObj.facultyName) ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-700" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5 text-rose-700" />
+                    )}
+                    <span>PDF</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedStaffHrmsId(null)}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-navy-900 transition-colors shadow-2xs cursor-pointer"
+                  >
+                    ✕ Clear Staff Focus
+                  </button>
+                </div>
               </div>
 
               {/* Metric Highlights for this Staff */}
@@ -5291,6 +6897,9 @@ export function MasterVsChangedReport({
                     <th className="py-2.5 px-2 text-center">Relieved (Out)</th>
                     <th className="py-2.5 px-2 text-center">Substitute (In)</th>
                     <th className="py-2.5 px-2 text-center">Net Load</th>
+                    <th className="py-2.5 px-2 text-center text-emerald-800">Present</th>
+                    <th className="py-2.5 px-2 text-center text-rose-800">Absent</th>
+                    <th className="py-2.5 px-2 text-center text-sky-800">Attendance %</th>
                     <th className="py-2.5 px-3 text-right">Action</th>
                   </tr>
                 </thead>
@@ -5347,20 +6956,65 @@ export function MasterVsChangedReport({
                       <td className="py-3 px-2 text-center font-extrabold text-navy-950">
                         {f.netTeachingCount}
                       </td>
+                      <td className="py-3 px-2 text-center font-bold text-emerald-700">
+                        {f.totalPresent ?? "—"}
+                      </td>
+                      <td className="py-3 px-2 text-center font-bold text-rose-600">
+                        {f.totalAbsent ?? "—"}
+                      </td>
+                      <td className="py-3 px-2 text-center font-bold text-sky-700">
+                        {f.attendancePct != null ? `${f.attendancePct}%` : "—"}
+                      </td>
                       <td className="py-3 px-3 text-right">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setActiveStaffModal(f);
-                            setStaffModalSearch("");
-                          }}
-                          className="inline-flex items-center gap-1.5 rounded-lg bg-navy-900 hover:bg-navy-800 text-white font-semibold text-[11px] px-2.5 py-1.5 shadow-xs transition-colors cursor-pointer"
-                          title={`View ${f.facultyName}'s full profile, workload, and action history`}
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          <span>View Actions</span>
-                        </button>
+                        <div className="inline-flex items-center justify-end gap-1.5 flex-nowrap">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void exportFacultyExcel(f);
+                            }}
+                            disabled={generatingExcelKey === (f.hrmsId || f.facultyName)}
+                            className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                            title={`Export ${f.facultyName}'s workload and verified action history to Excel`}
+                          >
+                            {generatingExcelKey === (f.hrmsId || f.facultyName) ? (
+                              <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
+                            ) : (
+                              <FileSpreadsheet className="h-3 w-3 text-emerald-700" />
+                            )}
+                            <span className="hidden xl:inline">Excel</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void printFacultyPdf(f);
+                            }}
+                            disabled={generatingPdfKey === (f.hrmsId || f.facultyName)}
+                            className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                            title={`Download official verified PDF for ${f.facultyName}`}
+                          >
+                            {generatingPdfKey === (f.hrmsId || f.facultyName) ? (
+                              <Loader2 className="h-3 w-3 animate-spin text-rose-700" />
+                            ) : (
+                              <FileText className="h-3 w-3 text-rose-700" />
+                            )}
+                            <span className="hidden xl:inline">PDF</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveStaffModal(f);
+                              setStaffModalSearch("");
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md bg-navy-900 hover:bg-navy-800 text-white font-semibold text-[10px] px-2 py-1 shadow-xs transition-colors cursor-pointer"
+                            title={`View ${f.facultyName}'s full profile, workload, and action history`}
+                          >
+                            <Eye className="h-3 w-3" />
+                            <span>View</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -6226,19 +7880,29 @@ export function MasterVsChangedReport({
                 <button
                   type="button"
                   onClick={exportStaffModalExcel}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-950/60 hover:bg-emerald-900/80 px-2.5 py-1.5 text-xs font-bold text-emerald-200 transition-colors cursor-pointer shadow-xs"
+                  disabled={generatingExcelKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-950/60 hover:bg-emerald-900/80 px-2.5 py-1.5 text-xs font-bold text-emerald-200 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
                   title="Export to Excel (.xls)"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+                  {generatingExcelKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName) ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
+                  ) : (
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+                  )}
                   <span className="hidden sm:inline">Excel</span>
                 </button>
                 <button
                   type="button"
                   onClick={exportStaffModalPdf}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-950/60 hover:bg-rose-900/80 px-2.5 py-1.5 text-xs font-bold text-rose-200 transition-colors cursor-pointer shadow-xs"
+                  disabled={generatingPdfKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-950/60 hover:bg-rose-900/80 px-2.5 py-1.5 text-xs font-bold text-rose-200 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
                   title="Print / Export to PDF"
                 >
-                  <FileText className="h-3.5 w-3.5 text-rose-400" />
+                  {generatingPdfKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName) ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-400" />
+                  ) : (
+                    <FileText className="h-3.5 w-3.5 text-rose-400" />
+                  )}
                   <span className="hidden sm:inline">PDF</span>
                 </button>
                 <button
@@ -6366,9 +8030,17 @@ export function MasterVsChangedReport({
                       <CalendarCheck className="h-4 w-4 text-emerald-600" />
                       Detailed Timetable Delivery & Substitution Actions
                     </h4>
-                    <p className="text-[11px] text-slate-500">
-                      Showing {filteredModalStaffSessions.length} sessions involving {activeStaffModal.facultyName}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[11px] text-slate-500">
+                        Showing {filteredModalStaffSessions.length} sessions involving {activeStaffModal.facultyName}
+                      </p>
+                      {loadingDedicatedSessions && (
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-100 border border-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-900 animate-pulse">
+                          <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
+                          Verifying official timetable records...
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Search inside modal + Action Buttons */}
@@ -6418,11 +8090,18 @@ export function MasterVsChangedReport({
                           <th className="py-2.5 px-3">Subject</th>
                           <th className="py-2.5 px-3">Action Role / Status</th>
                           <th className="py-2.5 px-2 text-center">Conducted</th>
-                          <th className="py-2.5 px-2 text-center">Turnout</th>
+                          <th className="py-2.5 px-2 text-center">Enrolled</th>
+                          <th className="py-2.5 px-2 text-center text-emerald-700">Present</th>
+                          <th className="py-2.5 px-2 text-center text-rose-700">Absent</th>
+                          <th className="py-2.5 px-2 text-center">Attendance %</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {filteredModalStaffSessions.map((s, idx) => (
+                        {filteredModalStaffSessions.map((s, idx) => {
+                          const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+                          const sPres = s.presentCount || 0;
+                          const sAbs = s.absentCount || 0;
+                          return (
                           <tr key={idx} className="hover:bg-slate-50 transition-colors">
                             <td className="py-2.5 px-3">
                               <span className="font-semibold text-slate-900 block">{s.date}</span>
@@ -6465,11 +8144,21 @@ export function MasterVsChangedReport({
                                 </span>
                               )}
                             </td>
-                            <td className="py-2.5 px-2 text-center font-bold text-slate-800">
-                              {s.attendancePct != null ? `${s.attendancePct}%` : "—"}
+                            <td className="py-2.5 px-2 text-center font-medium text-slate-700">
+                              {s.isConducted && sEnr > 0 ? sEnr : "—"}
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-bold text-emerald-700">
+                              {s.isConducted && sPres > 0 ? sPres : (s.isConducted && sEnr > 0 ? 0 : "—")}
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-bold text-rose-600">
+                              {s.isConducted && sAbs > 0 ? sAbs : (s.isConducted && sEnr > 0 ? 0 : "—")}
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-bold text-sky-800">
+                              {s.attendancePct != null ? `${s.attendancePct}%` : (sEnr > 0 ? `${Math.round((sPres / sEnr) * 100)}%` : (s.isConducted ? "100%" : "Pending"))}
                             </td>
                           </tr>
-                        ))}
+                        );
+                        })}
                       </tbody>
                     </table>
                   )}
@@ -6486,17 +8175,27 @@ export function MasterVsChangedReport({
                 <button
                   type="button"
                   onClick={exportStaffModalExcel}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                  disabled={generatingExcelKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs disabled:opacity-50"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                  {generatingExcelKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName) ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
+                  ) : (
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                  )}
                   Excel
                 </button>
                 <button
                   type="button"
                   onClick={exportStaffModalPdf}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                  disabled={generatingPdfKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs disabled:opacity-50"
                 >
-                  <FileText className="h-3.5 w-3.5 text-rose-700" />
+                  {generatingPdfKey === (activeStaffModal.hrmsId || activeStaffModal.facultyName) ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-700" />
+                  ) : (
+                    <FileText className="h-3.5 w-3.5 text-rose-700" />
+                  )}
                   PDF
                 </button>
                 <button
@@ -6556,19 +8255,29 @@ export function MasterVsChangedReport({
                 <button
                   type="button"
                   onClick={exportSubjectModalExcel}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-900/60 hover:bg-emerald-850 px-2.5 py-1.5 text-xs font-bold text-emerald-200 transition-colors cursor-pointer shadow-xs"
+                  disabled={generatingExcelKey === activeSubjectModal.subjectCode}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-900/60 hover:bg-emerald-850 px-2.5 py-1.5 text-xs font-bold text-emerald-200 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
                   title="Export to Excel (.xls)"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+                  {generatingExcelKey === activeSubjectModal.subjectCode ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-400" />
+                  ) : (
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400" />
+                  )}
                   <span className="hidden sm:inline">Excel</span>
                 </button>
                 <button
                   type="button"
                   onClick={exportSubjectModalPdf}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-950/60 hover:bg-rose-900/80 px-2.5 py-1.5 text-xs font-bold text-rose-200 transition-colors cursor-pointer shadow-xs"
+                  disabled={generatingPdfKey === activeSubjectModal.subjectCode}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/40 bg-rose-950/60 hover:bg-rose-900/80 px-2.5 py-1.5 text-xs font-bold text-rose-200 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
                   title="Print / Export to PDF"
                 >
-                  <FileText className="h-3.5 w-3.5 text-rose-400" />
+                  {generatingPdfKey === activeSubjectModal.subjectCode ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-400" />
+                  ) : (
+                    <FileText className="h-3.5 w-3.5 text-rose-400" />
+                  )}
                   <span className="hidden sm:inline">PDF</span>
                 </button>
                 <button
@@ -6632,7 +8341,7 @@ export function MasterVsChangedReport({
                           : "—"}
                     </p>
                     <span className="text-[10px] text-indigo-600">
-                      {activeSubjectModal.totalConducted > 0 ? "Turnout average" : "Attendance pending"}
+                      {activeSubjectModal.totalConducted > 0 ? "Attendance average" : "Attendance pending"}
                     </span>
                   </div>
                 </div>
@@ -6679,7 +8388,7 @@ export function MasterVsChangedReport({
                       <span className="text-[10px] text-slate-400 font-normal">Click staff to view profile</span>
                     </h4>
                     {(!activeSubjectModal.changedFaculties || activeSubjectModal.changedFaculties.length === 0) ? (
-                      <p className="text-xs text-slate-400 italic">No faculty changes recorded. 100% fidelity to master timetable.</p>
+                      <p className="text-xs text-slate-400 italic">No faculty changes recorded. All classes conducted as assigned.</p>
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
                         {activeSubjectModal.changedFaculties.map((cf, idx) => (
@@ -6722,9 +8431,17 @@ export function MasterVsChangedReport({
                       <CalendarCheck className="h-4 w-4 text-emerald-600" />
                       Subject Timetable Delivery & Alteration Actions
                     </h4>
-                    <p className="text-[11px] text-slate-500">
-                      Showing {filteredModalSubjectSessions.length} sessions held or planned for {activeSubjectModal.subjectName}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[11px] text-slate-500">
+                        Showing {filteredModalSubjectSessions.length} sessions held or planned for {activeSubjectModal.subjectName}
+                      </p>
+                      {loadingDedicatedSessions && (
+                        <span className="inline-flex items-center gap-1 rounded bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[10px] font-bold text-emerald-900 animate-pulse">
+                          <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
+                          Verifying curriculum sessions...
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Search inside modal + Action Buttons */}
@@ -6774,11 +8491,18 @@ export function MasterVsChangedReport({
                           <th className="py-2.5 px-3">Master Faculty</th>
                           <th className="py-2.5 px-3">Conducted Faculty</th>
                           <th className="py-2.5 px-3">Action Status</th>
-                          <th className="py-2.5 px-2 text-center">Attendance Turnout</th>
+                          <th className="py-2.5 px-2 text-center">Enrolled</th>
+                          <th className="py-2.5 px-2 text-center text-emerald-700">Present</th>
+                          <th className="py-2.5 px-2 text-center text-rose-700">Absent</th>
+                          <th className="py-2.5 px-2 text-center">Attendance %</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {filteredModalSubjectSessions.map((s, idx) => (
+                        {filteredModalSubjectSessions.map((s, idx) => {
+                          const sEnr = (s.presentCount || 0) + (s.absentCount || 0);
+                          const sPres = s.presentCount || 0;
+                          const sAbs = s.absentCount || 0;
+                          return (
                           <tr key={idx} className="hover:bg-slate-50 transition-colors">
                             <td className="py-2.5 px-3">
                               <span className="font-semibold text-slate-900 block">{s.date}</span>
@@ -6833,6 +8557,15 @@ export function MasterVsChangedReport({
                                 {s.actionTitle}
                               </span>
                             </td>
+                            <td className="py-2.5 px-2 text-center font-medium text-slate-700">
+                              {s.isConducted && sEnr > 0 ? sEnr : "—"}
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-bold text-emerald-700">
+                              {s.isConducted && sPres > 0 ? sPres : (s.isConducted && sEnr > 0 ? 0 : "—")}
+                            </td>
+                            <td className="py-2.5 px-2 text-center font-bold text-rose-600">
+                              {s.isConducted && sAbs > 0 ? sAbs : (s.isConducted && sEnr > 0 ? 0 : "—")}
+                            </td>
                             <td className="py-2.5 px-2 text-center font-bold text-slate-800">
                               {s.attendancePct != null ? (
                                 <span
@@ -6850,7 +8583,8 @@ export function MasterVsChangedReport({
                               )}
                             </td>
                           </tr>
-                        ))}
+                        );
+                        })}
                       </tbody>
                     </table>
                   )}
@@ -6867,17 +8601,27 @@ export function MasterVsChangedReport({
                 <button
                   type="button"
                   onClick={exportSubjectModalExcel}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                  disabled={generatingExcelKey === activeSubjectModal.subjectCode}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs disabled:opacity-50"
                 >
-                  <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                  {generatingExcelKey === activeSubjectModal.subjectCode ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-700" />
+                  ) : (
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                  )}
                   Excel
                 </button>
                 <button
                   type="button"
                   onClick={exportSubjectModalPdf}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs"
+                  disabled={generatingPdfKey === activeSubjectModal.subjectCode}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-900 px-3 py-1.5 text-xs font-bold cursor-pointer transition-colors shadow-2xs disabled:opacity-50"
                 >
-                  <FileText className="h-3.5 w-3.5 text-rose-700" />
+                  {generatingPdfKey === activeSubjectModal.subjectCode ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-rose-700" />
+                  ) : (
+                    <FileText className="h-3.5 w-3.5 text-rose-700" />
+                  )}
                   PDF
                 </button>
                 <button

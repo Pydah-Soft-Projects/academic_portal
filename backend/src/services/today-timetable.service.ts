@@ -566,7 +566,34 @@ export async function getAllBatchesDailyTimetableData(filters: {
     }
   }
 
-  // 1. Fetch plans from ap_timetable_plans (prefer published, then any)
+  // 1. Fetch valid sections from student database to exclude phantom cohorts
+  const branchValidSecs = new Map<string, Set<string>>();
+  try {
+    const studentSecRows = await queryStudent<Array<RowDataPacket & { batch: string; section_name: string }>>(
+      `
+      SELECT TRIM(s.batch) as batch, COALESCE(NULLIF(TRIM(ss.section_name COLLATE utf8mb4_unicode_ci), ''), NULLIF(TRIM(s.section COLLATE utf8mb4_unicode_ci), '')) as section_name
+      FROM students s
+      LEFT JOIN student_sections ss ON ss.student_id = s.id
+      WHERE s.branch_id = ?
+        AND (s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved','discontinued','inactive','cancelled'))
+      GROUP BY TRIM(s.batch), section_name
+      HAVING section_name IS NOT NULL AND section_name <> ''
+      `,
+      [filters.branchId],
+    );
+    for (const sr of studentSecRows) {
+      const bKey = (sr.batch || "").trim().replace(/^batch\s*/i, "");
+      const sKey = (sr.section_name || "").trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "");
+      if (bKey && sKey) {
+        if (!branchValidSecs.has(bKey)) branchValidSecs.set(bKey, new Set());
+        branchValidSecs.get(bKey)!.add(sKey);
+      }
+    }
+  } catch (err) {
+    console.warn("Could not query branch student sections:", err);
+  }
+
+  // 1b. Fetch active plans from ap_timetable_plans (strictly exclude superseded / archived)
   const planRows = await queryAcademic<
     (RowDataPacket & {
       id: number;
@@ -583,6 +610,7 @@ export async function getAllBatchesDailyTimetableData(filters: {
     WHERE college_id = ?
       AND branch_id = ?
       AND academic_year_label = ?
+      AND status NOT IN ('superseded', 'archived')
     ORDER BY CASE WHEN status = 'published' THEN 0 ELSE 1 END, year_of_study DESC, batch DESC, section_name ASC
     `,
     [filters.collegeId, filters.branchId, filters.academicYear],
@@ -600,9 +628,16 @@ export async function getAllBatchesDailyTimetableData(filters: {
   for (const p of planRows) {
     const b = String(p.batch || "").trim();
     if (!b) continue;
+    const rawB = b.replace(/^batch\s*/i, "");
     const y = p.year_of_study != null ? Number(p.year_of_study) : 1;
     const s = p.semester_number != null ? Number(p.semester_number) : 1;
     const sec = p.section_name ? String(p.section_name).trim() : null;
+    const cleanSec = sec ? sec.toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "").trim() : null;
+
+    if (cleanSec && branchValidSecs.has(rawB) && !branchValidSecs.get(rawB)!.has(cleanSec)) {
+      continue; // Skip phantom cohort that has 0 students in the database!
+    }
+
     const key = `${b}_${y}_${s}_${sec || ""}`;
     if (!cohortsMap.has(key)) {
       cohortsMap.set(key, { batch: b, year: y, semester: s, section: sec });
@@ -716,6 +751,7 @@ export type MasterVsChangedReportFilter = {
   startDate?: string;
   endDate?: string;
   staffHrmsId?: string;
+  facultyName?: string;
   subjectCode?: string;
   limit?: number;
 };
@@ -738,6 +774,112 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     }
   } catch (err) {
     console.warn("Could not load course_branches:", err);
+  }
+
+  // 0b. Build official section enrolled student strength map dynamically from student database
+  const sectionStrengthMap = new Map<string, number>();
+  const validBatchSectionsMap = new Map<string, Set<string>>();
+
+  try {
+    const studentStrengthRows = await queryStudent<
+      Array<RowDataPacket & {
+        branch_id: number | null;
+        branch_code: string | null;
+        batch: string | null;
+        current_year: number | null;
+        section_name: string | null;
+        student_count: number;
+      }>
+    >(
+      `
+      SELECT 
+        s.branch_id,
+        b.code as branch_code,
+        TRIM(s.batch) as batch,
+        s.current_year,
+        TRIM(s.section) as section_name,
+        COUNT(DISTINCT s.id) as student_count
+      FROM students s
+      LEFT JOIN course_branches b ON b.id = s.branch_id
+      WHERE TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular'
+        AND s.section IS NOT NULL AND TRIM(s.section) <> ''
+      GROUP BY s.branch_id, b.code, TRIM(s.batch), s.current_year, TRIM(s.section)
+      HAVING section_name IS NOT NULL AND section_name <> ''
+      `
+    );
+
+    for (const r of studentStrengthRows) {
+      const count = Number(r.student_count) || 0;
+      if (count <= 0) continue;
+
+      const bInfo = r.branch_id ? branchMap.get(r.branch_id) : undefined;
+      const bCode = (r.branch_code || bInfo?.code || "").trim().toUpperCase();
+      const bName = (bInfo?.name || "").trim().toUpperCase();
+      const bId = r.branch_id ? String(r.branch_id) : "";
+      const rawBatch = (r.batch || "").trim().replace(/^batch\s*/i, "");
+      const yr = Number(r.current_year) || 0;
+      const rawSec = (r.section_name || "").trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "");
+      const secLetter = rawSec || "UNASSIGNED";
+
+      if (secLetter !== "UNASSIGNED") {
+        const branchKeys = Array.from(new Set([bCode, bName, bId].filter(Boolean)));
+        for (const bk of branchKeys) {
+          if (rawBatch) {
+            const key = `${bk}__${rawBatch}__${secLetter}`;
+            sectionStrengthMap.set(key, (sectionStrengthMap.get(key) || 0) + count);
+            const bbKey = `${bk}__${rawBatch}`;
+            sectionStrengthMap.set(bbKey, (sectionStrengthMap.get(bbKey) || 0) + count);
+
+            if (!validBatchSectionsMap.has(bbKey)) validBatchSectionsMap.set(bbKey, new Set());
+            validBatchSectionsMap.get(bbKey)!.add(secLetter);
+          }
+          if (yr) {
+            const bySecKey = `${bk}__YEAR${yr}__${secLetter}`;
+            sectionStrengthMap.set(bySecKey, (sectionStrengthMap.get(bySecKey) || 0) + count);
+            const byKey = `${bk}__YEAR${yr}`;
+            sectionStrengthMap.set(byKey, (sectionStrengthMap.get(byKey) || 0) + count);
+
+            if (!validBatchSectionsMap.has(byKey)) validBatchSectionsMap.set(byKey, new Set());
+            validBatchSectionsMap.get(byKey)!.add(secLetter);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Could not load student strengths:", err);
+  }
+
+  function resolveEnrolledStrength(
+    branchId?: number | null,
+    branchCode?: string | null,
+    batch?: string | null,
+    sectionName?: string | null,
+    yearOfStudy?: number | null,
+  ): number {
+    const bInfo = branchId ? branchMap.get(branchId) : undefined;
+    const bCode = (branchCode || bInfo?.code || "").trim().toUpperCase();
+    const bName = (bInfo?.name || "").trim().toUpperCase();
+    const bId = branchId ? String(branchId) : "";
+    const b = (batch || "").trim().replace(/^batch\s*/i, "");
+    const sec = (sectionName || "").trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") || "UNASSIGNED";
+    const yr = yearOfStudy ? Number(yearOfStudy) : 0;
+
+    const branchKeys = Array.from(new Set([bCode, bName, bId].filter(Boolean)));
+    // 1. Batch + section
+    for (const bk of branchKeys) {
+      if (b && sec && sec !== "UNASSIGNED") {
+        const val = sectionStrengthMap.get(`${bk}__${b}__${sec}`) || 0;
+        if (val) return val;
+      }
+    }
+    // 2. Year of study + section
+    for (const bk of branchKeys) {
+      if (yr && sec && sec !== "UNASSIGNED") {
+        const val = sectionStrengthMap.get(`${bk}__YEAR${yr}__${sec}`) || 0;
+        if (val) return val;
+      }
+    }
+    return 0;
   }
 
   // 1. Build where conditions for activities
@@ -781,9 +923,17 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     actConds.push("timetable_date <= ?");
     actParams.push(filters.endDate);
   }
-  if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
-    actConds.push("(master_faculty_hrms_id = ? OR new_faculty_hrms_id = ?)");
-    actParams.push(filters.staffHrmsId, filters.staffHrmsId);
+  if ((filters.staffHrmsId && filters.staffHrmsId !== "all") || filters.facultyName) {
+    const staffClauses: string[] = [];
+    if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
+      staffClauses.push("master_faculty_hrms_id = ? OR new_faculty_hrms_id = ?");
+      actParams.push(filters.staffHrmsId, filters.staffHrmsId);
+    }
+    if (filters.facultyName) {
+      staffClauses.push("LOWER(master_faculty_name) = LOWER(?) OR LOWER(new_faculty_name) = LOWER(?)");
+      actParams.push(filters.facultyName.trim(), filters.facultyName.trim());
+    }
+    actConds.push(`(${staffClauses.join(" OR ")})`);
   }
   if (filters.subjectCode && filters.subjectCode !== "all") {
     actConds.push("(master_subject_code = ? OR new_subject_code = ?)");
@@ -793,7 +943,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
   const actWhere = actConds.length > 0 ? `WHERE ${actConds.join(" AND ")}` : "";
 
   // 2. Query all matching activities
-  const limit = Math.min(Math.max(Number(filters.limit) || 100, 1), 300);
+  const limit = Math.min(Math.max(Number(filters.limit) || 300, 1), 2000);
   const activityRows = await queryAcademic<ActivityDbRow[]>(
     `
     SELECT *
@@ -842,9 +992,17 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     masterConds.push("(p.section_name = ? OR p.section_name = CONCAT('Section ', ?))");
     masterParams.push(sec, sec);
   }
-  if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
-    masterConds.push("sl.hrms_employee_id = ?");
-    masterParams.push(filters.staffHrmsId);
+  if ((filters.staffHrmsId && filters.staffHrmsId !== "all") || filters.facultyName) {
+    const staffClauses: string[] = [];
+    if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
+      staffClauses.push("sl.hrms_employee_id = ?");
+      masterParams.push(filters.staffHrmsId);
+    }
+    if (filters.facultyName) {
+      staffClauses.push("LOWER(sl.display_name) = LOWER(?)");
+      masterParams.push(filters.facultyName.trim());
+    }
+    masterConds.push(`(${staffClauses.join(" OR ")})`);
   }
   if (filters.subjectCode && filters.subjectCode !== "all") {
     masterConds.push("(e.subject_code = ? OR e.custom_label = ?)");
@@ -906,7 +1064,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     const curr = new Date(start);
     const dayCodeMap = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
     let daysScanned = 0;
-    while (curr <= end && daysScanned < 14) {
+    while (curr <= end && daysScanned < 120) {
       const code = dayCodeMap[curr.getDay()];
       targetDayCodes.add(code);
       if (code === "THU") targetDayCodes.add("THUR");
@@ -946,6 +1104,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       course_id: number;
       branch_id: number;
       batch: string;
+      year_of_study: number | null;
       semester_number: number;
       section_name: string | null;
       day_of_week: string;
@@ -970,6 +1129,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       p.course_id,
       p.branch_id,
       p.batch,
+      p.year_of_study,
       p.semester_number,
       p.section_name,
       e.day_of_week,
@@ -1002,7 +1162,10 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
   );
 
   // 4. Query Class sessions & attendance posts
-  const sessConds: string[] = [];
+  const sessConds: string[] = [
+    "(cs.status IS NULL OR cs.status NOT IN ('cancelled', 'archived'))",
+    "(p.status IS NULL OR p.status NOT IN ('superseded', 'archived'))",
+  ];
   const sessParams: unknown[] = [];
 
   if (filters.academicYear && filters.academicYear !== "all") {
@@ -1052,9 +1215,17 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     sessConds.push("cs.session_date <= ?");
     sessParams.push(filters.endDate);
   }
-  if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
-    sessConds.push("sl.hrms_employee_id = ?");
-    sessParams.push(filters.staffHrmsId);
+  if ((filters.staffHrmsId && filters.staffHrmsId !== "all") || filters.facultyName) {
+    const staffClauses: string[] = [];
+    if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
+      staffClauses.push("sl.hrms_employee_id = ?");
+      sessParams.push(filters.staffHrmsId);
+    }
+    if (filters.facultyName) {
+      staffClauses.push("LOWER(sl.display_name) = LOWER(?)");
+      sessParams.push(filters.facultyName.trim());
+    }
+    sessConds.push(`(${staffClauses.join(" OR ")})`);
   }
   if (filters.subjectCode && filters.subjectCode !== "all") {
     sessConds.push("(cs.subject_code = ? OR cs.subject_name = ?)");
@@ -1098,7 +1269,10 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
   );
 
   // 4b. Query period-by-period comparisons (Master vs Today)
-  const compConds: string[] = [];
+  const compConds: string[] = [
+    "(cs.status IS NULL OR cs.status NOT IN ('cancelled', 'archived'))",
+    "(p.status IS NULL OR p.status NOT IN ('superseded', 'archived'))",
+  ];
   const compParams: unknown[] = [];
 
   if (filters.academicYear && filters.academicYear !== "all") {
@@ -1148,9 +1322,17 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     compConds.push("cs.session_date <= ?");
     compParams.push(filters.endDate);
   }
-  if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
-    compConds.push("(sl.hrms_employee_id = ? OR sl_master.hrms_employee_id = ?)");
-    compParams.push(filters.staffHrmsId, filters.staffHrmsId);
+  if ((filters.staffHrmsId && filters.staffHrmsId !== "all") || filters.facultyName) {
+    const staffClauses: string[] = [];
+    if (filters.staffHrmsId && filters.staffHrmsId !== "all") {
+      staffClauses.push("(sl.hrms_employee_id = ? OR sl_master.hrms_employee_id = ?)");
+      compParams.push(filters.staffHrmsId, filters.staffHrmsId);
+    }
+    if (filters.facultyName) {
+      staffClauses.push("(LOWER(sl.display_name) = LOWER(?) OR LOWER(sl_master.display_name) = LOWER(?))");
+      compParams.push(filters.facultyName.trim(), filters.facultyName.trim());
+    }
+    compConds.push(`(${staffClauses.join(" OR ")})`);
   }
   if (filters.subjectCode && filters.subjectCode !== "all") {
     compConds.push("(cs.subject_code = ? OR te.subject_code = ? OR te.custom_label = ?)");
@@ -1174,6 +1356,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       slot_label: string | null;
       branch_id: number | null;
       batch: string | null;
+      year_of_study: number | null;
       section_name: string | null;
       semester_number: number | null;
       actual_subject_code: string | null;
@@ -1201,6 +1384,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       COALESCE(ts.label, CONCAT('P', ts.slot_order)) as slot_label,
       COALESCE(cs.branch_id, p.branch_id) as branch_id,
       COALESCE(cs.batch_label, p.batch) as batch,
+      COALESCE(p.year_of_study, 0) as year_of_study,
       COALESCE(cs.section_name, p.section_name) as section_name,
       COALESCE(cs.semester_number, p.semester_number) as semester_number,
       COALESCE(cs.subject_code, te.subject_code, te.custom_label, 'SPECIAL') as actual_subject_code,
@@ -1223,7 +1407,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
     ${compWhere}
     ORDER BY cs.session_date DESC, cs.start_time ASC
-    LIMIT 200
+    LIMIT ${limit}
     `,
     compParams,
   );
@@ -1248,91 +1432,107 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     }
   }
 
-  const comparisons = comparisonRows.map((r) => {
-    const d = String(r.session_date).slice(0, 10);
-    const slot = r.period_slot_id;
-    const b = String(r.batch || "").trim().toLowerCase().replace(/^batch\s*/i, "");
-    const sec = r.section_name ? String(r.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+  const comparisons = comparisonRows
+    .map((r) => {
+      const d = String(r.session_date).slice(0, 10);
+      const slot = r.period_slot_id;
+      const b = String(r.batch || "").trim().toLowerCase().replace(/^batch\s*/i, "");
+      const sec = r.section_name ? String(r.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+      const bInfo = r.branch_id ? branchMap.get(Number(r.branch_id)) : undefined;
+      const bCode = (bInfo?.code || "").trim().toUpperCase();
+      const bName = (bInfo?.name || "").trim().toUpperCase();
+      const bId = String(r.branch_id || "");
+      const validSecs =
+        validBatchSectionsMap.get(`${bCode}__${b}`) ||
+        validBatchSectionsMap.get(`${bName}__${b}`) ||
+        validBatchSectionsMap.get(`${bId}__${b}`) ||
+        validBatchSectionsMap.get(`${bCode}__YEAR${r.year_of_study}`) ||
+        validBatchSectionsMap.get(`${bName}__YEAR${r.year_of_study}`) ||
+        validBatchSectionsMap.get(`${bId}__YEAR${r.year_of_study}`);
 
-    // Match exact section first; only fall back to batch-wide match if the override was truly batch-wide
-    const matchedAct = sec
-      ? (activityMap.get(`${d}_${slot}_${b}_${sec}`) || activityMap.get(`${d}_${slot}_${b}`))
-      : activityMap.get(`${d}_${slot}_${b}`);
+      if (sec && validSecs && validSecs.size > 0 && !validSecs.has(sec) && !r.attendance_post_id) {
+        return null;
+      }
 
-    const masterSubjectCode = matchedAct?.master_subject_code || r.master_subject_code;
-    const masterSubjectName = matchedAct?.master_subject_name || r.master_subject_name;
-    const masterFacultyName = matchedAct?.master_faculty_name || r.master_faculty_name;
-    const masterFacultyHrmsId = matchedAct?.master_faculty_hrms_id || r.master_faculty_hrms_id;
+      // Match exact section first; only fall back to batch-wide match if the override was truly batch-wide
+      const matchedAct = sec
+        ? (activityMap.get(`${d}_${slot}_${b}_${sec}`) || activityMap.get(`${d}_${slot}_${b}`))
+        : activityMap.get(`${d}_${slot}_${b}`);
 
-    const todaySubjectCode = matchedAct?.new_subject_code || r.actual_subject_code;
-    const todaySubjectName = matchedAct?.new_subject_name || r.actual_subject_name;
-    const todayFacultyName = matchedAct?.new_faculty_name || r.actual_faculty_name;
-    const todayFacultyHrmsId = matchedAct?.new_faculty_hrms_id || r.actual_faculty_hrms_id;
+      const masterSubjectCode = matchedAct?.master_subject_code || r.master_subject_code;
+      const masterSubjectName = matchedAct?.master_subject_name || r.master_subject_name;
+      const masterFacultyName = matchedAct?.master_faculty_name || r.master_faculty_name;
+      const masterFacultyHrmsId = matchedAct?.master_faculty_hrms_id || r.master_faculty_hrms_id;
 
-    const isSubstitute = Boolean(
-      todayFacultyHrmsId &&
-        masterFacultyHrmsId &&
-        todayFacultyHrmsId.trim() !== masterFacultyHrmsId.trim(),
-    ) || Boolean(
-      todayFacultyName &&
-        masterFacultyName &&
-        todayFacultyName.trim().toLowerCase() !== masterFacultyName.trim().toLowerCase(),
-    );
+      const todaySubjectCode = matchedAct?.new_subject_code || r.actual_subject_code;
+      const todaySubjectName = matchedAct?.new_subject_name || r.actual_subject_name;
+      const todayFacultyName = matchedAct?.new_faculty_name || r.actual_faculty_name;
+      const todayFacultyHrmsId = matchedAct?.new_faculty_hrms_id || r.actual_faculty_hrms_id;
 
-    const isSwap = Boolean(
-      todaySubjectCode &&
-        masterSubjectCode &&
-        todaySubjectCode.trim().toUpperCase() !== masterSubjectCode.trim().toUpperCase(),
-    ) || Boolean(
-      todaySubjectName &&
-        masterSubjectName &&
-        todaySubjectName.trim().toLowerCase() !== masterSubjectName.trim().toLowerCase(),
-    );
+      const isSubstitute = Boolean(
+        todayFacultyHrmsId &&
+          masterFacultyHrmsId &&
+          todayFacultyHrmsId.trim() !== masterFacultyHrmsId.trim(),
+      ) || Boolean(
+        todayFacultyName &&
+          masterFacultyName &&
+          todayFacultyName.trim().toLowerCase() !== masterFacultyName.trim().toLowerCase(),
+      );
 
-    let varianceType: "UNCHANGED" | "FACULTY_SUBSTITUTE" | "SUBJECT_SWAP" | "BOTH" = "UNCHANGED";
-    if (matchedAct?.change_type === "REVERTED_TO_MASTER") {
-      varianceType = "UNCHANGED";
-    } else if (isSubstitute && isSwap) {
-      varianceType = "BOTH";
-    } else if (isSubstitute) {
-      varianceType = "FACULTY_SUBSTITUTE";
-    } else if (isSwap) {
-      varianceType = "SUBJECT_SWAP";
-    }
+      const isSwap = Boolean(
+        todaySubjectCode &&
+          masterSubjectCode &&
+          todaySubjectCode.trim().toUpperCase() !== masterSubjectCode.trim().toUpperCase(),
+      ) || Boolean(
+        todaySubjectName &&
+          masterSubjectName &&
+          todaySubjectName.trim().toLowerCase() !== masterSubjectName.trim().toLowerCase(),
+      );
 
-    const totalMarked = (r.present_count || 0) + (r.absent_count || 0);
-    const attendancePct =
-      totalMarked > 0 ? Math.round(((r.present_count || 0) / totalMarked) * 100) : null;
+      let varianceType: "UNCHANGED" | "FACULTY_SUBSTITUTE" | "SUBJECT_SWAP" | "BOTH" = "UNCHANGED";
+      if (matchedAct?.change_type === "REVERTED_TO_MASTER") {
+        varianceType = "UNCHANGED";
+      } else if (isSubstitute && isSwap) {
+        varianceType = "BOTH";
+      } else if (isSubstitute) {
+        varianceType = "FACULTY_SUBSTITUTE";
+      } else if (isSwap) {
+        varianceType = "SUBJECT_SWAP";
+      }
 
-    const bInfo = branchMap.get(Number(r.branch_id));
+      const totalMarked = (r.present_count || 0) + (r.absent_count || 0);
+      const attendancePct =
+        totalMarked > 0 ? Math.round(((r.present_count || 0) / totalMarked) * 100) : null;
 
-    return {
-      id: r.id,
-      date: d,
-      dayOfWeek: r.day_of_week || "",
-      time: `${r.start_time ? r.start_time.slice(0, 5) : ""} - ${r.end_time ? r.end_time.slice(0, 5) : ""}`,
-      slotLabel: matchedAct?.slot_label || r.slot_label || (r.period_slot_id ? `P${r.period_slot_id}` : "Session"),
-      branchId: Number(r.branch_id) || null,
-      branchName: bInfo?.name || "",
-      branchCode: bInfo?.code || bInfo?.name || "",
-      batch: r.batch || "Regular",
-      sectionName: r.section_name || null,
-      semester: r.semester_number || 1,
-      masterSubjectCode,
-      masterSubjectName,
-      masterFacultyName,
-      masterFacultyHrmsId,
-      todaySubjectCode,
-      todaySubjectName,
-      todayFacultyName,
-      todayFacultyHrmsId,
-      varianceType,
-      isConducted: Boolean(r.attendance_post_id),
-      presentCount: r.present_count || 0,
-      absentCount: r.absent_count || 0,
-      attendancePct,
-    };
-  });
+      return {
+        id: r.id,
+        date: d,
+        dayOfWeek: r.day_of_week || "",
+        time: `${r.start_time ? r.start_time.slice(0, 5) : ""} - ${r.end_time ? r.end_time.slice(0, 5) : ""}`,
+        slotLabel: matchedAct?.slot_label || r.slot_label || (r.period_slot_id ? `P${r.period_slot_id}` : "Session"),
+        branchId: Number(r.branch_id) || null,
+        branchName: bInfo?.name || "",
+        branchCode: bInfo?.code || bInfo?.name || "",
+        batch: r.batch || "Regular",
+        sectionName: r.section_name || null,
+        semester: r.semester_number || 1,
+        masterSubjectCode,
+        masterSubjectName,
+        masterFacultyName,
+        masterFacultyHrmsId,
+        todaySubjectCode,
+        todaySubjectName,
+        todayFacultyName,
+        todayFacultyHrmsId,
+        varianceType,
+        isConducted: Boolean(r.attendance_post_id),
+        presentCount: r.present_count || 0,
+        absentCount: r.absent_count || 0,
+        attendancePct,
+        enrolledCount: resolveEnrolledStrength(r.branch_id, bInfo?.code, r.batch, r.section_name, r.year_of_study) || ((r.present_count || 0) + (r.absent_count || 0)),
+      };
+    })
+    .filter((c): c is NonNullable<typeof c> => c !== null);
 
   // Merge scheduled master periods (including CRT, Library, Games, and special/custom classes)
   // so that every period of the day is counted and presented in the report
@@ -1355,6 +1555,22 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         const slot = m.period_slot_id || m.timing_slot_id;
         const b = String(m.batch || "").trim().toLowerCase().replace(/^batch\s*/i, "");
         const sec = m.section_name ? String(m.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+        const bInfo = branchMap.get(Number(m.branch_id));
+        const bCode = (bInfo?.code || "").trim().toUpperCase();
+        const bName = (bInfo?.name || "").trim().toUpperCase();
+        const bId = String(m.branch_id);
+        const validSecs =
+          validBatchSectionsMap.get(`${bCode}__${b}`) ||
+          validBatchSectionsMap.get(`${bName}__${b}`) ||
+          validBatchSectionsMap.get(`${bId}__${b}`) ||
+          validBatchSectionsMap.get(`${bCode}__YEAR${m.year_of_study}`) ||
+          validBatchSectionsMap.get(`${bName}__YEAR${m.year_of_study}`) ||
+          validBatchSectionsMap.get(`${bId}__YEAR${m.year_of_study}`);
+
+        // If section has 0 students enrolled in student db for this batch, skip phantom master entries!
+        if (sec && validSecs && validSecs.size > 0 && !validSecs.has(sec)) {
+          continue;
+        }
 
         const key1 = `${d}_te_${m.id}`;
         const key2 = `${d}_${slot}_${b}_${sec}`;
@@ -1438,6 +1654,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
             presentCount: 0,
             absentCount: 0,
             attendancePct: null,
+            enrolledCount: resolveEnrolledStrength(Number(m.branch_id), bInfo?.code, m.batch, m.section_name, Number(m.year_of_study) || 0),
           });
         }
       }
@@ -1504,11 +1721,23 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       relievedCount: number;
       substituteTakenCount: number;
       subjects: Set<string>;
+      totalPresent: number;
+      totalAbsent: number;
+      totalMarked: number;
     }
   >();
 
   // Initialize from Master Rows
   for (const m of masterRows) {
+    const bCode = (branchMap.get(m.branch_id)?.code || "").trim().toUpperCase();
+    const bId = String(m.branch_id);
+    const b = (m.batch || "").trim().replace(/^batch\s*/i, "");
+    const sec = m.section_name ? m.section_name.trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+    const validSecs = validBatchSectionsMap.get(`${bCode}__${b}`) || validBatchSectionsMap.get(`${bId}__${b}`);
+    if (sec && validSecs && validSecs.size > 0 && !validSecs.has(sec)) {
+      continue; // Skip phantom section with 0 students!
+    }
+
     const rawCode = m.subject_code || m.custom_label || "SPECIAL";
     if (rawCode) {
       const code = rawCode.trim();
@@ -1540,6 +1769,9 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         relievedCount: 0,
         substituteTakenCount: 0,
         subjects: new Set<string>(),
+        totalPresent: 0,
+        totalAbsent: 0,
+        totalMarked: 0,
       };
       existing.masterAssignedPeriods += Number(m.master_periods) || 0;
       if (m.subject_name) existing.subjects.add(m.subject_name.trim());
@@ -1582,8 +1814,14 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         relievedCount: 0,
         substituteTakenCount: 0,
         subjects: new Set<string>(),
+        totalPresent: 0,
+        totalAbsent: 0,
+        totalMarked: 0,
       };
       existing.classesConducted += Number(s.conducted_sessions) || 0;
+      existing.totalPresent = (existing.totalPresent || 0) + (Number(s.total_present) || 0);
+      existing.totalMarked = (existing.totalMarked || 0) + (Number(s.total_marked) || 0);
+      existing.totalAbsent = Math.max(0, existing.totalMarked - existing.totalPresent);
       if (s.subject_name) existing.subjects.add(s.subject_name.trim());
       facultyMap.set(hrms, existing);
     }
@@ -1664,6 +1902,9 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         relievedCount: 0,
         substituteTakenCount: 0,
         subjects: new Set<string>(),
+        totalPresent: 0,
+        totalAbsent: 0,
+        totalMarked: 0,
       };
       fac.substituteTakenCount++;
       facultyMap.set(hrms, fac);
@@ -1732,6 +1973,9 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         timesSwappedOut: s.timesSwappedOut,
         timesSwappedIn: s.timesSwappedIn,
         facultyNames: Array.from(s.facultyNames),
+        totalPresent: s.totalPresent || 0,
+        totalAbsent: Math.max(0, (s.totalMarked || 0) - (s.totalPresent || 0)),
+        totalMarked: s.totalMarked || 0,
         turnoutPct,
         attendancePct: effectiveAttendancePct,
       };
@@ -1739,16 +1983,26 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     .sort((a, b) => b.timesChanged - a.timesChanged || b.masterWeeklyPeriods - a.masterWeeklyPeriods);
 
   const faculties = Array.from(facultyMap.values())
-    .map((f) => ({
-      hrmsId: f.hrmsId,
-      facultyName: f.facultyName,
-      masterAssignedPeriods: f.masterAssignedPeriods,
-      classesConducted: f.classesConducted,
-      relievedCount: f.relievedCount,
-      substituteTakenCount: f.substituteTakenCount,
-      netTeachingCount: f.classesConducted || Math.max(0, f.masterAssignedPeriods - f.relievedCount + f.substituteTakenCount),
-      subjects: Array.from(f.subjects),
-    }))
+    .map((f) => {
+      const turnoutPct =
+        (f.totalMarked || 0) > 0
+          ? Math.round(((f.totalPresent || 0) / f.totalMarked) * 100)
+          : (f.classesConducted > 0 ? 100 : null);
+      return {
+        hrmsId: f.hrmsId,
+        facultyName: f.facultyName,
+        masterAssignedPeriods: f.masterAssignedPeriods,
+        classesConducted: f.classesConducted,
+        relievedCount: f.relievedCount,
+        substituteTakenCount: f.substituteTakenCount,
+        netTeachingCount: f.classesConducted || Math.max(0, f.masterAssignedPeriods - f.relievedCount + f.substituteTakenCount),
+        subjects: Array.from(f.subjects),
+        totalPresent: f.totalPresent || 0,
+        totalAbsent: f.totalAbsent || 0,
+        totalMarked: f.totalMarked || 0,
+        attendancePct: turnoutPct,
+      };
+    })
     .sort(
       (a, b) =>
         b.substituteTakenCount + b.relievedCount - (a.substituteTakenCount + a.relievedCount) ||
@@ -1899,29 +2153,77 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
   );
 
   const romanYears = ["I", "II", "III", "IV"];
-  const catalogClasses = classRows.map((r) => {
-    const y = r.year_of_study || 1;
-    const s = r.semester_number || 1;
-    const b = r.batch || "";
-    const rawSections = r.section_names
-      ? r.section_names.split(",").map((x) => x.trim()).filter(Boolean)
-      : [];
-    const yearRoman = romanYears[y - 1] || `${y}`;
-    const label = `${yearRoman} Year (Batch ${b})`;
-    return {
-      key: `${r.college_id}_${r.course_id}_${r.branch_id}_${b}_${y}_${s}`,
-      label,
-      collegeId: r.college_id,
-      courseId: r.course_id,
-      branchId: r.branch_id,
-      batch: b,
-      year: y,
-      semester: s,
-      sections: rawSections,
-    };
-  });
+  const catalogClasses = classRows
+    .map((r) => {
+      const y = r.year_of_study || 1;
+      const s = r.semester_number || 1;
+      const b = (r.batch || "").trim().replace(/^batch\s*/i, "");
+      const bInfo = branchMap.get(r.branch_id);
+      const bCode = (bInfo?.code || "").trim().toUpperCase();
+      const bName = (bInfo?.name || "").trim().toUpperCase();
+      const bId = String(r.branch_id);
 
-  const masterScheduledPeriods = masterScheduleRows.map((r) => {
+      const validSecs =
+        validBatchSectionsMap.get(`${bCode}__${b}`) ||
+        validBatchSectionsMap.get(`${bName}__${b}`) ||
+        validBatchSectionsMap.get(`${bId}__${b}`) ||
+        validBatchSectionsMap.get(`${bCode}__YEAR${y}`) ||
+        validBatchSectionsMap.get(`${bName}__YEAR${y}`) ||
+        validBatchSectionsMap.get(`${bId}__YEAR${y}`);
+
+      const rawSections = r.section_names
+        ? r.section_names.split(",").map((x) => x.trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "")).filter(Boolean)
+        : [];
+
+      // Filter sections: ONLY keep sections that actually exist in the student database!
+      let finalSections: string[] = [];
+      if (validSecs && validSecs.size > 0) {
+        finalSections = rawSections.filter((sec) => validSecs.has(sec));
+        if (finalSections.length === 0) {
+          finalSections = Array.from(validSecs).sort();
+        }
+      } else {
+        finalSections = rawSections;
+      }
+
+      const yearRoman = romanYears[y - 1] || `${y}`;
+      const label = `${yearRoman} Year (Batch ${b})`;
+      return {
+        key: `${r.college_id}_${r.course_id}_${r.branch_id}_${b}_${y}_${s}`,
+        label,
+        collegeId: r.college_id,
+        courseId: r.course_id,
+        branchId: r.branch_id,
+        batch: b,
+        year: y,
+        semester: s,
+        sections: Array.from(new Set(finalSections)).sort(),
+      };
+    })
+    .filter((c) => c.sections.length > 0 || !validBatchSectionsMap.has(`${branchMap.get(c.branchId)?.code || c.branchId}__${c.batch}`));
+
+  const masterScheduledPeriods = masterScheduleRows
+    .filter((r) => {
+      const bInfo = branchMap.get(Number(r.branch_id));
+      const bCode = (bInfo?.code || "").trim().toUpperCase();
+      const bName = (bInfo?.name || "").trim().toUpperCase();
+      const bId = String(r.branch_id);
+      const b = String(r.batch || "").trim().replace(/^batch\s*/i, "");
+      const sec = r.section_name ? String(r.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+      const validSecs =
+        validBatchSectionsMap.get(`${bCode}__${b}`) ||
+        validBatchSectionsMap.get(`${bName}__${b}`) ||
+        validBatchSectionsMap.get(`${bId}__${b}`) ||
+        validBatchSectionsMap.get(`${bCode}__YEAR${r.year_of_study}`) ||
+        validBatchSectionsMap.get(`${bName}__YEAR${r.year_of_study}`) ||
+        validBatchSectionsMap.get(`${bId}__YEAR${r.year_of_study}`);
+
+      if (sec && validSecs && validSecs.size > 0 && !validSecs.has(sec)) {
+        return false;
+      }
+      return true;
+    })
+    .map((r) => {
     const bInfo = branchMap.get(Number(r.branch_id));
     const start = r.start_time ? String(r.start_time).slice(0, 5) : "";
     const end = r.end_time ? String(r.end_time).slice(0, 5) : "";
@@ -1971,6 +2273,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     catalogSubjects,
     catalogFaculties,
     catalogClasses,
+    sectionStrengths: Object.fromEntries(sectionStrengthMap.entries()),
   };
 }
 
