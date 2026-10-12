@@ -12,12 +12,7 @@ import { apiFetch } from "@/lib/api";
 import {
   isTeachingStaffOnly,
   isSuperAdminUser,
-  isHodUser,
-  isClassTeacherUser,
-  isPrincipalOrVpUser,
   getDefaultDashboardMode,
-  getAvailableDashboardViews,
-  type DashboardMode,
 } from "@/lib/teaching-scope";
 import {
   BarChart,
@@ -108,25 +103,15 @@ import {
   UserCog,
   ArrowRight,
   ClipboardCheck,
-  Building2,
 } from "lucide-react";
 
 export function DashboardView() {
   const { user, authorization, hasAnyPermission, hasPermission } = useAuth();
   const { filters } = useAcademicContext();
   const teachingStaffOnly = isTeachingStaffOnly(authorization);
-  const isHod = isHodUser(authorization);
-  const isClassTeacher = isClassTeacherUser(authorization);
-  const isLeadership = isPrincipalOrVpUser(authorization);
   const superAdminUser = isSuperAdminUser(authorization);
 
-  const availableViews = useMemo(() => getAvailableDashboardViews(authorization), [authorization]);
-  const defaultMode = useMemo(() => getDefaultDashboardMode(authorization), [authorization]);
-  const [activeViewMode, setActiveViewMode] = useState<DashboardMode>(defaultMode);
-
-  useEffect(() => {
-    setActiveViewMode(defaultMode);
-  }, [defaultMode]);
+  const dashboardMode = useMemo(() => getDefaultDashboardMode(authorization), [authorization]);
 
   const canDashboard = hasAnyPermission("dashboard.view") && !teachingStaffOnly;
   const canAttendance = hasAnyPermission("attendance.view", "attendance.post");
@@ -398,84 +383,35 @@ export function DashboardView() {
     return "Here's what's happening in your organization today.";
   }, [authorization]);
 
-  const roleSwitcherBar = availableViews.length > 1 ? (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/95 border border-slate-200/90 px-3.5 py-2.5 rounded-xl shadow-xs backdrop-blur-xs">
-      <div className="flex items-center gap-2 overflow-x-auto">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 hidden sm:inline-flex items-center gap-1 shrink-0">
-          <UserCog className="h-3.5 w-3.5 text-slate-600" />
-          Dashboard View:
-        </span>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {availableViews.map((v) => {
-            const isActive = activeViewMode === v.mode;
-            return (
-              <button
-                key={v.mode}
-                type="button"
-                onClick={() => setActiveViewMode(v.mode)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  isActive
-                    ? "bg-navy-950 text-white shadow-xs"
-                    : "bg-slate-100/90 text-slate-700 hover:bg-slate-200/90 hover:text-navy-900"
-                }`}
-                title={v.description}
-              >
-                {v.mode === "admin" && <Building2 className="h-3.5 w-3.5 text-blue-400" />}
-                {v.mode === "hod" && <Sparkles className="h-3.5 w-3.5 text-cyan-400" />}
-                {v.mode === "teacher" && <GraduationCap className="h-3.5 w-3.5 text-amber-400" />}
-                <span>{v.label}</span>
-                {v.isPrimary && (
-                  <span
-                    className={`text-[9px] font-bold px-1 py-0.2 rounded uppercase ${
-                      isActive ? "bg-white/20 text-white" : "bg-slate-200 text-slate-600"
-                    }`}
-                  >
-                    Assigned
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="text-[11px] text-slate-500 font-medium shrink-0 flex items-center gap-1.5">
-        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-        <span>Assigned Role: <strong>{authorization?.roles?.[0]?.label || "Faculty"}</strong></span>
-      </div>
-    </div>
-  ) : null;
-
-  if (activeViewMode === "hod") {
+  // Direct role-based single dashboard view (no switcher/selection buttons)
+  if (dashboardMode === "hod") {
     return (
-      <div className="space-y-4">
-        {roleSwitcherBar}
-        <HodDashboard
-          userName={user?.name || "Dr. R. Kumar"}
-          departmentName={(user as { department?: string })?.department || "Computer Science & Engineering"}
-          roleLabel={authorization?.roles?.[0]?.label || "HOD - CSE"}
-        />
-      </div>
+      <HodDashboard
+        userName={user?.name || "Dr. R. Kumar"}
+        departmentName={(user as { department?: string })?.department || "Computer Science & Engineering"}
+        roleLabel={authorization?.roles?.[0]?.label || "HOD - CSE"}
+      />
     );
   }
 
-
-  if (isClassTeacher) {
-    return <ClassTeacherDashboard />;
+  if (dashboardMode === "class_teacher") {
+    return (
+      <ClassTeacherDashboard
+        academicYear={filters.academicYear}
+        date={filters.date}
+      />
+    );
   }
 
-  if (activeViewMode === "teacher") {
+  if (dashboardMode === "teacher") {
     return (
-      <div className="space-y-4">
-        {roleSwitcherBar}
-        <SubjectTeacherDashboard
-          userName={user?.name || "Faculty Member"}
-          departmentName={(user as { department?: string })?.department || "Department of CSE"}
-          roleLabel={authorization?.roles?.[0]?.label || "Subject Teacher"}
-          academicYear={filters.academicYear}
-          date={filters.date}
-        />
-      </div>
+      <SubjectTeacherDashboard
+        userName={user?.name || "Faculty Member"}
+        departmentName={(user as { department?: string })?.department || "Department of CSE"}
+        roleLabel={authorization?.roles?.[0]?.label || "Subject Teacher"}
+        academicYear={filters.academicYear}
+        date={filters.date}
+      />
     );
   }
 
@@ -485,7 +421,6 @@ export function DashboardView() {
 
   return (
     <div className="space-y-4 sm:space-y-6 pb-12">
-      {roleSwitcherBar}
 
       {/* SECTION A — HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
