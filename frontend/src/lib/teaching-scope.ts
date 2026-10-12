@@ -71,7 +71,7 @@ export function isTeachingStaffOnly(authorization: Authorization | null): boolea
   return !INSTITUTE_WIDE_PERMISSIONS.some((key) => perms.includes(key));
 }
 
-export type DashboardMode = "admin" | "hod" | "class_teacher" | "teacher";
+export type DashboardMode = "admin" | "hod" | "teacher";
 
 export type AvailableDashboardView = {
   mode: DashboardMode;
@@ -109,9 +109,9 @@ export function getDefaultDashboardMode(authorization: Authorization | null): Da
     return "hod";
   }
 
-  // Class Teacher -> Class Teacher & Section Dashboard
+  // Class Teacher -> Single Unified Academic Dashboard
   if (isClassTeacherUser(authorization)) {
-    return "class_teacher";
+    return "admin";
   }
 
   // Teaching staff only / Staff role -> Subject Teacher Dashboard
@@ -143,12 +143,26 @@ export function getAvailableDashboardViews(
     ];
   }
 
-  const views: AvailableDashboardView[] = [];
   const defaultMode = getDefaultDashboardMode(authorization);
   const isSuperAdmin = isSuperAdminUser(authorization);
   const isLeadership = isPrincipalOrVpUser(authorization);
   const isHod = isHodUser(authorization);
   const isClassTeacher = isClassTeacherUser(authorization);
+
+  // Class Teacher -> Single Unified Dashboard (no multi-dashboard switcher)
+  if (isClassTeacher) {
+    return [
+      {
+        mode: "admin",
+        label: "Academic Dashboard",
+        shortLabel: "Dashboard",
+        description: "Section & academic operations overview",
+        isPrimary: true,
+      },
+    ];
+  }
+
+  const views: AvailableDashboardView[] = [];
 
   // 1. Admin / Command Center
   if (isSuperAdmin || isLeadership || authorization.permissions?.includes("dashboard.view")) {
@@ -174,23 +188,12 @@ export function getAvailableDashboardViews(
     });
   }
 
-  // 3. Class Teacher & Section
-  if (isClassTeacher || isSuperAdmin || isLeadership) {
-    views.push({
-      mode: "class_teacher",
-      label: isClassTeacher ? "Class Teacher & Section" : "Class Teacher View",
-      shortLabel: "Class Teacher",
-      description: "Assigned section roster, today's attendance & mentoring",
-      isPrimary: defaultMode === "class_teacher",
-    });
-  }
-
-  // 4. Subject Teacher / Teaching Classes
+  // 3. Subject Teacher / Teaching Classes
   // Any faculty member or subject teacher has access to their personal teaching classes
   views.push({
     mode: "teacher",
     label:
-      isHod || isClassTeacher || isLeadership
+      isHod || isLeadership
         ? "My Teaching Classes"
         : "Subject Teacher Dashboard",
     shortLabel: "My Teaching",

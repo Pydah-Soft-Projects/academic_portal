@@ -30,6 +30,7 @@ import {
   syncStaffUserRolesForTimetableChanges,
 } from "./user-management.service.js";
 import { ensureSessionsForDate } from "./class-sessions.service.js";
+import { getCurrentAcademicYearLabel } from "./masters.service.js";
 import type { PoolConnection } from "mysql2/promise";
 
 export type TimetablePlannerFilters = {
@@ -3154,6 +3155,407 @@ export async function getTimetableRoster(
     current_year: r.current_year != null ? Number(r.current_year) : null,
     current_semester: r.current_semester != null ? Number(r.current_semester) : null,
   }));
+}
+
+export type TimetableOverviewClass = {
+  courseId: number;
+  courseName: string;
+  branchId: number;
+  branchName: string;
+  batch: string;
+  year: number;
+  semester: number;
+  section: string;
+  studentCount: number;
+  status: "published" | "drafted" | "pending";
+  planId: number | null;
+  versionNo: number | null;
+  updatedAt: string | null;
+};
+
+export type TimetableOverviewYearSem = {
+  year: number;
+  semester: number;
+  label: string;
+  total: number;
+  published: number;
+  drafted: number;
+  pending: number;
+  classes: TimetableOverviewClass[];
+};
+
+export type TimetableOverviewCollege = {
+  collegeId: number;
+  collegeName: string;
+  collegeCode: string;
+  totalClasses: number;
+  publishedCount: number;
+  draftedCount: number;
+  pendingCount: number;
+  yearSemBreakdown: TimetableOverviewYearSem[];
+};
+
+export type TimetableOverviewResult = {
+  academicYear: string;
+  colleges: TimetableOverviewCollege[];
+  summary: {
+    totalColleges: number;
+    totalClasses: number;
+    totalPublished: number;
+    totalDrafted: number;
+    totalPending: number;
+  };
+};
+
+export async function getTimetableOverview(
+  filters: TimetablePlannerFilters = {}
+): Promise<TimetableOverviewResult> {
+  const academicYear =
+    filters.academicYear && filters.academicYear !== "all"
+      ? filters.academicYear
+      : getCurrentAcademicYearLabel();
+
+  // 1. Fetch colleges
+  const collegeWhere: string[] = ["(is_active = 1 OR is_active IS NULL)"];
+  const collegeParams: unknown[] = [];
+  if (filters.collegeId) {
+    collegeWhere.push("id = ?");
+    collegeParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    collegeWhere.push(`id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    collegeParams.push(...filters.collegeIds);
+  }
+
+  const colleges = await queryStudent<
+    (RowDataPacket & { id: number; name: string; code: string | null })[]
+  >(
+    `
+    SELECT id, name, code
+    FROM colleges
+    WHERE ${collegeWhere.join(" AND ")}
+    ORDER BY name
+    `,
+    collegeParams
+  );
+
+  const collegeMap = new Map<number, TimetableOverviewCollege>();
+  for (const c of colleges) {
+    collegeMap.set(c.id, {
+      collegeId: c.id,
+      collegeName: c.name,
+      collegeCode: c.code || "",
+      totalClasses: 0,
+      publishedCount: 0,
+      draftedCount: 0,
+      pendingCount: 0,
+      yearSemBreakdown: [],
+    });
+  }
+
+  // 2. Fetch target classes from student database
+  const targetWhere: string[] = [
+    "(s.student_status = 'Regular' OR s.student_status IS NULL)",
+    "s.current_year IS NOT NULL",
+    "s.current_semester IS NOT NULL",
+    "TRIM(s.batch) <> ''",
+  ];
+  const targetParams: unknown[] = [];
+  if (filters.collegeId) {
+    targetWhere.push("c.id = ?");
+    targetParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    targetWhere.push(`c.id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    targetParams.push(...filters.collegeIds);
+  }
+
+  const targetRows = await queryStudent<
+    (RowDataPacket & {
+      college_id: number;
+      college_name: string;
+      college_code: string | null;
+      course_id: number;
+      course_name: string;
+      branch_id: number;
+      branch_name: string;
+      batch: string;
+      year: number;
+      semester: number;
+      section_name: string;
+      student_count: number;
+    })[]
+  >(
+    `
+    SELECT
+      c.id AS college_id,
+      c.name AS college_name,
+      c.code AS college_code,
+      cr.id AS course_id,
+      cr.name AS course_name,
+      cb.id AS branch_id,
+      cb.name AS branch_name,
+      TRIM(s.batch) AS batch,
+      s.current_year AS year,
+      s.current_semester AS semester,
+      TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name,
+      COUNT(DISTINCT s.id) AS student_count
+    FROM students s
+    JOIN course_branches cb ON cb.id = s.branch_id
+    JOIN courses cr ON cr.id = cb.course_id
+    JOIN colleges c ON c.id = cr.college_id
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE ${targetWhere.join(" AND ")}
+    GROUP BY
+      c.id, c.name, c.code, cr.id, cr.name, cb.id, cb.name,
+      TRIM(s.batch), s.current_year, s.current_semester,
+      TRIM(COALESCE(ss.section_name, s.section, 'A'))
+    HAVING COUNT(DISTINCT s.id) > 0
+    ORDER BY c.name, cr.name, cb.name, s.current_year, s.current_semester
+    `,
+    targetParams
+  );
+
+  // 3. Fetch timetable plans from academic database
+  const planWhere: string[] = ["status IN ('published', 'draft', 'in_review')"];
+  const planParams: unknown[] = [];
+  if (academicYear) {
+    planWhere.push("academic_year_label = ?");
+    planParams.push(academicYear);
+  }
+  if (filters.collegeId) {
+    planWhere.push("college_id = ?");
+    planParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    planWhere.push(`college_id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    planParams.push(...filters.collegeIds);
+  }
+
+  const plans = await queryAcademic<
+    (RowDataPacket & {
+      id: number;
+      college_id: number;
+      academic_year_label: string;
+      course_id: number;
+      branch_id: number;
+      batch: string;
+      year_of_study: number | null;
+      semester_number: number | null;
+      section_name: string | null;
+      status: string;
+      version_no: number;
+      updated_at: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      id,
+      college_id,
+      academic_year_label,
+      course_id,
+      branch_id,
+      batch,
+      year_of_study,
+      semester_number,
+      section_name,
+      status,
+      version_no,
+      updated_at
+    FROM ap_timetable_plans
+    WHERE ${planWhere.join(" AND ")}
+    ORDER BY id DESC
+    `,
+    planParams
+  );
+
+  type MatchedPlan = {
+    planId: number;
+    status: "published" | "drafted";
+    versionNo: number;
+    updatedAt: string | null;
+    year: number | null;
+    semester: number | null;
+    matched: boolean;
+    raw: (typeof plans)[0];
+  };
+
+  const planMap = new Map<string, MatchedPlan>();
+  const allActivePlans: MatchedPlan[] = [];
+
+  for (const p of plans) {
+    const sec = (p.section_name || "A").trim().toUpperCase();
+    const batch = (p.batch || "").trim().toUpperCase();
+    const key = `${p.college_id}:${p.course_id}:${p.branch_id}:${batch}:${p.semester_number}:${sec}`;
+    const isPub = p.status === "published";
+    const mappedStatus: "published" | "drafted" = isPub ? "published" : "drafted";
+
+    const item: MatchedPlan = {
+      planId: Number(p.id),
+      status: mappedStatus,
+      versionNo: Number(p.version_no) || 1,
+      updatedAt: p.updated_at ? String(p.updated_at) : null,
+      year: p.year_of_study != null ? Number(p.year_of_study) : null,
+      semester: p.semester_number != null ? Number(p.semester_number) : null,
+      matched: false,
+      raw: p,
+    };
+    allActivePlans.push(item);
+
+    const existing = planMap.get(key);
+    if (!existing || (!existing.status.includes("published") && isPub)) {
+      planMap.set(key, item);
+    }
+  }
+
+  const collegeBreakdowns = new Map<
+    number,
+    Map<
+      string,
+      {
+        year: number;
+        semester: number;
+        label: string;
+        classes: TimetableOverviewClass[];
+      }
+    >
+  >();
+
+  for (const c of colleges) {
+    collegeBreakdowns.set(c.id, new Map());
+  }
+
+  for (const row of targetRows) {
+    const studentCount = Number(row.student_count) || 0;
+    if (studentCount <= 0) continue;
+
+    const colBreakdown = collegeBreakdowns.get(row.college_id);
+    if (!colBreakdown) continue;
+
+    const sec = (row.section_name || "A").trim().toUpperCase();
+    const batch = (row.batch || "").trim().toUpperCase();
+    const key = `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:${sec}`;
+    const altKey = `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:*`;
+
+    let matched = planMap.get(key) || planMap.get(altKey);
+    let status: "published" | "drafted" | "pending" = "pending";
+    let planId: number | null = null;
+    let versionNo: number | null = null;
+    let updatedAt: string | null = null;
+
+    if (matched) {
+      matched.matched = true;
+      status = matched.status;
+      planId = matched.planId;
+      versionNo = matched.versionNo;
+      updatedAt = matched.updatedAt;
+    }
+
+    const ysKey = `${row.year}-${row.semester}`;
+    if (!colBreakdown.has(ysKey)) {
+      colBreakdown.set(ysKey, {
+        year: Number(row.year),
+        semester: Number(row.semester),
+        label: `Year ${row.year} • Sem ${row.semester}`,
+        classes: [],
+      });
+    }
+
+    colBreakdown.get(ysKey)!.classes.push({
+      courseId: Number(row.course_id),
+      courseName: row.course_name,
+      branchId: Number(row.branch_id),
+      branchName: row.branch_name,
+      batch: row.batch,
+      year: Number(row.year),
+      semester: Number(row.semester),
+      section: row.section_name || "A",
+      studentCount,
+      status,
+      planId,
+      versionNo,
+      updatedAt,
+    });
+  }
+
+  let totalClassesAll = 0;
+  let totalPubAll = 0;
+  let totalDraftAll = 0;
+  let totalPendAll = 0;
+
+  const resultColleges: TimetableOverviewCollege[] = [];
+
+  for (const c of colleges) {
+    const col = collegeMap.get(c.id)!;
+    const colBreakdown = collegeBreakdowns.get(c.id)!;
+
+    const yearSemList: TimetableOverviewYearSem[] = [];
+    let colTotal = 0;
+    let colPub = 0;
+    let colDraft = 0;
+    let colPend = 0;
+
+    const sortedYearSemKeys = Array.from(colBreakdown.keys()).sort((a, b) => {
+      const [yA, sA] = a.split("-").map(Number);
+      const [yB, sB] = b.split("-").map(Number);
+      if (yA !== yB) return yA - yB;
+      return sA - sB;
+    });
+
+    for (const key of sortedYearSemKeys) {
+      const item = colBreakdown.get(key)!;
+      const validClasses = item.classes.filter((cls) => cls.studentCount > 0);
+      if (validClasses.length === 0) continue;
+
+      let pub = 0;
+      let draft = 0;
+      let pend = 0;
+
+      for (const cls of validClasses) {
+        if (cls.status === "published") pub++;
+        else if (cls.status === "drafted") draft++;
+        else pend++;
+      }
+
+      colTotal += validClasses.length;
+      colPub += pub;
+      colDraft += draft;
+      colPend += pend;
+
+      yearSemList.push({
+        year: item.year,
+        semester: item.semester,
+        label: item.label,
+        total: validClasses.length,
+        published: pub,
+        drafted: draft,
+        pending: pend,
+        classes: validClasses,
+      });
+    }
+
+    col.totalClasses = colTotal;
+    col.publishedCount = colPub;
+    col.draftedCount = colDraft;
+    col.pendingCount = colPend;
+    col.yearSemBreakdown = yearSemList;
+
+    totalClassesAll += colTotal;
+    totalPubAll += colPub;
+    totalDraftAll += colDraft;
+    totalPendAll += colPend;
+
+    resultColleges.push(col);
+  }
+
+  return {
+    academicYear,
+    colleges: resultColleges,
+    summary: {
+      totalColleges: resultColleges.length,
+      totalClasses: totalClassesAll,
+      totalPublished: totalPubAll,
+      totalDrafted: totalDraftAll,
+      totalPending: totalPendAll,
+    },
+  };
 }
 
 export { getTimingTemplateDetail };

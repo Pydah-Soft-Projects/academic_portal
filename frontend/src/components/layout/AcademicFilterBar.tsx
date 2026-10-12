@@ -145,7 +145,8 @@ export function AcademicFilterBar({
       filters.collegeId === "all" ||
       filters.courseId === "all" ||
       filters.branchId === "all" ||
-      filters.batch === "all"
+      filters.batch === "all" ||
+      (filters.year !== "all" && filters.semester !== "all")
     ) {
       return;
     }

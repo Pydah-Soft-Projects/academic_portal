@@ -254,19 +254,19 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
       const merged = { ...prev, ...next };
 
       if (next.collegeId !== undefined && next.collegeId !== prev.collegeId) {
-        merged.courseId = "all";
-        merged.branchId = "all";
-        merged.batch = "all";
-        merged.section = "all";
+        if (next.courseId === undefined) merged.courseId = "all";
+        if (next.branchId === undefined) merged.branchId = "all";
+        if (next.batch === undefined) merged.batch = "all";
+        if (next.section === undefined) merged.section = "all";
       }
       if (next.courseId !== undefined && next.courseId !== prev.courseId) {
-        merged.branchId = "all";
-        merged.batch = "all";
-        merged.section = "all";
+        if (next.branchId === undefined) merged.branchId = "all";
+        if (next.batch === undefined) merged.batch = "all";
+        if (next.section === undefined) merged.section = "all";
       }
       if (next.branchId !== undefined && next.branchId !== prev.branchId) {
-        merged.batch = "all";
-        merged.section = "all";
+        if (next.batch === undefined) merged.batch = "all";
+        if (next.section === undefined) merged.section = "all";
       }
 
       return merged;

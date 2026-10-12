@@ -14,6 +14,7 @@ import {
   getCombinedSubjects,
   getTimetablePlanScope,
   getTimetablePlanner,
+  getTimetableOverview,
   getTimetableVersions,
   getTimingTemplateForFilters,
   getTimetableRoster,
@@ -93,6 +94,15 @@ timetablesRouter.get("/sections", requirePermission("timetable.view"), async (re
 timetablesRouter.get("/roster", requirePermission("timetable.view"), async (req: AuthedRequest, res, next) => {
   try {
     res.json({ data: await getTimetableRoster(filtersFromQuery(req)) });
+  } catch (error) {
+    sendAuthzError(res, error, next);
+  }
+});
+
+timetablesRouter.get("/overview", requirePermission("timetable.view"), async (req: AuthedRequest, res, next) => {
+  try {
+    const filters = filtersFromQuery(req);
+    res.json({ data: await getTimetableOverview(filters) });
   } catch (error) {
     sendAuthzError(res, error, next);
   }

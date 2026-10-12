@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
-import { ArrowUpDown, Check, FlaskConical, Layers, Plus, Printer, Search, Users } from "lucide-react";
+import { ArrowUpDown, Building2, Check, FlaskConical, Layers, Plus, Printer, Search, Users } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/cn";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
@@ -15,6 +15,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { apiFetch } from "@/lib/api";
 import { TimingEditorDrawer } from "@/features/timetables/TimingEditorDrawer";
 import { CombineSectionsModal } from "@/features/timetables/CombineSectionsModal";
+import { CollegeTimetablesOverview } from "@/features/timetables/CollegeTimetablesOverview";
 import {
   LabPeriodSelectionModal,
   AssignableSlot,
@@ -2095,7 +2096,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
 
   return (
     <div>
-      {!embedded ? (
+      {!embedded && (planner?.ready || filtersComplete) ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="hidden print:block">
             <h1 className="text-[28px] font-bold leading-tight text-navy-900">
@@ -2147,6 +2148,23 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                 <Layers className="mr-1.5 h-4 w-4 text-indigo-600" /> Combine Sections
               </Button>
             ) : null}
+            <Button
+              variant="secondary"
+              onClick={() =>
+                setFilters({
+                  collegeId: "all",
+                  courseId: "all",
+                  branchId: "all",
+                  batch: "all",
+                  year: "all",
+                  section: "all",
+                })
+              }
+              className="print:hidden border-slate-300 text-slate-700 hover:text-navy-900"
+              title="Return to Master Overview of all colleges"
+            >
+              <Building2 className="mr-1.5 h-4 w-4 text-slate-500" /> All Colleges Overview
+            </Button>
             {canPublish ? (
               <Button
                 disabled={!planner?.ready || busy || publishBlocked}
@@ -2166,14 +2184,31 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
         </div>
       ) : null}
 
-      {missingLabel ? (
-        <Card className="mb-4">
-          <p className="text-sm text-slate-600">{missingLabel}</p>
-        </Card>
-      ) : null}
-
       {loading ? (
-        <TimetablePlannerSkeleton />
+        <div className="mb-6">
+          <TimetablePlannerSkeleton />
+        </div>
+      ) : !filtersComplete ? (
+        <div className="mb-6">
+          <CollegeTimetablesOverview
+            academicYear={filters.academicYear}
+            selectedCollegeId={filters.collegeId}
+            onSelectCollege={(collegeId) => {
+              setFilters({ collegeId });
+            }}
+            onSelectClass={(cls) => {
+              setFilters({
+                collegeId: cls.collegeId,
+                courseId: cls.courseId,
+                branchId: cls.branchId,
+                batch: cls.batch,
+                year: cls.year,
+                semester: cls.semester,
+                section: cls.section,
+              });
+            }}
+          />
+        </div>
       ) : null}
 
       {error ? (

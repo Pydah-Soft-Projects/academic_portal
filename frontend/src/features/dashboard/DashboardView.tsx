@@ -388,6 +388,9 @@ export function DashboardView() {
     if (roleLabels.some((r) => r.includes("principal") || r.includes("director"))) {
       return "Here's what's happening in your college today.";
     }
+    if (roleLabels.some((r) => r.includes("class teacher") || r.includes("mentor"))) {
+      return "Here's what's happening in your section and classes today.";
+    }
     if (roleLabels.some((r) => r.includes("staff") || r.includes("faculty"))) {
       return "Here's what's happening in your classes today.";
     }
@@ -419,7 +422,6 @@ export function DashboardView() {
               >
                 {v.mode === "admin" && <Building2 className="h-3.5 w-3.5 text-blue-400" />}
                 {v.mode === "hod" && <Sparkles className="h-3.5 w-3.5 text-cyan-400" />}
-                {v.mode === "class_teacher" && <Users className="h-3.5 w-3.5 text-emerald-400" />}
                 {v.mode === "teacher" && <GraduationCap className="h-3.5 w-3.5 text-amber-400" />}
                 <span>{v.label}</span>
                 {v.isPrimary && (
@@ -457,21 +459,9 @@ export function DashboardView() {
     );
   }
 
-  if (activeViewMode === "class_teacher") {
-    return (
-      <div className="space-y-4">
-        {roleSwitcherBar}
-        <ClassTeacherDashboard
-          userName={user?.name || "Class Teacher"}
-          departmentName={(user as { department?: string })?.department || "Computer Science & Engineering"}
-          roleLabel={authorization?.roles?.[0]?.label || "Class Teacher & Mentor"}
-          sectionName="III Year - Section A"
-          academicYear={filters.academicYear}
-          date={filters.date}
-          onSwitchToTeaching={() => setActiveViewMode("teacher")}
-        />
-      </div>
-    );
+
+  if (isClassTeacher) {
+    return <ClassTeacherDashboard />;
   }
 
   if (activeViewMode === "teacher") {
