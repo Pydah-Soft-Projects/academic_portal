@@ -680,7 +680,6 @@ export async function getAllBatchesDailyTimetableData(filters: {
       continue; // Skip phantom cohort that has 0 students in the database!
     }
 
-    const key = `${b}_${y}_${s}_${sec || ""}`;
     const key = `${p.college_id}_${p.branch_id}_${b}_${y}_${s}_${sec || ""}`;
     if (!cohortsMap.has(key)) {
       cohortsMap.set(key, {
