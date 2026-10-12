@@ -15,6 +15,7 @@ import {
   setUserPermissions,
   syncAllTimetableStaffUsers,
   syncAllHrmsTeachingStaffUsers,
+  getUserManagementStats,
 } from "../services/user-management.service.js";
 
 export const usersRouter = Router();
@@ -85,6 +86,18 @@ usersRouter.get(
   async (_req, res, next) => {
     try {
       res.json({ data: await listApRoles() });
+    } catch (error) {
+      sendError(res, error, next);
+    }
+  },
+);
+
+usersRouter.get(
+  "/stats",
+  requirePermission("user_management.view", "user_management.manage_users"),
+  async (_req, res, next) => {
+    try {
+      res.json(await getUserManagementStats());
     } catch (error) {
       sendError(res, error, next);
     }

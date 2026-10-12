@@ -30,6 +30,7 @@ import {
   syncStaffUserRolesForTimetableChanges,
 } from "./user-management.service.js";
 import { ensureSessionsForDate } from "./class-sessions.service.js";
+import { getCurrentAcademicYearLabel } from "./masters.service.js";
 import type { PoolConnection } from "mysql2/promise";
 
 export type TimetablePlannerFilters = {
@@ -2302,6 +2303,506 @@ export async function combineTimetableSections(input: CombineSectionsInput) {
   };
 }
 
+export type CombinedBranchesOverviewFilters = {
+  collegeId: number;
+  courseId: number;
+  academicYear: string;
+  batch?: string | null;
+  year?: number | null;
+  semester: number;
+  section?: string | null;
+};
+
+export async function getCombinedBranchesOverview(filters: CombinedBranchesOverviewFilters) {
+  // 1. Get all branches for this course
+  const branchRows = await queryStudent<
+    (RowDataPacket & {
+      id: number;
+      name: string;
+      code: string | null;
+      course_id: number;
+      metadata?: string | unknown;
+    })[]
+  >(
+    `
+    SELECT id, name, code, course_id, metadata
+    FROM course_branches
+    WHERE course_id = ? AND (is_active = 1 OR is_active IS NULL)
+    ORDER BY name
+    `,
+    [filters.courseId],
+  );
+
+  const branchIds = branchRows.map((b) => b.id);
+  if (branchIds.length === 0) {
+    return { branches: [], timing: null };
+  }
+
+  // 2. Get active timing template for context
+  const timing = await getActiveTimingForContext({
+    collegeId: filters.collegeId,
+    academicYear: filters.academicYear,
+    semester: filters.semester,
+  });
+
+  // Resolve batch if not explicitly provided
+  const resolvedBatch =
+    filters.batch?.trim() ||
+    (filters.academicYear && filters.year
+      ? String(Number(filters.academicYear.slice(0, 4)) - (filters.year - 1))
+      : null);
+
+  // 3. Get plans for each branch
+  const secFilter = filters.section && filters.section !== "all" ? filters.section : null;
+  const planRows = await queryAcademic<(PlanRow & { timing_template_name?: string })[]>(
+    `
+    SELECT p.*, tt.name AS timing_template_name
+    FROM ap_timetable_plans p
+    LEFT JOIN ap_timing_templates tt ON tt.id = p.timing_template_id
+    WHERE p.academic_year_label = ?
+      AND p.college_id = ?
+      AND p.course_id = ?
+      AND p.branch_id IN (${branchIds.map(() => "?").join(",")})
+      AND (? IS NULL OR p.batch = ? OR p.batch = '' OR p.batch IS NULL)
+      AND p.semester_number = ?
+      AND (? IS NULL OR p.section_name = ? OR p.section_name IS NULL)
+      AND p.status IN ('published', 'in_review', 'draft')
+    ORDER BY FIELD(p.status, 'published', 'in_review', 'draft'), p.version_no DESC, p.id DESC
+    `,
+    [
+      filters.academicYear,
+      filters.collegeId,
+      filters.courseId,
+      ...branchIds,
+      resolvedBatch,
+      resolvedBatch,
+      filters.semester,
+      secFilter,
+      secFilter,
+    ],
+  );
+
+  // Group latest plan per branch
+  const planByBranch = new Map<number, PlanRow & { timing_template_name?: string }>();
+  for (const row of planRows) {
+    if (!planByBranch.has(row.branch_id)) {
+      planByBranch.set(row.branch_id, row);
+    }
+  }
+
+  // 4. For branches with plans, load their entries
+  const branchDetails = [];
+  for (const branch of branchRows) {
+    const plan = planByBranch.get(branch.id);
+    let entriesSummary: Array<{
+      id: number;
+      dayOfWeek: string;
+      timingSlotId: number;
+      subjectId: number | null;
+      subjectCode: string | null;
+      subjectName: string | null;
+      subjectTypeSnapshot?: string | null;
+      entryType: string;
+      facultyStaffLinkId: number | null;
+      facultyName: string | null;
+      facultyHrmsId: string | null;
+      roomLabel: string | null;
+      batchLabel: string | null;
+      customLabel: string | null;
+      weeklyRotation?: boolean;
+      rotationPattern?: string | null;
+    }> = [];
+
+    if (plan) {
+      const rawEntries = await loadEntries(plan.id);
+      entriesSummary = rawEntries.map((e) => ({
+        id: e.id,
+        dayOfWeek: e.day_of_week,
+        timingSlotId: e.timing_slot_id ?? e.period_slot_id,
+        subjectId: e.subject_id,
+        subjectCode: e.subject_code,
+        subjectName: e.subject_name,
+        subjectTypeSnapshot: e.subject_type_snapshot,
+        entryType: e.entry_type,
+        facultyStaffLinkId: e.faculty_staff_link_id,
+        facultyName: e.faculty_name ?? null,
+        facultyHrmsId: e.faculty_hrms_id ?? null,
+        roomLabel: e.room_label,
+        batchLabel: e.batch_label ?? null,
+        customLabel: e.custom_label ?? null,
+        weeklyRotation: Boolean(e.weekly_rotation),
+        rotationPattern: e.rotation_pattern ?? null,
+      }));
+    }
+
+    branchDetails.push({
+      branchId: branch.id,
+      branchName: branch.name,
+      branchCode: branch.code,
+      plan: plan
+        ? {
+            id: plan.id,
+            status: plan.status,
+            versionNo: plan.version_no,
+            timingTemplateName: plan.timing_template_name ?? null,
+            sectionName: plan.section_name ?? null,
+            notes: plan.notes ?? null,
+            assignedCount: entriesSummary.length,
+            entries: entriesSummary,
+          }
+        : null,
+    });
+  }
+
+  return {
+    branches: branchDetails,
+    timing: timing
+      ? {
+          id: timing.id,
+          name: timing.name,
+          academicYear: timing.academicYear,
+          semester: timing.semester,
+          slots: timing.slots,
+        }
+      : null,
+  };
+}
+
+export async function getCombinedSubjects(filters: {
+  collegeId: number;
+  courseId: number;
+  batch?: string | null;
+  year?: number | null;
+  semester: number;
+  branchIds: number[];
+  academicYear?: string | null;
+}) {
+  if (!filters.branchIds || filters.branchIds.length === 0) {
+    return [];
+  }
+
+  const resolvedBatch =
+    filters.batch?.trim() ||
+    (filters.academicYear && filters.year
+      ? String(Number(filters.academicYear.slice(0, 4)) - (filters.year - 1))
+      : null);
+
+  const where: string[] = [
+    "sme.collegeId = ?",
+    "sme.courseId = ?",
+    `sme.branchId IN (${filters.branchIds.map(() => "?").join(",")})`,
+    "(s.status = 'active' OR s.status IS NULL OR s.status = '')",
+  ];
+  const params: unknown[] = [
+    filters.collegeId,
+    filters.courseId,
+    ...filters.branchIds,
+  ];
+
+  if (resolvedBatch) {
+    where.push("(sme.batch = ? OR sme.batch IS NULL OR sme.batch = '')");
+    params.push(resolvedBatch);
+  }
+
+  if (filters.year != null) {
+    where.push("sme.yearOfStudy = ?");
+    params.push(filters.year);
+  }
+  if (filters.semester != null) {
+    where.push("sme.semester = ?");
+    params.push(filters.semester);
+  }
+
+  const rows = await queryExam<
+    (RowDataPacket & {
+      id: number;
+      code: string;
+      name: string;
+      type: string;
+      semester: number | null;
+      yearOfStudy: number | null;
+      branchId: number;
+      branchName: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      s.id,
+      s.code,
+      s.name,
+      s.type,
+      sme.semester,
+      sme.yearOfStudy,
+      sme.branchId,
+      sme.branchName
+    FROM subject_mapping_entries sme
+    INNER JOIN subjects s ON s.id = sme.subjectId
+    WHERE ${where.join(" AND ")}
+    ORDER BY s.code, sme.id
+    LIMIT 400
+    `,
+    params,
+  );
+
+  const subjectMap = new Map<
+    number,
+    {
+      id: number;
+      code: string;
+      name: string;
+      type: string;
+      semester: number | null;
+      year: number | null;
+      branchIds: number[];
+      branchNames: string[];
+      isCommon: boolean;
+    }
+  >();
+
+  for (const r of rows) {
+    const existing = subjectMap.get(r.id);
+    if (!existing) {
+      subjectMap.set(r.id, {
+        id: r.id,
+        code: r.code,
+        name: r.name,
+        type: r.type,
+        semester: r.semester,
+        year: r.yearOfStudy,
+        branchIds: [r.branchId],
+        branchNames: r.branchName ? [r.branchName] : [],
+        isCommon: false,
+      });
+    } else {
+      if (!existing.branchIds.includes(r.branchId)) {
+        existing.branchIds.push(r.branchId);
+      }
+      if (r.branchName && !existing.branchNames.includes(r.branchName)) {
+        existing.branchNames.push(r.branchName);
+      }
+    }
+  }
+
+  const totalSelectedBranches = filters.branchIds.length;
+  const list = Array.from(subjectMap.values()).map((s) => ({
+    ...s,
+    isCommon: totalSelectedBranches > 1 && s.branchIds.length >= totalSelectedBranches,
+  }));
+
+  return list.sort((a, b) => {
+    if (a.isCommon && !b.isCommon) return -1;
+    if (!a.isCommon && b.isCommon) return 1;
+    return a.code.localeCompare(b.code);
+  });
+}
+
+export async function saveCombinedTimetable(input: {
+  collegeId: number;
+  courseId: number;
+  branchIds: number[];
+  academicYear: string;
+  batch?: string | null;
+  year?: number | null;
+  semester: number;
+  section?: string | null;
+  notes?: string | null;
+  assignments: AssignmentInput[];
+  publish?: boolean;
+  actorUserId?: number | null;
+  ipAddress?: string | null;
+}) {
+  const branchIds = (input.branchIds ?? []).map(Number).filter((id) => id > 0);
+  if (branchIds.length === 0) {
+    throw new Error("Please select at least one branch for the combination.");
+  }
+
+  const resolvedBatch =
+    input.batch?.trim() ||
+    (input.academicYear && input.year
+      ? String(Number(input.academicYear.slice(0, 4)) - (input.year - 1))
+      : String(Number(input.academicYear.slice(0, 4))));
+
+  const results: Array<{
+    branchId: number;
+    planId: number;
+    status: string;
+    versionNo: number;
+    assignedCount: number;
+  }> = [];
+
+  for (const branchId of branchIds) {
+    const draftResult = await saveTimetableDraft({
+      collegeId: input.collegeId,
+      courseId: input.courseId,
+      branchId,
+      academicYear: input.academicYear,
+      batch: resolvedBatch,
+      year: input.year ?? null,
+      semester: input.semester,
+      section: input.section && input.section !== "all" ? input.section : null,
+      notes: input.notes ?? `Combined classes across ${branchIds.length} branches`,
+      assignments: input.assignments,
+      actorUserId: input.actorUserId,
+      ipAddress: input.ipAddress,
+    });
+
+    let finalStatus = draftResult.status;
+    let finalVersion = draftResult.versionNo;
+
+    if (input.publish) {
+      try {
+        const pubResult = await publishTimetablePlan(draftResult.planId, {
+          actorUserId: input.actorUserId,
+          ipAddress: input.ipAddress,
+        });
+        finalStatus = pubResult.status;
+        finalVersion = pubResult.versionNo;
+      } catch (pubErr) {
+        console.warn(`Could not auto-publish combined timetable for branch ${branchId}:`, pubErr);
+      }
+    }
+
+    results.push({
+      branchId,
+      planId: draftResult.planId,
+      status: finalStatus,
+      versionNo: finalVersion,
+      assignedCount: input.assignments.length,
+    });
+  }
+
+  return {
+    success: true,
+    totalBranches: branchIds.length,
+    totalAssignments: input.assignments.length,
+    published: Boolean(input.publish),
+    results,
+    message: `Successfully ${input.publish ? "published" : "saved draft"} combined timetable for ${branchIds.length} branches (${input.assignments.length} periods assigned).`,
+  };
+}
+
+export async function cloneCombinedTimetable(input: {
+  collegeId: number;
+  courseId: number;
+  sourceBranchId: number;
+  sourceSection?: string | null;
+  targetBranchIds: number[];
+  academicYear: string;
+  batch: string;
+  year?: number | null;
+  semester: number;
+  publish?: boolean;
+  actorUserId?: number | null;
+  ipAddress?: string | null;
+}) {
+  const targetBranchIds = (input.targetBranchIds ?? [])
+    .map(Number)
+    .filter((id) => id > 0 && id !== input.sourceBranchId);
+
+  if (targetBranchIds.length === 0) {
+    throw new Error("Please select at least one target branch different from the source branch.");
+  }
+
+  const secFilter = input.sourceSection && input.sourceSection !== "all" ? input.sourceSection : null;
+  const sourcePlans = await queryAcademic<PlanRow[]>(
+    `
+    SELECT * FROM ap_timetable_plans
+    WHERE academic_year_label = ?
+      AND college_id = ?
+      AND course_id = ?
+      AND branch_id = ?
+      AND batch = ?
+      AND semester_number = ?
+      AND (? IS NULL OR section_name = ? OR section_name IS NULL)
+      AND status IN ('published', 'in_review', 'draft')
+    ORDER BY CASE status WHEN 'published' THEN 1 WHEN 'in_review' THEN 2 ELSE 3 END, id DESC
+    LIMIT 1
+    `,
+    [
+      input.academicYear,
+      input.collegeId,
+      input.courseId,
+      input.sourceBranchId,
+      input.batch,
+      input.semester,
+      secFilter,
+      secFilter,
+    ],
+  );
+
+  const sourcePlan = sourcePlans[0];
+  if (!sourcePlan) {
+    throw new Error("No timetable plan found for the source branch.");
+  }
+
+  const sourceEntries = await loadEntries(sourcePlan.id);
+  if (sourceEntries.length === 0) {
+    throw new Error("Source branch timetable has no periods assigned yet.");
+  }
+
+  const sourceSlots = sourcePlan.timing_template_id
+    ? await listTimingSlots(sourcePlan.timing_template_id)
+    : [];
+
+  const targetTiming = await getActiveTimingForContext({
+    collegeId: input.collegeId,
+    academicYear: input.academicYear,
+    semester: input.semester,
+  });
+  if (!targetTiming) {
+    throw new Error("Active timing template not found for year/semester.");
+  }
+
+  const assignments: AssignmentInput[] = [];
+  for (const entry of sourceEntries) {
+    const srcSlotId = entry.timing_slot_id ?? entry.period_slot_id;
+    const srcSlot = sourceSlots.find((s) => s.id === srcSlotId);
+    if (!srcSlot || !srcSlot.isAssignable) continue;
+    const targetSlot = targetTiming.slots.find(
+      (s) =>
+        s.dayOfWeek === srcSlot.dayOfWeek &&
+        s.label === srcSlot.label &&
+        s.startTime === srcSlot.startTime &&
+        s.endTime === srcSlot.endTime &&
+        s.isAssignable,
+    );
+    if (!targetSlot) continue;
+    assignments.push({
+      dayOfWeek: entry.day_of_week,
+      timingSlotId: targetSlot.id,
+      subjectId: entry.subject_id,
+      subjectCode: entry.subject_code,
+      subjectName: entry.subject_name,
+      entryType: (entry.entry_type as "theory" | "lab" | "other") || "theory",
+      facultyStaffLinkId: entry.faculty_staff_link_id,
+      roomLabel: entry.room_label,
+      customLabel: entry.custom_label,
+      batchLabel: entry.batch_label ?? "",
+      weeklyRotation: Boolean(entry.weekly_rotation),
+      rotationPattern: entry.rotation_pattern ?? null,
+    });
+  }
+
+  if (assignments.length === 0) {
+    throw new Error("Could not map any period slots from the source branch to the target timing template.");
+  }
+
+  return saveCombinedTimetable({
+    collegeId: input.collegeId,
+    courseId: input.courseId,
+    branchIds: targetBranchIds,
+    academicYear: input.academicYear,
+    batch: input.batch,
+    year: input.year,
+    semester: input.semester,
+    notes: `Replicated from Branch #${input.sourceBranchId} (Plan #${sourcePlan.id})`,
+    assignments,
+    publish: input.publish,
+    actorUserId: input.actorUserId,
+    ipAddress: input.ipAddress,
+  });
+}
+
 export async function getTimetableCoverage(filters: TimetablePlannerFilters = {}) {
   const where: string[] = ["1=1"];
   const params: unknown[] = [];
@@ -2654,6 +3155,407 @@ export async function getTimetableRoster(
     current_year: r.current_year != null ? Number(r.current_year) : null,
     current_semester: r.current_semester != null ? Number(r.current_semester) : null,
   }));
+}
+
+export type TimetableOverviewClass = {
+  courseId: number;
+  courseName: string;
+  branchId: number;
+  branchName: string;
+  batch: string;
+  year: number;
+  semester: number;
+  section: string;
+  studentCount: number;
+  status: "published" | "drafted" | "pending";
+  planId: number | null;
+  versionNo: number | null;
+  updatedAt: string | null;
+};
+
+export type TimetableOverviewYearSem = {
+  year: number;
+  semester: number;
+  label: string;
+  total: number;
+  published: number;
+  drafted: number;
+  pending: number;
+  classes: TimetableOverviewClass[];
+};
+
+export type TimetableOverviewCollege = {
+  collegeId: number;
+  collegeName: string;
+  collegeCode: string;
+  totalClasses: number;
+  publishedCount: number;
+  draftedCount: number;
+  pendingCount: number;
+  yearSemBreakdown: TimetableOverviewYearSem[];
+};
+
+export type TimetableOverviewResult = {
+  academicYear: string;
+  colleges: TimetableOverviewCollege[];
+  summary: {
+    totalColleges: number;
+    totalClasses: number;
+    totalPublished: number;
+    totalDrafted: number;
+    totalPending: number;
+  };
+};
+
+export async function getTimetableOverview(
+  filters: TimetablePlannerFilters = {}
+): Promise<TimetableOverviewResult> {
+  const academicYear =
+    filters.academicYear && filters.academicYear !== "all"
+      ? filters.academicYear
+      : getCurrentAcademicYearLabel();
+
+  // 1. Fetch colleges
+  const collegeWhere: string[] = ["(is_active = 1 OR is_active IS NULL)"];
+  const collegeParams: unknown[] = [];
+  if (filters.collegeId) {
+    collegeWhere.push("id = ?");
+    collegeParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    collegeWhere.push(`id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    collegeParams.push(...filters.collegeIds);
+  }
+
+  const colleges = await queryStudent<
+    (RowDataPacket & { id: number; name: string; code: string | null })[]
+  >(
+    `
+    SELECT id, name, code
+    FROM colleges
+    WHERE ${collegeWhere.join(" AND ")}
+    ORDER BY name
+    `,
+    collegeParams
+  );
+
+  const collegeMap = new Map<number, TimetableOverviewCollege>();
+  for (const c of colleges) {
+    collegeMap.set(c.id, {
+      collegeId: c.id,
+      collegeName: c.name,
+      collegeCode: c.code || "",
+      totalClasses: 0,
+      publishedCount: 0,
+      draftedCount: 0,
+      pendingCount: 0,
+      yearSemBreakdown: [],
+    });
+  }
+
+  // 2. Fetch target classes from student database
+  const targetWhere: string[] = [
+    "(s.student_status = 'Regular' OR s.student_status IS NULL)",
+    "s.current_year IS NOT NULL",
+    "s.current_semester IS NOT NULL",
+    "TRIM(s.batch) <> ''",
+  ];
+  const targetParams: unknown[] = [];
+  if (filters.collegeId) {
+    targetWhere.push("c.id = ?");
+    targetParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    targetWhere.push(`c.id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    targetParams.push(...filters.collegeIds);
+  }
+
+  const targetRows = await queryStudent<
+    (RowDataPacket & {
+      college_id: number;
+      college_name: string;
+      college_code: string | null;
+      course_id: number;
+      course_name: string;
+      branch_id: number;
+      branch_name: string;
+      batch: string;
+      year: number;
+      semester: number;
+      section_name: string;
+      student_count: number;
+    })[]
+  >(
+    `
+    SELECT
+      c.id AS college_id,
+      c.name AS college_name,
+      c.code AS college_code,
+      cr.id AS course_id,
+      cr.name AS course_name,
+      cb.id AS branch_id,
+      cb.name AS branch_name,
+      TRIM(s.batch) AS batch,
+      s.current_year AS year,
+      s.current_semester AS semester,
+      TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name,
+      COUNT(DISTINCT s.id) AS student_count
+    FROM students s
+    JOIN course_branches cb ON cb.id = s.branch_id
+    JOIN courses cr ON cr.id = cb.course_id
+    JOIN colleges c ON c.id = cr.college_id
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE ${targetWhere.join(" AND ")}
+    GROUP BY
+      c.id, c.name, c.code, cr.id, cr.name, cb.id, cb.name,
+      TRIM(s.batch), s.current_year, s.current_semester,
+      TRIM(COALESCE(ss.section_name, s.section, 'A'))
+    HAVING COUNT(DISTINCT s.id) > 0
+    ORDER BY c.name, cr.name, cb.name, s.current_year, s.current_semester
+    `,
+    targetParams
+  );
+
+  // 3. Fetch timetable plans from academic database
+  const planWhere: string[] = ["status IN ('published', 'draft', 'in_review')"];
+  const planParams: unknown[] = [];
+  if (academicYear) {
+    planWhere.push("academic_year_label = ?");
+    planParams.push(academicYear);
+  }
+  if (filters.collegeId) {
+    planWhere.push("college_id = ?");
+    planParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    planWhere.push(`college_id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    planParams.push(...filters.collegeIds);
+  }
+
+  const plans = await queryAcademic<
+    (RowDataPacket & {
+      id: number;
+      college_id: number;
+      academic_year_label: string;
+      course_id: number;
+      branch_id: number;
+      batch: string;
+      year_of_study: number | null;
+      semester_number: number | null;
+      section_name: string | null;
+      status: string;
+      version_no: number;
+      updated_at: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      id,
+      college_id,
+      academic_year_label,
+      course_id,
+      branch_id,
+      batch,
+      year_of_study,
+      semester_number,
+      section_name,
+      status,
+      version_no,
+      updated_at
+    FROM ap_timetable_plans
+    WHERE ${planWhere.join(" AND ")}
+    ORDER BY id DESC
+    `,
+    planParams
+  );
+
+  type MatchedPlan = {
+    planId: number;
+    status: "published" | "drafted";
+    versionNo: number;
+    updatedAt: string | null;
+    year: number | null;
+    semester: number | null;
+    matched: boolean;
+    raw: (typeof plans)[0];
+  };
+
+  const planMap = new Map<string, MatchedPlan>();
+  const allActivePlans: MatchedPlan[] = [];
+
+  for (const p of plans) {
+    const sec = (p.section_name || "A").trim().toUpperCase();
+    const batch = (p.batch || "").trim().toUpperCase();
+    const key = `${p.college_id}:${p.course_id}:${p.branch_id}:${batch}:${p.semester_number}:${sec}`;
+    const isPub = p.status === "published";
+    const mappedStatus: "published" | "drafted" = isPub ? "published" : "drafted";
+
+    const item: MatchedPlan = {
+      planId: Number(p.id),
+      status: mappedStatus,
+      versionNo: Number(p.version_no) || 1,
+      updatedAt: p.updated_at ? String(p.updated_at) : null,
+      year: p.year_of_study != null ? Number(p.year_of_study) : null,
+      semester: p.semester_number != null ? Number(p.semester_number) : null,
+      matched: false,
+      raw: p,
+    };
+    allActivePlans.push(item);
+
+    const existing = planMap.get(key);
+    if (!existing || (!existing.status.includes("published") && isPub)) {
+      planMap.set(key, item);
+    }
+  }
+
+  const collegeBreakdowns = new Map<
+    number,
+    Map<
+      string,
+      {
+        year: number;
+        semester: number;
+        label: string;
+        classes: TimetableOverviewClass[];
+      }
+    >
+  >();
+
+  for (const c of colleges) {
+    collegeBreakdowns.set(c.id, new Map());
+  }
+
+  for (const row of targetRows) {
+    const studentCount = Number(row.student_count) || 0;
+    if (studentCount <= 0) continue;
+
+    const colBreakdown = collegeBreakdowns.get(row.college_id);
+    if (!colBreakdown) continue;
+
+    const sec = (row.section_name || "A").trim().toUpperCase();
+    const batch = (row.batch || "").trim().toUpperCase();
+    const key = `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:${sec}`;
+    const altKey = `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:*`;
+
+    let matched = planMap.get(key) || planMap.get(altKey);
+    let status: "published" | "drafted" | "pending" = "pending";
+    let planId: number | null = null;
+    let versionNo: number | null = null;
+    let updatedAt: string | null = null;
+
+    if (matched) {
+      matched.matched = true;
+      status = matched.status;
+      planId = matched.planId;
+      versionNo = matched.versionNo;
+      updatedAt = matched.updatedAt;
+    }
+
+    const ysKey = `${row.year}-${row.semester}`;
+    if (!colBreakdown.has(ysKey)) {
+      colBreakdown.set(ysKey, {
+        year: Number(row.year),
+        semester: Number(row.semester),
+        label: `Year ${row.year} • Sem ${row.semester}`,
+        classes: [],
+      });
+    }
+
+    colBreakdown.get(ysKey)!.classes.push({
+      courseId: Number(row.course_id),
+      courseName: row.course_name,
+      branchId: Number(row.branch_id),
+      branchName: row.branch_name,
+      batch: row.batch,
+      year: Number(row.year),
+      semester: Number(row.semester),
+      section: row.section_name || "A",
+      studentCount,
+      status,
+      planId,
+      versionNo,
+      updatedAt,
+    });
+  }
+
+  let totalClassesAll = 0;
+  let totalPubAll = 0;
+  let totalDraftAll = 0;
+  let totalPendAll = 0;
+
+  const resultColleges: TimetableOverviewCollege[] = [];
+
+  for (const c of colleges) {
+    const col = collegeMap.get(c.id)!;
+    const colBreakdown = collegeBreakdowns.get(c.id)!;
+
+    const yearSemList: TimetableOverviewYearSem[] = [];
+    let colTotal = 0;
+    let colPub = 0;
+    let colDraft = 0;
+    let colPend = 0;
+
+    const sortedYearSemKeys = Array.from(colBreakdown.keys()).sort((a, b) => {
+      const [yA, sA] = a.split("-").map(Number);
+      const [yB, sB] = b.split("-").map(Number);
+      if (yA !== yB) return yA - yB;
+      return sA - sB;
+    });
+
+    for (const key of sortedYearSemKeys) {
+      const item = colBreakdown.get(key)!;
+      const validClasses = item.classes.filter((cls) => cls.studentCount > 0);
+      if (validClasses.length === 0) continue;
+
+      let pub = 0;
+      let draft = 0;
+      let pend = 0;
+
+      for (const cls of validClasses) {
+        if (cls.status === "published") pub++;
+        else if (cls.status === "drafted") draft++;
+        else pend++;
+      }
+
+      colTotal += validClasses.length;
+      colPub += pub;
+      colDraft += draft;
+      colPend += pend;
+
+      yearSemList.push({
+        year: item.year,
+        semester: item.semester,
+        label: item.label,
+        total: validClasses.length,
+        published: pub,
+        drafted: draft,
+        pending: pend,
+        classes: validClasses,
+      });
+    }
+
+    col.totalClasses = colTotal;
+    col.publishedCount = colPub;
+    col.draftedCount = colDraft;
+    col.pendingCount = colPend;
+    col.yearSemBreakdown = yearSemList;
+
+    totalClassesAll += colTotal;
+    totalPubAll += colPub;
+    totalDraftAll += colDraft;
+    totalPendAll += colPend;
+
+    resultColleges.push(col);
+  }
+
+  return {
+    academicYear,
+    colleges: resultColleges,
+    summary: {
+      totalColleges: resultColleges.length,
+      totalClasses: totalClassesAll,
+      totalPublished: totalPubAll,
+      totalDrafted: totalDraftAll,
+      totalPending: totalPendAll,
+    },
+  };
 }
 
 export { getTimingTemplateDetail };

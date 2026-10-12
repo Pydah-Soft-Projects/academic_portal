@@ -196,12 +196,14 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
             data.academicYears[0]?.label ||
             "";
 
-          // If the stored/previous academic year is empty, invalid, or an old bugged value (e.g. 2002-2003, 2001-2002),
-          // or is not found in the valid academic years list, use the current academic year default.
+          // If the stored/previous academic year is empty, invalid, an old bugged value (e.g. 2002-2003, 2001-2002),
+          // or a premature future year (e.g. 2027-2028), use the current academic year default.
           const isInvalidPrevYear =
             !prev.academicYear ||
             prev.academicYear === "2002-2003" ||
             prev.academicYear === "2001-2002" ||
+            prev.academicYear === "2027-2028" ||
+            parseInt(prev.academicYear.slice(0, 4), 10) > new Date().getFullYear() ||
             !data.academicYears.some((y) => y.label === prev.academicYear);
 
           const academicYear = isInvalidPrevYear ? defaultYear : prev.academicYear;
@@ -252,19 +254,19 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
       const merged = { ...prev, ...next };
 
       if (next.collegeId !== undefined && next.collegeId !== prev.collegeId) {
-        merged.courseId = "all";
-        merged.branchId = "all";
-        merged.batch = "all";
-        merged.section = "all";
+        if (next.courseId === undefined) merged.courseId = "all";
+        if (next.branchId === undefined) merged.branchId = "all";
+        if (next.batch === undefined) merged.batch = "all";
+        if (next.section === undefined) merged.section = "all";
       }
       if (next.courseId !== undefined && next.courseId !== prev.courseId) {
-        merged.branchId = "all";
-        merged.batch = "all";
-        merged.section = "all";
+        if (next.branchId === undefined) merged.branchId = "all";
+        if (next.batch === undefined) merged.batch = "all";
+        if (next.section === undefined) merged.section = "all";
       }
       if (next.branchId !== undefined && next.branchId !== prev.branchId) {
-        merged.batch = "all";
-        merged.section = "all";
+        if (next.batch === undefined) merged.batch = "all";
+        if (next.section === undefined) merged.section = "all";
       }
 
       return merged;

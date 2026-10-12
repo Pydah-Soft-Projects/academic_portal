@@ -64,11 +64,34 @@ function collegeDraftReady(
   });
 }
 
+const HIERARCHY_ORDER: Record<string, number> = {
+  super_admin: 1,
+  principal: 2,
+  vice_principal: 3,
+  hod: 4,
+  class_teacher: 5,
+  mentor: 5,
+  staff: 6,
+  faculty: 6,
+};
+
 export function CreateUserPanel(props: Props) {
-  const creatableRoles = useMemo(
-    () => props.roles.filter((r) => r.roleKey !== "super_admin" && r.isActive !== false),
-    [props.roles],
-  );
+  const creatableRoles = useMemo(() => {
+    const list = [...props.roles];
+    if (!list.some((r) => r.roleKey === "class_teacher")) {
+      list.push({
+        id: 9999,
+        roleKey: "class_teacher",
+        label: "Class Teacher",
+        description: "Class Teacher / Section In-Charge — section roster, mentoring & intervention",
+        isGlobalCapable: false,
+        permissions: [],
+      });
+    }
+    return list
+      .filter((r) => r.roleKey !== "super_admin" && r.isActive !== false)
+      .sort((a, b) => (HIERARCHY_ORDER[a.roleKey] ?? 99) - (HIERARCHY_ORDER[b.roleKey] ?? 99));
+  }, [props.roles]);
 
   const [importOpen, setImportOpen] = useState(false);
   const [selected, setSelected] = useState<HrmsCandidate | null>(null);
@@ -389,16 +412,52 @@ export function CreateUserPanel(props: Props) {
 
         {/* 2 · Role Selection */}
         <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 shadow-sm">
-          <div className="mb-3 flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-700 text-xs font-bold text-white">
-              2
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-700 text-xs font-bold text-white">
+                2
+              </span>
+              <h3 className="text-sm font-semibold text-navy-900">Role Selection</h3>
+            </div>
+            <span className="rounded bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-800">
+              Single Role Hierarchy
             </span>
-            <h3 className="text-sm font-semibold text-navy-900">Role Selection</h3>
           </div>
+          <p className="mb-2.5 text-[11px] text-slate-500">
+            Assigned role governs student oversight and authority. Teaching subjects &amp; attendance roster access are automatic from timetable assignments.
+          </p>
           <div className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
             {creatableRoles.map((role) => {
               const active = role.roleKey === roleKey;
               const style = getRoleStyle(role.roleKey);
+              const hierarchyIndex = HIERARCHY_ORDER[role.roleKey];
+              const levelLabel =
+                hierarchyIndex === 2
+                  ? "L2 · College Leadership"
+                  : hierarchyIndex === 3
+                  ? "L2 · Academic Oversight"
+                  : hierarchyIndex === 4
+                  ? "L3 · Department & Branches"
+                  : hierarchyIndex === 5
+                  ? "L4 · Class & Mentoring"
+                  : "L5 · Subject Faculty";
+
+              const description =
+                role.roleKey === "class_teacher"
+                  ? "Class Teacher / Section In-Charge — section students roster, mentoring, alerts & intervention."
+                  : role.roleKey === "staff"
+                  ? "Subject Faculty — dynamic teaching students list and reports strictly from assigned timetable subjects."
+                  : role.roleKey === "hod"
+                  ? "Department HOD — branch-wide student oversight, combined branches & faculty coordination."
+                  : role.roleKey === "principal"
+                  ? "Principal — college-wide institutional governance and leadership oversight."
+                  : role.roleKey === "vice_principal"
+                  ? "Vice Principal — academic operations, section oversight & college-wide analytics."
+                  : role.description ||
+                    (role.isGlobalCapable
+                      ? "Global role — institute-wide authority."
+                      : "College-scoped access for this portal.");
+
               return (
                 <button
                   key={role.roleKey}
@@ -425,13 +484,15 @@ export function CreateUserPanel(props: Props) {
                   >
                     <UserRound className="h-4 w-4" />
                   </span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-navy-900">{role.label}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center justify-between gap-1.5">
+                      <span className="text-sm font-semibold text-navy-900">{role.label}</span>
+                      <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+                        {levelLabel}
+                      </span>
+                    </span>
                     <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
-                      {role.description ||
-                        (role.isGlobalCapable
-                          ? "Global role — no college/branch required."
-                          : "College-scoped access for this portal.")}
+                      {description}
                     </span>
                   </span>
                 </button>

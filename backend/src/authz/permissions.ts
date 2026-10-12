@@ -51,12 +51,13 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number] | (string & {});
 
-/** Canonical portal roles — only these five are active system roles. */
+/** Canonical portal roles in organizational hierarchy order. */
 export const STANDARD_ROLE_KEYS = [
   "super_admin",
   "principal",
   "vice_principal",
   "hod",
+  "class_teacher",
   "staff",
 ] as const;
 
@@ -70,6 +71,7 @@ export const LEGACY_ROLE_KEY_MAP: Record<string, RoleKey> = {
   academic_admin: "vice_principal",
   exam_cell: "staff",
   auditor: "principal",
+  mentor: "class_teacher",
 };
 
 /** When seeding roles, grant module-specific keys alongside legacy parent keys. */
@@ -225,6 +227,27 @@ const ROLE_PERMISSIONS_BASE: Record<RoleKey, Permission[]> = {
     "internal_marks.edit",
     "internal_marks_mgmt.view",
     "internal_marks_mgmt.edit",
+  ],
+
+  /** Class Teacher / Section In-Charge — class student roster, section attendance & mentoring. */
+  class_teacher: [
+    "dashboard.view",
+    "students.view",
+    "my_timetable.view",
+    "today_timetable.view",
+    "attendance.view",
+    "attendance_analytics.view",
+    "attendance.post",
+    "attendance_calendar.view",
+    "catalog.view",
+    "semester_dates.view",
+    "request.view",
+    "request.create",
+    ...MENTORING_FULL,
+    "internal_marks.view",
+    "internal_marks.edit",
+    "user_management.view",
+    "reports.view",
   ],
 
   /** Teaching staff — personal dashboard, own timetable, own attendance, requests, catalog metadata. */

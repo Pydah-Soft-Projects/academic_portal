@@ -9,7 +9,16 @@ import { Button } from "@/components/ui/Button";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { apiFetch } from "@/lib/api";
-import { isTeachingStaffOnly, isSuperAdminUser } from "@/lib/teaching-scope";
+import {
+  isTeachingStaffOnly,
+  isSuperAdminUser,
+  isHodUser,
+  isClassTeacherUser,
+  isPrincipalOrVpUser,
+  getDefaultDashboardMode,
+  getAvailableDashboardViews,
+  type DashboardMode,
+} from "@/lib/teaching-scope";
 import {
   BarChart,
   Bar,
@@ -48,6 +57,8 @@ import type { WorkloadSummary } from "@/features/workload/StaffWorkloadView";
 import { RequestDashboardCard } from "@/features/requests/RequestDashboardCard";
 import { getTodayDayCode } from "@/features/my-timetable/utils";
 import { SubjectTeacherDashboard } from "./SubjectTeacherDashboard";
+import { HodDashboard } from "./HodDashboard";
+import { ClassTeacherDashboard } from "./ClassTeacherDashboard";
 
 function todayIso() {
   const now = new Date();
@@ -97,13 +108,25 @@ import {
   UserCog,
   ArrowRight,
   ClipboardCheck,
+  Building2,
 } from "lucide-react";
 
 export function DashboardView() {
   const { user, authorization, hasAnyPermission, hasPermission } = useAuth();
   const { filters } = useAcademicContext();
   const teachingStaffOnly = isTeachingStaffOnly(authorization);
+  const isHod = isHodUser(authorization);
+  const isClassTeacher = isClassTeacherUser(authorization);
+  const isLeadership = isPrincipalOrVpUser(authorization);
   const superAdminUser = isSuperAdminUser(authorization);
+
+  const availableViews = useMemo(() => getAvailableDashboardViews(authorization), [authorization]);
+  const defaultMode = useMemo(() => getDefaultDashboardMode(authorization), [authorization]);
+  const [activeViewMode, setActiveViewMode] = useState<DashboardMode>(defaultMode);
+
+  useEffect(() => {
+    setActiveViewMode(defaultMode);
+  }, [defaultMode]);
 
   const canDashboard = hasAnyPermission("dashboard.view") && !teachingStaffOnly;
   const canAttendance = hasAnyPermission("attendance.view", "attendance.post");
@@ -138,7 +161,6 @@ export function DashboardView() {
     pending: number;
   } | null>(null);
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([]);
-  const [adminViewMode, setAdminViewMode] = useState<"admin" | "teacher">("admin");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -366,6 +388,9 @@ export function DashboardView() {
     if (roleLabels.some((r) => r.includes("principal") || r.includes("director"))) {
       return "Here's what's happening in your college today.";
     }
+    if (roleLabels.some((r) => r.includes("class teacher") || r.includes("mentor"))) {
+      return "Here's what's happening in your section and classes today.";
+    }
     if (roleLabels.some((r) => r.includes("staff") || r.includes("faculty"))) {
       return "Here's what's happening in your classes today.";
     }
@@ -373,29 +398,76 @@ export function DashboardView() {
     return "Here's what's happening in your organization today.";
   }, [authorization]);
 
-  if (loading && !summary && !attendance && !myTimetableSummary) {
-    return <DashboardSkeleton />;
-  }
+  const roleSwitcherBar = availableViews.length > 1 ? (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white/95 border border-slate-200/90 px-3.5 py-2.5 rounded-xl shadow-xs backdrop-blur-xs">
+      <div className="flex items-center gap-2 overflow-x-auto">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 hidden sm:inline-flex items-center gap-1 shrink-0">
+          <UserCog className="h-3.5 w-3.5 text-slate-600" />
+          Dashboard View:
+        </span>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {availableViews.map((v) => {
+            const isActive = activeViewMode === v.mode;
+            return (
+              <button
+                key={v.mode}
+                type="button"
+                onClick={() => setActiveViewMode(v.mode)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  isActive
+                    ? "bg-navy-950 text-white shadow-xs"
+                    : "bg-slate-100/90 text-slate-700 hover:bg-slate-200/90 hover:text-navy-900"
+                }`}
+                title={v.description}
+              >
+                {v.mode === "admin" && <Building2 className="h-3.5 w-3.5 text-blue-400" />}
+                {v.mode === "hod" && <Sparkles className="h-3.5 w-3.5 text-cyan-400" />}
+                {v.mode === "teacher" && <GraduationCap className="h-3.5 w-3.5 text-amber-400" />}
+                <span>{v.label}</span>
+                {v.isPrimary && (
+                  <span
+                    className={`text-[9px] font-bold px-1 py-0.2 rounded uppercase ${
+                      isActive ? "bg-white/20 text-white" : "bg-slate-200 text-slate-600"
+                    }`}
+                  >
+                    Assigned
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-  if (teachingStaffOnly || adminViewMode === "teacher") {
+      <div className="text-[11px] text-slate-500 font-medium shrink-0 flex items-center gap-1.5">
+        <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+        <span>Assigned Role: <strong>{authorization?.roles?.[0]?.label || "Faculty"}</strong></span>
+      </div>
+    </div>
+  ) : null;
+
+  if (activeViewMode === "hod") {
     return (
       <div className="space-y-4">
-        {!teachingStaffOnly ? (
-          <div className="flex items-center justify-between bg-blue-50/80 border border-blue-200/90 px-4 py-2.5 rounded-xl shadow-2xs">
-            <div className="flex items-center gap-2 text-xs font-semibold text-blue-900">
-              <Sparkles className="h-4 w-4 text-blue-600" />
-              <span>Previewing <strong>Subject Teacher Dashboard</strong> (Instance View)</span>
-            </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setAdminViewMode("admin")}
-              className="text-xs h-7.5 px-3 font-semibold"
-            >
-              Back to Command Center
-            </Button>
-          </div>
-        ) : null}
+        {roleSwitcherBar}
+        <HodDashboard
+          userName={user?.name || "Dr. R. Kumar"}
+          departmentName={(user as { department?: string })?.department || "Computer Science & Engineering"}
+          roleLabel={authorization?.roles?.[0]?.label || "HOD - CSE"}
+        />
+      </div>
+    );
+  }
+
+
+  if (isClassTeacher) {
+    return <ClassTeacherDashboard />;
+  }
+
+  if (activeViewMode === "teacher") {
+    return (
+      <div className="space-y-4">
+        {roleSwitcherBar}
         <SubjectTeacherDashboard
           userName={user?.name || "Faculty Member"}
           departmentName={(user as { department?: string })?.department || "Department of CSE"}
@@ -407,8 +479,14 @@ export function DashboardView() {
     );
   }
 
+  if (loading && !summary && !attendance && !myTimetableSummary) {
+    return <DashboardSkeleton />;
+  }
+
   return (
     <div className="space-y-4 sm:space-y-6 pb-12">
+      {roleSwitcherBar}
+
       {/* SECTION A — HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
@@ -421,15 +499,26 @@ export function DashboardView() {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setAdminViewMode("teacher")}
-            className="text-xs h-8 font-semibold flex items-center gap-1.5 border-slate-300 hover:bg-slate-50"
-          >
-            <GraduationCap className="h-4 w-4 text-brand-600" />
-            Subject Teacher Dashboard
-          </Button>
+          <Link href="/attendance-posting">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="text-xs h-8 font-semibold flex items-center gap-1.5 border-slate-300 hover:bg-slate-50"
+            >
+              <ClipboardCheck className="h-4 w-4 text-emerald-600" />
+              Attendance Today
+            </Button>
+          </Link>
+          <Link href="/mentoring-risks">
+            <Button
+              size="sm"
+              variant="secondary"
+              className="text-xs h-8 font-semibold flex items-center gap-1.5 border-slate-300 hover:bg-slate-50"
+            >
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Mentoring &amp; Risks
+            </Button>
+          </Link>
         </div>
       </div>
 

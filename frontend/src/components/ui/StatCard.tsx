@@ -7,9 +7,12 @@ type Props = {
   hint?: string;
   tone?: "default" | "success" | "warning" | "critical" | "info";
   onClickHref?: string;
+  onClick?: () => void;
+  selected?: boolean;
   compact?: boolean;
   size?: "sm" | "md" | "lg";
   icon?: React.ReactNode;
+  badge?: React.ReactNode;
   className?: string;
 };
 
@@ -43,26 +46,34 @@ export function StatCard({
   hint,
   tone = "default",
   onClickHref,
+  onClick,
+  selected = false,
   compact = false,
   size,
   icon,
+  badge,
   className,
 }: Props) {
   const isCompact = compact || size === "sm";
+  const isClickable = Boolean(onClickHref || onClick);
 
   const cardContent = isCompact ? (
     <div
       className={cn(
         "group relative flex flex-col justify-between rounded-xl border p-2 sm:p-2.5 shadow-2xs transition-all hover:shadow-xs",
         toneBorderMap[tone],
-        onClickHref && "cursor-pointer active:scale-[0.98]",
+        isClickable && "cursor-pointer active:scale-[0.98]",
+        selected && "ring-2 ring-navy-800 border-navy-800 bg-navy-50/25 shadow-xs",
         className,
       )}
     >
       <div className="flex items-center justify-between gap-1 min-w-0">
-        <p className="truncate text-[9.5px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500">
-          {label}
-        </p>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {badge}
+          <p className="truncate text-[9.5px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            {label}
+          </p>
+        </div>
         {icon ? (
           <span className="text-slate-400 shrink-0">{icon}</span>
         ) : tone !== "default" ? (
@@ -88,14 +99,18 @@ export function StatCard({
       className={cn(
         "group relative rounded-xl sm:rounded-lg border bg-card p-2.5 sm:p-4 shadow-xs transition-all hover:shadow-sm print:p-1.5 print:shadow-none",
         toneBorderMap[tone],
-        onClickHref && "cursor-pointer active:scale-[0.98]",
+        isClickable && "cursor-pointer active:scale-[0.98]",
+        selected && "ring-2 ring-navy-800 border-navy-800 bg-navy-50/25 shadow-xs",
         className,
       )}
     >
       <div className="flex items-center justify-between gap-1">
-        <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-500 print:text-[9.5px] truncate">
-          {label}
-        </p>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {badge}
+          <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-500 print:text-[9.5px] truncate">
+            {label}
+          </p>
+        </div>
         {icon ? (
           <span className="text-slate-400 shrink-0">{icon}</span>
         ) : tone !== "default" ? (
@@ -123,6 +138,18 @@ export function StatCard({
       <Link href={onClickHref} className="block">
         {cardContent}
       </Link>
+    );
+  }
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="block w-full text-left focus:outline-hidden"
+      >
+        {cardContent}
+      </button>
     );
   }
 

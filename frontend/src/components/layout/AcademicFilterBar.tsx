@@ -32,6 +32,7 @@ const HIDDEN_ON = [
   "/attendance-posting",
   "/internal-marks-management",
   "/internal-marks",
+  "/timetables/combined",
 ];
 
 type Props = {
@@ -144,7 +145,8 @@ export function AcademicFilterBar({
       filters.collegeId === "all" ||
       filters.courseId === "all" ||
       filters.branchId === "all" ||
-      filters.batch === "all"
+      filters.batch === "all" ||
+      (filters.year !== "all" && filters.semester !== "all")
     ) {
       return;
     }

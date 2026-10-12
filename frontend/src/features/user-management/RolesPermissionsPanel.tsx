@@ -1,6 +1,44 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Search,
+  ChevronDown,
+  ChevronUp,
+  Save,
+  RotateCcw,
+  Edit3,
+  Trash2,
+  Plus,
+  Shield,
+  Lock,
+  Users,
+  Layers,
+  Eye,
+  EyeOff,
+  Check,
+  X,
+  AlertCircle,
+  LayoutDashboard,
+  GraduationCap,
+  CalendarCheck,
+  CalendarRange,
+  CalendarDays,
+  Briefcase,
+  ClipboardCheck,
+  LineChart,
+  Inbox,
+  Clock3,
+  Layers3,
+  FileBarChart2,
+  Gauge,
+  ShieldAlert,
+  AlertTriangle,
+  Bell,
+  BookOpen,
+  UserCog,
+  Settings,
+} from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { PageSkeleton } from "@/components/ui/PageSkeleton";
@@ -9,6 +47,40 @@ import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { getRoleStyle } from "@/features/user-management/RoleBadge";
 import type { ManagedRole, PermissionCatalogItem } from "@/features/user-management/types";
+
+const SIDEBAR_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  LayoutDashboard,
+  GraduationCap,
+  CalendarCheck,
+  CalendarRange,
+  CalendarDays,
+  Briefcase,
+  ClipboardCheck,
+  LineChart,
+  Inbox,
+  Clock3,
+  Layers3,
+  FileBarChart2,
+  Gauge,
+  ShieldAlert,
+  AlertTriangle,
+  Bell,
+  Users,
+  BookOpen,
+  UserCog,
+  Settings,
+};
+
+const GROUP_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  Overview: LayoutDashboard,
+  Academics: GraduationCap,
+  Requests: Inbox,
+  Examinations: Layers3,
+  Reports: FileBarChart2,
+  "Student Support": ShieldAlert,
+  Operations: AlertTriangle,
+  System: Settings,
+};
 import {
   PERMISSION_MATRIX_MODULES,
   PERMISSION_PRESENTATION,
@@ -20,6 +92,15 @@ import {
 
 const inputClass =
   "h-9 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-navy-800";
+
+const HIERARCHY_LEVELS: Record<string, string> = {
+  super_admin: "L1",
+  principal: "L2",
+  vice_principal: "L3",
+  hod: "L4",
+  class_teacher: "L5",
+  staff: "L6",
+};
 
 type Props = {
   canManage: boolean;
@@ -60,6 +141,12 @@ export function RolesPermissionsPanel({ canManage }: Props) {
     role: ManagedRole;
     mode: "blocked" | "confirm" | "protected";
   } | null>(null);
+
+  // Search & Filtering States
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<string>("All");
+  const [accessFilter, setAccessFilter] = useState<"all" | "has_access" | "no_access">("all");
+  const [expandedModules, setExpandedModules] = useState<Set<string>>(new Set());
 
   const selected = roles.find((r) => r.id === selectedId) ?? null;
   const enabled = useMemo(() => new Set(draftKeys), [draftKeys]);
@@ -173,6 +260,24 @@ export function RolesPermissionsPanel({ canManage }: Props) {
     setSuccess(null);
   }
 
+  function toggleModuleExpanded(href: string) {
+    setExpandedModules((prev) => {
+      const next = new Set(prev);
+      if (next.has(href)) next.delete(href);
+      else next.add(href);
+      return next;
+    });
+  }
+
+  function expandAll() {
+    const allHrefs = new Set(PERMISSION_MATRIX_MODULES.map((m) => m.href));
+    setExpandedModules(allHrefs);
+  }
+
+  function collapseAll() {
+    setExpandedModules(new Set());
+  }
+
   async function saveRoleDetails(confirmImpact = false) {
     if (!selected || !canManage || !detailsDirty) return true;
     const response = await apiFetch(`/roles/${selected.id}`, {
@@ -222,25 +327,27 @@ export function RolesPermissionsPanel({ canManage }: Props) {
 
   async function saveAll() {
     if (!selected || !canManage || !dirty) return;
-    const savedDetails = detailsDirty;
-    const savedPerms = permissionsDirty;
     setBusy(true);
     setError(null);
     setSuccess(null);
     try {
-      const detailsOk = await saveRoleDetails(false);
-      if (!detailsOk) return;
-      const permsOk = await savePermissionsOnly(false);
-      if (!permsOk) return;
+      if (detailsDirty) {
+        const ok = await saveRoleDetails();
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+      }
+      if (permissionsDirty) {
+        const ok = await savePermissionsOnly();
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+      }
       await load({ soft: true });
+      setSuccess(`Changes to role “${editLabel.trim() || selected.label}” saved successfully.`);
       setEditingDetails(false);
-      setSuccess(
-        savedDetails && savedPerms
-          ? "Role details and permissions saved."
-          : savedPerms
-            ? "Permissions saved."
-            : "Role details saved.",
-      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save role");
     } finally {
@@ -250,29 +357,28 @@ export function RolesPermissionsPanel({ canManage }: Props) {
 
   async function toggleActive() {
     if (!selected || !canManage) return;
-    if (dirty && !window.confirm("You have unsaved changes. Continue and discard them?")) return;
     setBusy(true);
     setError(null);
     setSuccess(null);
     try {
-      const response = await apiFetch(`/roles/${selected.id}/status`, {
+      const response = await apiFetch(`/roles/${selected.id}/active`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isActive: !selected.isActive, confirmImpact: true }),
+        body: JSON.stringify({ isActive: !selected.isActive }),
       });
       const body = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(body?.message || "Failed to update status");
+      if (!response.ok) throw new Error(body?.message || "Failed to toggle active status");
       await load({ soft: true });
-      setSuccess(selected.isActive ? "Role deactivated." : "Role activated.");
+      setSuccess(`Role is now ${!selected.isActive ? "active" : "inactive"}.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update status");
+      setError(err instanceof Error ? err.message : "Failed to toggle active status");
     } finally {
       setBusy(false);
     }
   }
 
   async function createRole() {
-    if (!canManage || !newLabel.trim()) return;
+    if (!newLabel.trim() || !canManage) return;
     setBusy(true);
     setError(null);
     setSuccess(null);
@@ -282,21 +388,19 @@ export function RolesPermissionsPanel({ canManage }: Props) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           label: newLabel.trim(),
-          description: newDescription.trim() || null,
+          description: newDescription.trim() || undefined,
           isGlobalCapable: newGlobal,
-          permissionKeys: [],
         }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body?.message || "Failed to create role");
-      const createdId = Number(body?.id ?? body?.data?.id);
       setCreateOpen(false);
       setNewLabel("");
       setNewDescription("");
       setNewGlobal(false);
       await load({ soft: true });
-      if (Number.isFinite(createdId) && createdId > 0) setSelectedId(createdId);
-      setSuccess("Role created. Assign permissions below, then save.");
+      if (body.data?.id) setSelectedId(Number(body.data.id));
+      setSuccess("New role created.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create role");
     } finally {
@@ -353,392 +457,916 @@ export function RolesPermissionsPanel({ canManage }: Props) {
     }
   }
 
+  // Filter groups and modules based on Search & Category Filter
+  const filteredNavGroups = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    return navGroups
+      .map((g) => {
+        if (selectedCategory !== "All" && g.title !== selectedCategory) {
+          return null;
+        }
+
+        const items = g.items.filter((mod) => {
+          // Access filter
+          const level = moduleAccessState(mod, enabled);
+          if (accessFilter === "has_access" && level === "none") return false;
+          if (accessFilter === "no_access" && level !== "none") return false;
+
+          if (!q) return true;
+
+          // Search match
+          const matchLabel = mod.label.toLowerCase().includes(q);
+          const matchGroup = mod.group.toLowerCase().includes(q);
+          const matchPerms = mod.permissions.some(
+            (p) =>
+              p.label.toLowerCase().includes(q) ||
+              p.key.toLowerCase().includes(q) ||
+              p.description.toLowerCase().includes(q),
+          );
+
+          return matchLabel || matchGroup || matchPerms;
+        });
+
+        if (items.length === 0) return null;
+        return { ...g, items };
+      })
+      .filter((g): g is { title: string; items: MatrixModuleDef[] } => g !== null);
+  }, [navGroups, searchQuery, selectedCategory, accessFilter, enabled]);
+
+  // Categories list with counts
+  const categoryOptions = useMemo(() => {
+    const cats: { label: string; count: number }[] = [
+      { label: "All", count: PERMISSION_MATRIX_MODULES.length },
+    ];
+    for (const g of navGroups) {
+      cats.push({ label: g.title, count: g.items.length });
+    }
+    return cats;
+  }, [navGroups]);
+
+  const totalFilteredModulesCount = useMemo(() => {
+    return filteredNavGroups.reduce((acc, g) => acc + g.items.length, 0);
+  }, [filteredNavGroups]);
+
   if (loading) {
     return <PageSkeleton showFilterBar={false} showStats statCardsCount={3} columns={5} rows={6} />;
   }
 
   return (
     <div className="space-y-4">
-      <Card>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      {/* 1. ROLES CONFIGURED SELECTOR BAR */}
+      <Card className="p-4 sm:p-5">
+        <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold text-navy-900">Roles</h3>
-            <p className="text-xs text-slate-500">Select a role to review or edit its permissions.</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold uppercase tracking-wider text-navy-900">
+                Institutional Roles
+              </h3>
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-700">
+                {roles.length} roles
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Select a role to configure its institutional permission scope and access matrix.
+            </p>
           </div>
           {canManage ? (
-            <Button variant="secondary" onClick={() => setCreateOpen((v) => !v)}>
-              {createOpen ? "Cancel" : "Create role"}
+            <Button
+              size="sm"
+              variant={createOpen ? "secondary" : "primary"}
+              onClick={() => setCreateOpen((v) => !v)}
+              className="text-xs"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              {createOpen ? "Cancel" : "Create New Role"}
             </Button>
           ) : null}
         </div>
 
         {createOpen ? (
-          <div className="mb-4 space-y-2 rounded-md border border-border bg-slate-50 p-3">
-            <input
-              className={inputClass}
-              placeholder="Role name"
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.target.value)}
-            />
-            <input
-              className={inputClass}
-              placeholder="Description (optional)"
-              value={newDescription}
-              onChange={(e) => setNewDescription(e.target.value)}
-            />
-            <label className="flex items-center gap-2 text-xs text-slate-600">
+          <div className="mb-4 rounded-xl border border-navy-100 bg-slate-50/90 p-3.5 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold text-navy-900">Define Custom Role</p>
+              <span className="text-[11px] text-slate-500">Custom roles can have tailor-made permissions.</span>
+            </div>
+            <div className="grid gap-2.5 sm:grid-cols-2">
               <input
-                type="checkbox"
-                checked={newGlobal}
-                onChange={(e) => setNewGlobal(e.target.checked)}
+                className={inputClass}
+                placeholder="Role Name (e.g. Exam Coordinator, Lab Assistant)"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
               />
-              Global-capable (NULL college/branch only)
-            </label>
-            <Button disabled={busy || !newLabel.trim()} onClick={() => void createRole()}>
-              Save role
-            </Button>
+              <input
+                className={inputClass}
+                placeholder="Role Description (optional)"
+                value={newDescription}
+                onChange={(e) => setNewDescription(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center justify-between pt-1">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="rounded border-slate-300 text-navy-800"
+                  checked={newGlobal}
+                  onChange={(e) => setNewGlobal(e.target.checked)}
+                />
+                Global Institution Scope (applies across colleges without branch restrictions)
+              </label>
+              <Button
+                size="sm"
+                disabled={busy || !newLabel.trim()}
+                onClick={() => void createRole()}
+                className="text-xs"
+              >
+                {busy ? "Saving…" : "Save Role"}
+              </Button>
+            </div>
           </div>
         ) : null}
 
-        <div className="flex flex-wrap gap-2">
+        {/* Role Selector Grid */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7">
           {roles.map((role) => {
             const style = getRoleStyle(role.roleKey);
             const isSelected = selectedId === role.id;
+            const level = HIERARCHY_LEVELS[role.roleKey] ?? "R";
+
             return (
               <button
                 key={role.id}
                 type="button"
                 className={cn(
-                  "inline-flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 text-left text-sm transition-all",
+                  "group relative flex flex-col justify-between rounded-xl border p-2.5 text-left transition-all cursor-pointer shadow-2xs",
                   isSelected
-                    ? "border-navy-900 bg-navy-900 text-white shadow-xs"
-                    : "border-slate-200 bg-white text-navy-900 hover:border-slate-300 hover:bg-slate-50",
+                    ? "border-navy-900 bg-navy-900 text-white shadow-xs ring-2 ring-navy-800/25"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50"
                 )}
                 onClick={() => selectRole(role.id)}
               >
-                <span className={cn("h-2 w-2 rounded-full shrink-0", isSelected ? "bg-white" : style.dot)} />
-                <span className="font-medium">{role.label}</span>
-                <StatusBadge status={role.isActive ? "active" : "inactive"} />
+                <div className="flex items-center justify-between gap-1">
+                  <span
+                    className={cn(
+                      "rounded px-1.5 py-0.2 text-[9px] font-bold uppercase",
+                      isSelected ? "bg-white/20 text-white" : style.pill
+                    )}
+                  >
+                    {level}
+                  </span>
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 rounded-full shrink-0",
+                      role.isActive ? (isSelected ? "bg-emerald-300" : "bg-emerald-500") : "bg-slate-300"
+                    )}
+                    title={role.isActive ? "Active Role" : "Inactive"}
+                  />
+                </div>
+                <p className={cn("mt-1.5 truncate text-xs font-bold leading-tight", isSelected ? "text-white" : "text-navy-900")}>
+                  {role.label}
+                </p>
+                <div className="mt-1 flex items-center justify-between text-[10px]">
+                  <span className={isSelected ? "text-slate-300" : "text-slate-500"}>
+                    {role.assignmentCount ?? 0} user{role.assignmentCount === 1 ? "" : "s"}
+                  </span>
+                  {role.isSystemRole ? (
+                    <span className={isSelected ? "text-slate-300" : "text-slate-400"}>System</span>
+                  ) : (
+                    <span className={isSelected ? "text-amber-200" : "text-amber-700"}>Custom</span>
+                  )}
+                </div>
               </button>
             );
           })}
         </div>
       </Card>
 
-      <div className="space-y-4">
-        {error ? (
-          <Card>
-            <p className="text-sm text-critical">{error}</p>
-          </Card>
-        ) : null}
-        {success ? (
-          <Card>
-            <p className="text-sm text-emerald-700">{success}</p>
-          </Card>
-        ) : null}
+      {/* FEEDBACK BANNERS */}
+      {error ? (
+        <div className="flex items-center justify-between rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-900 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+            <span className="font-semibold">{error}</span>
+          </div>
+          <button type="button" onClick={() => setError(null)} className="text-rose-600 hover:underline">
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
-        {!selected ? (
-          <Card>
-            <p className="text-sm text-slate-500">Select a role to edit details and permissions.</p>
-          </Card>
-        ) : (
-          <>
-            <Card>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-base font-semibold text-navy-900">Role: {selected.label}</h3>
-                    {dirty ? (
-                      <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
-                        Unsaved changes
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="text-xs text-slate-500">
+      {success ? (
+        <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-900 shadow-2xs">
+          <div className="flex items-center gap-2">
+            <Check className="h-4 w-4 shrink-0 text-emerald-600" />
+            <span className="font-semibold">{success}</span>
+          </div>
+          <button type="button" onClick={() => setSuccess(null)} className="text-emerald-600 hover:underline">
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
+      {!selected ? (
+        <Card className="py-12 text-center text-slate-500">
+          <p className="text-sm font-medium">Select a role above to configure its permissions.</p>
+        </Card>
+      ) : (
+        <>
+          {/* 2. ACTIVE ROLE CONFIGURATION HEADER */}
+          <Card className="p-4 sm:p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0 flex-1">
+                {/* Role Title & Badges */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-md bg-navy-100 px-2 py-0.5 text-xs font-bold text-navy-800">
+                    {HIERARCHY_LEVELS[selected.roleKey] ?? "ROLE"}
+                  </span>
+                  <h3 className="text-lg font-black text-navy-900 tracking-tight">
+                    {selected.label}
+                  </h3>
+                  <span className="font-mono text-xs text-slate-400 bg-slate-100 px-2 py-0.5 rounded">
                     {selected.roleKey}
-                    {selected.isSystemRole ? " · system role (editable)" : " · custom role"}
-                    {selected.isGlobalCapable ? " · global-capable" : ""}
-                    {` · ${selected.assignmentCount} user${selected.assignmentCount === 1 ? "" : "s"} assigned`}
-                    {Number(selected.activeUserCount ?? 0) > 0
-                      ? ` · ${selected.activeUserCount} active`
-                      : ""}
-                  </p>
-                  {!editingDetails && selected.description ? (
-                    <p className="mt-1 text-sm text-slate-600">{selected.description}</p>
-                  ) : null}
-                  {selected.assignmentCount > 0 && selected.roleKey !== "super_admin" ? (
-                    <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                      {Number(selected.activeUserCount ?? 0) > 0 ? (
-                        <>
-                          Warning: {selected.activeUserCount} active user
-                          {Number(selected.activeUserCount) === 1 ? "" : "s"} still ha
-                          {Number(selected.activeUserCount) === 1 ? "s" : "ve"} this role. Delete is
-                          blocked until you reassign them in All Users.
-                        </>
-                      ) : (
-                        <>
-                          Warning: {selected.assignmentCount} inactive user
-                          {selected.assignmentCount === 1 ? "" : "s"} still ha
-                          {selected.assignmentCount === 1 ? "s" : "ve"} this role. Reassign or remove
-                          the role from those users before deleting.
-                        </>
-                      )}
-                    </p>
-                  ) : null}
-                  {selected.roleKey === "super_admin" ? (
-                    <p className="mt-2 text-xs text-slate-500">
-                      System Administrator cannot be deleted (protects portal admin access). You can
-                      edit permissions or deactivate other roles instead.
-                    </p>
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                      selected.isSystemRole
+                        ? "bg-purple-100 text-purple-800"
+                        : "bg-blue-100 text-blue-800"
+                    )}
+                  >
+                    {selected.isSystemRole ? "System Role" : "Custom Role"}
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
+                      selected.isGlobalCapable
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-slate-100 text-slate-700"
+                    )}
+                  >
+                    {selected.isGlobalCapable ? "Global Scope" : "College / Branch Scoped"}
+                  </span>
+                  <StatusBadge status={selected.isActive ? "active" : "inactive"} />
+                  {dirty ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-extrabold uppercase text-amber-800">
+                      <span className="h-1.5 w-1.5 rounded-full bg-amber-600 animate-pulse" />
+                      Unsaved Changes
+                    </span>
                   ) : null}
                 </div>
-                {canManage ? (
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => {
-                        setEditingDetails((v) => !v);
-                        setSuccess(null);
-                      }}
-                    >
-                      {editingDetails ? "Close edit" : "Edit role"}
-                    </Button>
-                    <Button variant="secondary" disabled={busy} onClick={() => void toggleActive()}>
-                      {selected.isActive ? "Deactivate" : "Activate"}
-                    </Button>
-                    {selected.roleKey !== "super_admin" ? (
-                      <Button
-                        variant="secondary"
-                        disabled={busy}
-                        onClick={() => openDeleteDialog()}
-                        title={
-                          selected.assignmentCount > 0
-                            ? "Blocked while users still have this role"
-                            : selected.isSystemRole
-                              ? "Delete this seeded role"
-                              : "Delete this custom role"
-                        }
-                      >
-                        Delete
-                        {selected.assignmentCount > 0 ? " (blocked)" : ""}
-                      </Button>
-                    ) : null}
-                    {dirty ? (
-                      <Button variant="secondary" disabled={busy} onClick={discardChanges}>
-                        Discard
-                      </Button>
-                    ) : null}
-                    <Button disabled={busy || !dirty} onClick={() => void saveAll()}>
-                      Save changes
-                    </Button>
+
+                {/* Role Description */}
+                <p className="mt-1.5 text-xs text-slate-600 leading-relaxed">
+                  {selected.description || "No description provided for this role."}
+                </p>
+
+                {/* Informational callouts */}
+                {selected.assignmentCount > 0 && selected.roleKey !== "super_admin" ? (
+                  <div className="mt-2.5 inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-1.5 text-xs text-amber-900">
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                    <span>
+                      {selected.activeUserCount} active user{selected.activeUserCount === 1 ? "" : "s"} currently assigned. Deletion is safely locked until users are reassigned in All Users.
+                    </span>
                   </div>
                 ) : null}
+
+                {selected.roleKey === "super_admin" ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    System Administrator is institutional tier L1; deletion is permanently locked to guarantee admin recovery.
+                  </p>
+                ) : null}
+
+                {/* Metrics Chips */}
+                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-1 text-slate-700 font-semibold shadow-2xs">
+                    <Users className="h-3.5 w-3.5 text-slate-500" />
+                    <span>
+                      {selected.assignmentCount} user{selected.assignmentCount === 1 ? "" : "s"} assigned ({selected.activeUserCount} active)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-1 text-slate-700 font-semibold shadow-2xs">
+                    <Layers className="h-3.5 w-3.5 text-brand-600" />
+                    <span>
+                      {summary.modulesWithAccess} of {PERMISSION_MATRIX_MODULES.length} Modules Accessible
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-1 text-slate-700 font-semibold shadow-2xs">
+                    <Eye className="h-3.5 w-3.5 text-sky-600" />
+                    <span>{summary.read} Read Permissions</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/80 px-2.5 py-1 text-slate-700 font-semibold shadow-2xs">
+                    <Shield className="h-3.5 w-3.5 text-amber-600" />
+                    <span>{summary.write} Action / Write Permissions</span>
+                  </div>
+                </div>
               </div>
 
-              {canManage && editingDetails ? (
-                <div className="mt-4 space-y-3 rounded-md border border-border bg-slate-50 p-3">
-                  <p className="text-xs font-medium text-slate-600">
-                    Edit role details
-                    {selected.isSystemRole
-                      ? " — seeded system roles can be renamed; role key stays fixed."
-                      : null}
+              {/* Action Buttons */}
+              {canManage ? (
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => {
+                      setEditingDetails((v) => !v);
+                      setSuccess(null);
+                    }}
+                    className="text-xs"
+                  >
+                    <Edit3 className="mr-1.5 h-3.5 w-3.5" />
+                    {editingDetails ? "Done Editing" : "Edit Role Details"}
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() => void toggleActive()}
+                    className="text-xs"
+                  >
+                    {selected.isActive ? "Deactivate" : "Activate"}
+                  </Button>
+
+                  {selected.roleKey !== "super_admin" ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={() => openDeleteDialog()}
+                      title={
+                        selected.assignmentCount > 0
+                          ? "Blocked while users still have this role"
+                          : "Delete role"
+                      }
+                      className={cn(
+                        "text-xs",
+                        selected.assignmentCount > 0
+                          ? "opacity-60 cursor-not-allowed"
+                          : "text-rose-700 hover:bg-rose-50"
+                      )}
+                    >
+                      <Trash2 className="mr-1 h-3.5 w-3.5" />
+                      Delete
+                    </Button>
+                  ) : null}
+
+                  {dirty ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy}
+                      onClick={discardChanges}
+                      className="text-xs"
+                    >
+                      <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                      Discard
+                    </Button>
+                  ) : null}
+
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    disabled={busy || !dirty}
+                    onClick={() => void saveAll()}
+                    className={cn(
+                      "text-xs shadow-xs",
+                      dirty && "bg-navy-900 hover:bg-navy-800 text-white ring-2 ring-navy-800/20"
+                    )}
+                  >
+                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                    {busy ? "Saving…" : "Save Changes"}
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+
+            {/* Inline Details Editor (Collapsible) */}
+            {canManage && editingDetails ? (
+              <div className="mt-4 rounded-xl border border-navy-100 bg-slate-50 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-navy-900 uppercase tracking-wide">
+                    Edit Role Properties
                   </p>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="block text-xs text-slate-600">
-                      Display name
-                      <input
-                        className={`${inputClass} mt-1`}
-                        value={editLabel}
-                        disabled={busy}
-                        onChange={(e) => {
-                          setEditLabel(e.target.value);
-                          setSuccess(null);
-                        }}
-                      />
+                  <span className="text-[11px] text-slate-500">
+                    {selected.isSystemRole
+                      ? "System roles can have their display label and description updated."
+                      : "Custom roles can modify label, description, and scope capability."}
+                  </span>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Role Display Name
                     </label>
-                    <label className="block text-xs text-slate-600">
-                      Role key
-                      <input className={`${inputClass} mt-1 bg-slate-100`} value={selected.roleKey} disabled />
-                    </label>
-                  </div>
-                  <label className="block text-xs text-slate-600">
-                    Description
-                    <textarea
-                      className="mt-1 min-h-[72px] w-full rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:border-navy-800"
-                      value={editDescription}
+                    <input
+                      className={inputClass}
+                      value={editLabel}
                       disabled={busy}
                       onChange={(e) => {
-                        setEditDescription(e.target.value);
+                        setEditLabel(e.target.value);
                         setSuccess(null);
                       }}
                     />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Role Key Identifier
+                    </label>
+                    <input
+                      className={cn(inputClass, "bg-slate-100 text-slate-500 cursor-not-allowed")}
+                      value={selected.roleKey}
+                      disabled
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Role Description
                   </label>
-                  <label className="flex items-center gap-2 text-xs text-slate-600">
+                  <textarea
+                    className="h-16 w-full rounded-md border border-border bg-white px-3 py-2 text-xs outline-none focus:border-navy-800"
+                    value={editDescription}
+                    disabled={busy}
+                    onChange={(e) => {
+                      setEditDescription(e.target.value);
+                      setSuccess(null);
+                    }}
+                    placeholder="Enter what responsibilities this role handles..."
+                  />
+                </div>
+                <div className="flex items-center justify-between pt-1">
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={editGlobal}
-                      disabled={
-                        busy ||
-                        (selected.isSystemRole && selected.isGlobalCapable)
-                      }
+                      disabled={busy || (selected.isSystemRole && selected.isGlobalCapable)}
                       onChange={(e) => {
                         setEditGlobal(e.target.checked);
                         setSuccess(null);
                       }}
+                      className="rounded border-slate-300 text-navy-800"
                     />
-                    Global-capable (college/branch scope can be NULL)
-                    {selected.isSystemRole && selected.isGlobalCapable
-                      ? " — locked for this system role"
-                      : null}
+                    Global Scope Capability (User does not require college/branch scoping)
                   </label>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setEditingDetails(false)}
+                    className="text-xs"
+                  >
+                    Close Editor
+                  </Button>
                 </div>
-              ) : null}
+              </div>
+            ) : null}
+          </Card>
 
-              <div className="mt-4 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-md border border-border bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Modules with access</p>
-                  <p className="text-lg font-semibold text-navy-900">{summary.modulesWithAccess}</p>
+          {/* 3. PERMISSION MATRIX CONTROLS: SEARCH, TABS, QUICK ACTIONS */}
+          <div className="space-y-3">
+            {/* Search & Category Filter Bar */}
+            <div className="rounded-xl border border-border bg-white p-3 shadow-2xs space-y-2.5">
+              <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+                {/* Search Input */}
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input
+                    type="search"
+                    placeholder="Search modules or permissions (e.g. attendance, marks, mentoring, timetables)..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-9 w-full rounded-lg border border-slate-200 bg-slate-50/50 pl-9 pr-3 text-xs text-navy-900 outline-none focus:border-navy-800 focus:bg-white transition-all"
+                  />
+                  {searchQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery("")}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  ) : null}
                 </div>
-                <div className="rounded-md border border-border bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Read permissions</p>
-                  <p className="text-lg font-semibold text-navy-900">{summary.read}</p>
-                </div>
-                <div className="rounded-md border border-border bg-slate-50 px-3 py-2">
-                  <p className="text-[11px] uppercase tracking-wide text-slate-500">Write / action</p>
-                  <p className="text-lg font-semibold text-navy-900">{summary.write}</p>
+
+                {/* Filter and Expand Controls */}
+                <div className="flex items-center gap-2">
+                  <select
+                    value={accessFilter}
+                    onChange={(e) => setAccessFilter(e.target.value as any)}
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-xs text-slate-700 outline-none focus:border-navy-800"
+                  >
+                    <option value="all">All Access States</option>
+                    <option value="has_access">Accessible Only</option>
+                    <option value="no_access">No Access Only</option>
+                  </select>
+
+                  <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+                    <button
+                      type="button"
+                      onClick={expandAll}
+                      className="rounded-md px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-white transition-all"
+                    >
+                      Expand All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={collapseAll}
+                      className="rounded-md px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-white transition-all"
+                    >
+                      Collapse All
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <p className="mt-3 text-xs text-slate-500">
-                Toggle permissions below, then click Save changes. Applies to seeded and custom roles.
-                Saving updates the database and revokes sessions for users with this role.
-              </p>
-            </Card>
-
-            <Card className="overflow-hidden p-0">
-              <div className="border-b border-border bg-slate-50 px-4 py-3">
-                <h4 className="text-sm font-semibold text-navy-900">Permission matrix</h4>
-                <p className="text-xs text-slate-500">
-                  All modules in one view. Use quick actions per row or toggle individual permissions.
-                </p>
+              {/* Category Filter Pills (Mirrors Sidebar Groups) */}
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-slate-100 pt-2.5">
+                {categoryOptions.map((cat) => {
+                  const isSelected = selectedCategory === cat.label;
+                  const Icon = GROUP_ICON_MAP[cat.label];
+                  return (
+                    <button
+                      key={cat.label}
+                      type="button"
+                      onClick={() => setSelectedCategory(cat.label)}
+                      className={cn(
+                        "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                        isSelected
+                          ? "bg-navy-900 text-white shadow-2xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      )}
+                    >
+                      {Icon ? <Icon className="h-3.5 w-3.5 shrink-0" /> : null}
+                      <span>{cat.label}</span>
+                      <span
+                        className={cn(
+                          "rounded-full px-1.5 py-0.2 text-[10px]",
+                          isSelected ? "bg-white/20 text-white" : "bg-white text-slate-600"
+                        )}
+                      >
+                        {cat.count}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
+            </div>
 
-              <div className="divide-y divide-border">
-                {navGroups.map((group) => (
-                  <section key={group.title} className="px-4 py-4">
-                    <h5 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      {group.title}
-                    </h5>
-                    <div className="space-y-4">
-                      {group.items.map((mod) => {
-                        const level = moduleAccessState(mod, enabled);
-                        const reads = mod.permissions.filter((p) => p.kind === "read");
-                        const writes = mod.permissions.filter((p) => p.kind === "write");
-                        const hasWrites = writes.length > 0;
+            {/* 4. PERMISSION MATRIX MODULE CARDS */}
+            {totalFilteredModulesCount === 0 ? (
+              <Card className="py-10 text-center text-slate-500">
+                <p className="text-sm font-medium">No modules found matching your search or filters.</p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    setSearchQuery("");
+                    setSelectedCategory("All");
+                    setAccessFilter("all");
+                  }}
+                  className="mt-3 text-xs"
+                >
+                  Clear Filters
+                </Button>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {filteredNavGroups.map((group) => {
+                  const GroupHeaderIcon = GROUP_ICON_MAP[group.title] ?? Layers;
 
-                        return (
-                          <div
-                            key={mod.href}
-                            className="rounded-lg border border-border bg-white p-3"
-                          >
-                            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                              <div className="min-w-0 flex-1">
-                                <h6 className="text-sm font-semibold text-navy-900">{mod.label}</h6>
-                                {mod.accessNote ? (
-                                  <p className="text-[11px] text-slate-500">{mod.accessNote}</p>
-                                ) : null}
-                              </div>
-                              {canManage ? (
-                                <div className="flex flex-wrap gap-1">
-                                  <ModuleLevelButton
-                                    active={level === "none"}
-                                    disabled={busy}
-                                    label="No access"
-                                    onClick={() => applyModuleLevel(mod, "none")}
-                                  />
-                                  <ModuleLevelButton
-                                    active={level === "view"}
-                                    disabled={busy || reads.length === 0}
-                                    label="View"
-                                    onClick={() => applyModuleLevel(mod, "view")}
-                                  />
-                                  {hasWrites ? (
-                                    <ModuleLevelButton
-                                      active={level === "manage"}
-                                      disabled={busy}
-                                      label="Manage"
-                                      onClick={() => applyModuleLevel(mod, "manage")}
-                                    />
-                                  ) : null}
-                                  {level === "partial" ? (
-                                    <span className="self-center text-[11px] text-amber-700">Partial</span>
-                                  ) : null}
+                  return (
+                    <div key={group.title} className="space-y-2">
+                      <div className="flex items-center justify-between px-1 border-b border-slate-100 pb-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <GroupHeaderIcon className="h-4 w-4 text-brand-600" />
+                          <span className="text-xs font-bold uppercase tracking-wider text-navy-900">
+                            {group.title}
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-semibold text-slate-400">
+                          {group.items.length} sidebar item{group.items.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2.5">
+                        {group.items.map((mod) => {
+                          const level = moduleAccessState(mod, enabled);
+                          const reads = mod.permissions.filter((p) => p.kind === "read");
+                          const writes = mod.permissions.filter((p) => p.kind === "write");
+                          const hasWrites = writes.length > 0;
+                          const isExpanded = expandedModules.has(mod.href) || Boolean(searchQuery);
+
+                          const activeCount = mod.permissions.filter((p) => enabled.has(p.key)).length;
+                          const totalPerms = mod.permissions.length;
+
+                          const ModuleIcon = (mod.iconName && SIDEBAR_ICON_MAP[mod.iconName])
+                            ? SIDEBAR_ICON_MAP[mod.iconName]
+                            : Layers;
+
+                          const isVisibleInSidebar = !mod.sidebarUnlockPermissions || mod.sidebarUnlockPermissions.length === 0
+                            ? level !== "none"
+                            : mod.sidebarUnlockPermissions.some((k) => enabled.has(k));
+
+                          return (
+                            <div
+                              key={mod.href}
+                              className={cn(
+                                "rounded-xl border transition-all",
+                                level === "manage"
+                                  ? "border-emerald-200 bg-white shadow-2xs"
+                                  : level === "view"
+                                  ? "border-blue-200 bg-white shadow-2xs"
+                                  : level === "partial"
+                                  ? "border-amber-200 bg-white shadow-2xs"
+                                  : "border-slate-200 bg-white/95"
+                              )}
+                            >
+                              {/* Module Header Bar */}
+                              <div className="flex flex-col gap-3 p-3.5 sm:flex-row sm:items-center sm:justify-between">
+                                <div className="flex items-center gap-3 min-w-0 flex-1">
+                                  {/* Sidebar Nav Icon */}
+                                  <div
+                                    className={cn(
+                                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border shadow-2xs transition-all",
+                                      isVisibleInSidebar
+                                        ? "border-brand-200 bg-brand-50 text-brand-700"
+                                        : "border-slate-200 bg-slate-100 text-slate-400"
+                                    )}
+                                    title={isVisibleInSidebar ? "Active in sidebar" : "Hidden from sidebar"}
+                                  >
+                                    <ModuleIcon className="h-4 w-4" />
+                                  </div>
+
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <h4 className="text-sm font-bold text-navy-900 leading-tight">
+                                        {mod.label}
+                                      </h4>
+                                      <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200/60">
+                                        {mod.href}
+                                      </span>
+
+                                      {/* Sidebar Visibility Badge */}
+                                      {isVisibleInSidebar ? (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
+                                          <Eye className="h-3 w-3 text-emerald-600" />
+                                          Visible in Sidebar
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 border border-slate-200/60">
+                                          <EyeOff className="h-3 w-3 text-slate-400" />
+                                          Hidden from Sidebar
+                                        </span>
+                                      )}
+
+                                      {/* Access Level Badge */}
+                                      {level === "manage" ? (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                          Full Access
+                                        </span>
+                                      ) : level === "view" ? (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-800 border border-blue-200">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+                                          View Only
+                                        </span>
+                                      ) : level === "partial" ? (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-800 border border-amber-200">
+                                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                                          Custom ({activeCount}/{totalPerms})
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-500">
+                                          No Access
+                                        </span>
+                                      )}
+                                    </div>
+                                    {mod.accessNote ? (
+                                      <p className="mt-1 text-[11px] text-slate-500">{mod.accessNote}</p>
+                                    ) : null}
+                                  </div>
                                 </div>
-                              ) : null}
+
+                              {/* Level Quick Actions & Expand Trigger */}
+                              <div className="flex items-center gap-2 shrink-0">
+                                {canManage ? (
+                                  <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100/80 p-0.5 text-xs shadow-2xs">
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={() => applyModuleLevel(mod, "none")}
+                                      className={cn(
+                                        "rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                                        level === "none"
+                                          ? "bg-white text-navy-900 shadow-2xs"
+                                          : "text-slate-600 hover:text-navy-900"
+                                      )}
+                                    >
+                                      No Access
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={busy || reads.length === 0}
+                                      onClick={() => applyModuleLevel(mod, "view")}
+                                      className={cn(
+                                        "rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                                        level === "view"
+                                          ? "bg-blue-600 text-white shadow-2xs"
+                                          : "text-slate-600 hover:text-navy-900"
+                                      )}
+                                    >
+                                      View
+                                    </button>
+                                    {hasWrites ? (
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => applyModuleLevel(mod, "manage")}
+                                        className={cn(
+                                          "rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                                          level === "manage"
+                                            ? "bg-emerald-600 text-white shadow-2xs"
+                                            : "text-slate-600 hover:text-navy-900"
+                                        )}
+                                      >
+                                        Manage
+                                      </button>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+
+                                <button
+                                  type="button"
+                                  onClick={() => toggleModuleExpanded(mod.href)}
+                                  className="flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:border-slate-300 hover:bg-white transition-all"
+                                  title="Expand detailed permission toggles"
+                                >
+                                  <span>{mod.permissions.length} perms</span>
+                                  {isExpanded ? (
+                                    <ChevronUp className="h-3.5 w-3.5 text-slate-500" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
+                                  )}
+                                </button>
+                              </div>
                             </div>
 
-                            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                              {[...reads, ...writes].map((perm) => (
-                                <PermissionToggle
-                                  key={perm.key}
-                                  perm={perm}
-                                  checked={enabled.has(perm.key)}
-                                  canManage={canManage}
-                                  busy={busy}
-                                  onToggle={toggleKey}
-                                />
-                              ))}
-                            </div>
+                            {/* Expanded Permission List (Clean, Compact Toggles) */}
+                            {isExpanded ? (
+                              <div className="border-t border-slate-100 bg-slate-50/50 p-3">
+                                <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                  {[...reads, ...writes].map((perm) => {
+                                    const isChecked = enabled.has(perm.key);
+                                    return (
+                                      <label
+                                        key={perm.key}
+                                        className={cn(
+                                          "flex items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-all cursor-pointer select-none",
+                                          isChecked
+                                            ? perm.sensitive
+                                              ? "border-amber-300 bg-amber-50/70"
+                                              : "border-navy-200 bg-white shadow-2xs ring-1 ring-navy-800/10"
+                                            : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                                        )}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          disabled={!canManage || busy}
+                                          checked={isChecked}
+                                          onChange={(e) => toggleKey(perm.key, e.target.checked)}
+                                          className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-navy-800 focus:ring-navy-700/20"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className={cn("font-bold text-navy-900 leading-tight")}>
+                                              {perm.label}
+                                            </span>
+                                            <span
+                                              className={cn(
+                                                "rounded px-1.5 py-0.2 text-[9px] font-bold uppercase",
+                                                perm.kind === "read"
+                                                  ? "bg-slate-100 text-slate-600"
+                                                  : "bg-blue-100 text-blue-700"
+                                              )}
+                                            >
+                                              {perm.kind}
+                                            </span>
+                                            {perm.sensitive ? (
+                                              <span className="flex items-center gap-0.5 rounded bg-amber-100 px-1 py-0.2 text-[9px] font-bold uppercase text-amber-800">
+                                                <Lock className="h-2.5 w-2.5" />
+                                                Sensitive
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                          <p className="mt-0.5 text-[11px] leading-snug text-slate-500">
+                                            {perm.description}
+                                          </p>
+                                        </div>
+                                      </label>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                         );
                       })}
+                      </div>
                     </div>
-                  </section>
-                ))}
+                  );
+                })}
 
+                {/* Additional Catalog Permissions if any */}
                 {unmappedCatalog.length > 0 ? (
-                  <section className="px-4 py-4">
-                    <h5 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Additional catalog permissions
-                    </h5>
-                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                      {unmappedCatalog.map((p) => (
-                        <PermissionToggle
-                          key={p.permissionKey}
-                          perm={{
-                            key: p.permissionKey,
-                            label: p.displayName || p.permissionKey,
-                            description:
-                              p.description ||
-                              PERMISSION_PRESENTATION[p.permissionKey]?.description ||
-                              "",
-                            kind: p.permissionKey.includes(".view") ? "read" : "write",
-                            sensitive: Boolean(PERMISSION_PRESENTATION[p.permissionKey]?.sensitive),
-                          }}
-                          checked={enabled.has(p.permissionKey)}
-                          canManage={canManage}
-                          busy={busy}
-                          onToggle={toggleKey}
-                        />
-                      ))}
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                        Additional Catalog Permissions
+                      </h4>
+                      <span className="text-[11px] text-slate-500">
+                        {unmappedCatalog.length} custom system keys
+                      </span>
                     </div>
-                  </section>
+                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                      {unmappedCatalog.map((p) => {
+                        const isChecked = enabled.has(p.permissionKey);
+                        return (
+                          <label
+                            key={p.permissionKey}
+                            className={cn(
+                              "flex items-start gap-2.5 rounded-lg border p-2.5 text-xs transition-all cursor-pointer",
+                              isChecked
+                                ? "border-navy-200 bg-white shadow-2xs"
+                                : "border-slate-200 bg-slate-50/50"
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              disabled={!canManage || busy}
+                              checked={isChecked}
+                              onChange={(e) => toggleKey(p.permissionKey, e.target.checked)}
+                              className="mt-0.5 h-3.5 w-3.5 rounded border-slate-300 text-navy-800"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <span className="font-bold text-navy-900 block leading-tight">
+                                {p.displayName || p.permissionKey}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono mt-0.5 block">
+                                {p.permissionKey}
+                              </span>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ) : null}
               </div>
-            </Card>
+            )}
+          </div>
 
-            {missingFromApi.length > 0 ? (
-              <Card>
-                <p className="text-sm text-amber-800">
-                  Matrix references keys missing from the live catalog: {missingFromApi.join(", ")}
-                </p>
-              </Card>
-            ) : null}
-          </>
-        )}
-      </div>
+          {missingFromApi.length > 0 ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+              <span className="font-semibold">Notice:</span> Matrix references keys missing from the live database: {missingFromApi.join(", ")}
+            </div>
+          ) : null}
+        </>
+      )}
 
+      {/* 5. FLOATING DOCKED SAVE BAR WHEN DIRTY */}
+      {dirty && selected ? (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-2xl border border-navy-800 bg-navy-950/95 px-5 py-3 text-white shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-xs font-semibold">
+              Unsaved changes for <strong className="text-white">{selected.label}</strong>
+            </span>
+          </div>
+          <div className="flex items-center gap-2 pl-2 border-l border-white/20">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={discardChanges}
+              className="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white transition-colors"
+            >
+              Discard
+            </button>
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={busy}
+              onClick={() => void saveAll()}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs border-none shadow-xs"
+            >
+              <Save className="mr-1.5 h-3.5 w-3.5" />
+              {busy ? "Saving…" : "Save Changes"}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 6. DELETE ROLE MODAL */}
       {deleteDialog ? (
         <DeleteRoleModal
           role={deleteDialog.role}
@@ -767,13 +1395,13 @@ function DeleteRoleModal(props: {
 
   const title =
     props.mode === "confirm"
-      ? "Delete role?"
+      ? "Delete Role?"
       : props.mode === "blocked"
-        ? "Cannot delete role"
-        : "Role protected";
+        ? "Cannot Delete Role"
+        : "System Role Protected";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs">
       <button
         type="button"
         className="absolute inset-0 cursor-default"
@@ -785,52 +1413,50 @@ function DeleteRoleModal(props: {
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-role-title"
-        className="relative w-full max-w-md overflow-hidden rounded-xl border border-border bg-white shadow-xl"
+        className="relative w-full max-w-md overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
       >
-        <div className="border-b border-border px-5 py-3">
-          <h3 id="delete-role-title" className="text-base font-semibold text-navy-900">
+        <div className="border-b border-border px-5 py-3.5">
+          <h3 id="delete-role-title" className="text-base font-bold text-navy-900">
             {title}
           </h3>
-          <p className="mt-0.5 text-sm text-slate-600">{props.role.label}</p>
+          <p className="mt-0.5 text-xs text-slate-500">{props.role.label}</p>
         </div>
 
-        <div className="space-y-3 px-5 py-4">
+        <div className="space-y-3 px-5 py-4 text-xs">
           {props.mode === "protected" ? (
             <>
-              <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                <span className="font-semibold text-navy-900">System Administrator</span> cannot be
-                deleted. It protects portal administration access.
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-700">
+                <span className="font-bold text-navy-900">System Administrator</span> cannot be
+                deleted because it protects institute super admin recovery.
               </p>
-              <p className="text-sm text-slate-600">
-                You can edit its permissions or deactivate other roles instead.
+              <p className="text-slate-600">
+                You can edit its individual permissions or deactivate other roles instead.
               </p>
             </>
           ) : null}
 
           {props.mode === "blocked" ? (
             <>
-              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
-                This role still has users assigned, so delete is blocked.
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-950 font-medium">
+                This role still has active accounts assigned, so delete is locked.
               </p>
-              <ul className="space-y-1.5 text-sm text-slate-700">
+              <ul className="space-y-1.5 text-slate-700 pl-1">
                 {activeUsers > 0 ? (
                   <li>
-                    <span className="font-semibold text-navy-900">{activeUsers}</span> active user
-                    {activeUsers === 1 ? "" : "s"} currently ha
-                    {activeUsers === 1 ? "s" : "ve"} this role
+                    • <span className="font-bold text-navy-900">{activeUsers}</span> active user
+                    {activeUsers === 1 ? "" : "s"} currently have this role.
                   </li>
                 ) : null}
                 {inactiveUsers > 0 ? (
                   <li>
-                    <span className="font-semibold text-navy-900">{inactiveUsers}</span> inactive user
-                    {inactiveUsers === 1 ? "" : "s"} still ha
-                    {inactiveUsers === 1 ? "s" : "ve"} this role
+                    • <span className="font-bold text-navy-900">{inactiveUsers}</span> inactive user
+                    {inactiveUsers === 1 ? "" : "s"} still assigned.
                   </li>
                 ) : null}
               </ul>
-              <p className="text-sm text-slate-600">
-                Open <span className="font-medium text-navy-900">All Users</span>, remove or change
-                this role for those people, then try Delete again.
+              <p className="text-slate-600">
+                Open <span className="font-bold text-navy-900">All Users</span>, change or reassign
+                this role for those accounts, then return here to delete.
               </p>
             </>
           ) : null}
@@ -838,105 +1464,35 @@ function DeleteRoleModal(props: {
           {props.mode === "confirm" ? (
             <>
               {props.role.isSystemRole ? (
-                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-950">
-                  This is a seeded system role. Deleting it removes it from Role Configuration
-                  permanently.
+                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-950 font-medium">
+                  This is a seeded institutional role. Deleting it removes it permanently.
                 </p>
               ) : (
-                <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700">
-                  No users are assigned to this role.
+                <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-700">
+                  No users are currently assigned to this role.
                 </p>
               )}
-              <p className="text-sm text-slate-700">
-                This permanently removes <span className="font-semibold">{props.role.label}</span> and
-                its permission mapping. This cannot be undone.
+              <p className="text-slate-700">
+                Are you sure you want to permanently remove <span className="font-bold text-navy-900">{props.role.label}</span>? This cannot be undone.
               </p>
-              <p className="text-xs text-slate-500">
-                Role key: <span className="font-mono">{props.role.roleKey}</span>
+              <p className="text-slate-400 font-mono">
+                Role key: {props.role.roleKey}
               </p>
             </>
           ) : null}
         </div>
 
         <div className="flex flex-wrap justify-end gap-2 border-t border-border bg-slate-50 px-5 py-3">
-          <Button variant="secondary" disabled={props.busy} onClick={props.onClose}>
+          <Button size="sm" variant="secondary" disabled={props.busy} onClick={props.onClose} className="text-xs">
             {props.mode === "confirm" ? "Cancel" : "Close"}
           </Button>
           {props.mode === "confirm" ? (
-            <Button variant="danger" disabled={props.busy} onClick={props.onConfirm}>
-              {props.busy ? "Deleting…" : "Delete role"}
+            <Button size="sm" variant="danger" disabled={props.busy} onClick={props.onConfirm} className="text-xs">
+              {props.busy ? "Deleting…" : "Confirm Delete"}
             </Button>
           ) : null}
         </div>
       </div>
     </div>
-  );
-}
-
-function ModuleLevelButton(props: {
-  label: string;
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={props.disabled}
-      onClick={props.onClick}
-      className={`rounded-md border px-2 py-1 text-[11px] font-medium ${
-        props.active
-          ? "border-navy-800 bg-navy-800 text-white"
-          : "border-border bg-white text-slate-600 hover:border-navy-700/40"
-      } disabled:opacity-50`}
-    >
-      {props.label}
-    </button>
-  );
-}
-
-function PermissionToggle(props: {
-  perm: {
-    key: string;
-    label: string;
-    description: string;
-    kind: "read" | "write";
-    sensitive?: boolean;
-  };
-  checked: boolean;
-  canManage: boolean;
-  busy: boolean;
-  onToggle: (key: string, on: boolean) => void;
-}) {
-  return (
-    <label
-      className={`flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm ${
-        props.perm.sensitive ? "border-amber-200 bg-amber-50/40" : "border-border bg-slate-50/60"
-      }`}
-    >
-      <input
-        type="checkbox"
-        className="mt-0.5"
-        disabled={!props.canManage || props.busy}
-        checked={props.checked}
-        onChange={(e) => props.onToggle(props.perm.key, e.target.checked)}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="flex flex-wrap items-center gap-1.5">
-          <span className="font-medium text-navy-900">{props.perm.label}</span>
-          <span className="text-[10px] uppercase tracking-wide text-slate-400">
-            {props.perm.kind === "read" ? "Read" : "Write"}
-          </span>
-          {props.perm.sensitive ? (
-            <span className="rounded bg-amber-100 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-800">
-              Sensitive
-            </span>
-          ) : null}
-        </span>
-        <span className="mt-0.5 block text-[11px] leading-snug text-slate-600">
-          {props.perm.description}
-        </span>
-      </span>
-    </label>
   );
 }

@@ -108,7 +108,7 @@ export function MentoringCaseDetailView({ caseId }: Props) {
           description="This student is not available in your mentoring scope."
           action={
             <Link href="/mentoring-risks">
-              <Button variant="secondary">Back to Mentoring & Risks</Button>
+              <Button variant="secondary">Back to Class Teacher &amp; Mentoring</Button>
             </Link>
           }
         />

@@ -169,6 +169,18 @@ const ROLE_ASSIGNMENT_COUNTS_SQL = `
 `;
 
 export async function listManagedRoles(includeInactive = true): Promise<RoleDetailDto[]> {
+  // Ensure class_teacher role exists in ap_roles table
+  await queryAcademic<RoleRow[]>(`SELECT id FROM ap_roles WHERE role_key = 'class_teacher' LIMIT 1`)
+    .then(async (found) => {
+      if (!found[0]) {
+        await executeAcademic(
+          `INSERT INTO ap_roles (role_key, label, description, is_system_role, is_active, is_global_capable)
+           VALUES ('class_teacher', 'Class Teacher', 'Class Teacher / Section In-Charge — class student roster, section attendance & mentoring', 1, 1, 0)`
+        ).catch(() => {});
+      }
+    })
+    .catch(() => {});
+
   const rows = await queryAcademic<RoleRow[]>(
     `
     SELECT

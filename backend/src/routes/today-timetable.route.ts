@@ -51,10 +51,10 @@ todayTimetableRouter.get("/all-batches", requirePermission("today_timetable.view
     const academicYear = str(req.query.academicYear);
     const timetableDate = str(req.query.date);
 
-    if (!collegeId || !branchId || !academicYear) {
+    if (!academicYear) {
       res.json({
         date: timetableDate ?? null,
-        academicYear: academicYear ?? null,
+        academicYear: null,
         batches: [],
       });
       return;
@@ -62,8 +62,10 @@ todayTimetableRouter.get("/all-batches", requirePermission("today_timetable.view
 
     const data = await getAllBatchesDailyTimetableData({
       collegeId,
+      collegeIds: scoped.collegeIds,
       courseId,
       branchId,
+      branchIds: scoped.branchIds,
       academicYear,
       timetableDate,
     });
