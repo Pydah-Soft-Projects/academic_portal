@@ -553,11 +553,14 @@ export async function loginWithSsoToken(input: {
   }
 
   // 1) Verify token with CRM Backend Gateway
-  const crmVerifyUrl = `${env.crm.backendUrl.replace(/\/$/, "")}/auth/verify-token`;
+  const base = env.crm.backendUrl.replace(/\/$/, "");
+  let crmVerifyUrl = base.endsWith("/auth/verify-token")
+    ? base
+    : `${base}/auth/verify-token`;
   let verifyResult: CrmVerifyTokenResponse;
 
   try {
-    const response = await fetch(crmVerifyUrl, {
+    let response = await fetch(crmVerifyUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -566,18 +569,43 @@ export async function loginWithSsoToken(input: {
       signal: AbortSignal.timeout(10000),
     });
 
+    // If 404 and base URL didn't include /api, try /api/auth/verify-token
+    if (response.status === 404 && !base.includes("/api")) {
+      const altUrl = `${base}/api/auth/verify-token`;
+      const altResponse = await fetch(altUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ encryptedToken }),
+        signal: AbortSignal.timeout(10000),
+      }).catch(() => null);
+
+      if (altResponse && altResponse.status !== 404) {
+        response = altResponse;
+        crmVerifyUrl = altUrl;
+      }
+    }
+
     const bodyText = await response.text();
     try {
       verifyResult = JSON.parse(bodyText);
     } catch {
-      throw Object.assign(new Error("CRM gateway returned invalid response"), { status: 502 });
+      throw Object.assign(
+        new Error(`CRM gateway returned invalid JSON (Status: ${response.status})`),
+        { status: 502 },
+      );
     }
   } catch (err: unknown) {
     if (typeof err === "object" && err !== null && "status" in err) {
       throw err;
     }
+    const cause = (err as { cause?: Error & { code?: string } })?.cause;
+    const causeDetails = cause ? ` (${cause.code || cause.message || String(cause)})` : "";
     const message = err instanceof Error ? err.message : "Failed to connect to CRM gateway";
-    throw Object.assign(new Error(`CRM verify-token request failed: ${message}`), { status: 502 });
+    console.error(`[SSO] CRM verify-token request failed for ${crmVerifyUrl}:`, err, cause);
+    throw Object.assign(
+      new Error(`CRM verify-token request failed: ${message}${causeDetails} [Target: ${crmVerifyUrl}]`),
+      { status: 502 },
+    );
   }
 
   if (!verifyResult.success || !verifyResult.valid) {
