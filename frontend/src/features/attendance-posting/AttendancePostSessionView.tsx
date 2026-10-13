@@ -22,6 +22,7 @@ type StudentMark = {
   name: string;
   admissionNo: string;
   pinNo: string | null;
+  studentStatus?: string | null;
   course?: string | null;
   branch?: string | null;
   year?: number | null;
@@ -121,14 +122,28 @@ export function AttendancePostSessionView() {
         }
         if (!cancelled) {
           const data = body as Payload;
-          setPayload(data);
           
-          const sortedStudents = [...data.students].sort((a, b) => {
+          // Show only regular status students on the attendance posting roster
+          const regularStudents = (data.students || []).filter((student) => {
+            const st = (student.studentStatus || "").trim().toLowerCase();
+            return !st || st === "regular";
+          });
+
+          const sortedStudents = [...regularStudents].sort((a, b) => {
             const aKey = (a.pinNo && a.pinNo.trim()) ? a.pinNo.trim() : a.admissionNo;
             const bKey = (b.pinNo && b.pinNo.trim()) ? b.pinNo.trim() : b.admissionNo;
             return aKey.localeCompare(bKey, undefined, { numeric: true, sensitivity: 'base' });
           });
           
+          setPayload({
+            ...data,
+            session: {
+              ...data.session,
+              studentCount: sortedStudents.length,
+            },
+            students: sortedStudents,
+          });
+
           setStudents(
             sortedStudents.map((student) => ({
               ...student,
@@ -321,8 +336,11 @@ export function AttendancePostSessionView() {
               <span className="text-slate-400 font-normal">|</span>
               <span className="whitespace-nowrap text-slate-600 font-medium">{payload.session.time}</span>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <StatusBadge status={payload.posted ? "Posted" : "Pending"} />
+              <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                Regular Students ({students.length})
+              </span>
               {payload.session.sections && payload.session.sections.length > 1 ? (
                 <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
                   Combined ({payload.session.sections.length} Sections)
@@ -474,7 +492,7 @@ export function AttendancePostSessionView() {
               ? `No ${statusFilter} students found.`
               : selectedSectionFilter !== "all"
               ? `No students found in Section ${selectedSectionFilter.replace(/^section\s+/i, "")}.`
-              : "No students on this roster."}
+              : "No regular students on this roster."}
           </p>
         ) : (
           <>
@@ -500,6 +518,9 @@ export function AttendancePostSessionView() {
                           <p className="truncate text-sm font-bold text-navy-900 tracking-wide">
                             {displayPin}
                           </p>
+                          <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
+                            Regular
+                          </span>
                           {payload.session.sections && payload.session.sections.length > 1 && student.section ? (
                             <span className="inline-flex items-center text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
                               Sec {student.section.replace(/^section\s+/i, "")}
@@ -539,13 +560,14 @@ export function AttendancePostSessionView() {
               <thead className="sticky top-0 z-10 border-b border-border bg-slate-100/95 backdrop-blur text-[11px] uppercase tracking-wider text-slate-600 font-semibold shadow-xs">
                 <tr>
                   <th className="px-3 py-2.5 text-center w-12 flex-none">#</th>
-                  <th className="px-3 py-2.5 w-44 lg:w-48">PIN Number</th>
+                  <th className="px-3 py-2.5 w-40 lg:w-44">PIN Number</th>
                   <th className="px-3 py-2.5 w-1/3">Student Name</th>
                   {payload.session.sections && payload.session.sections.length > 1 ? (
                     <th className="px-3 py-2.5 w-24">Section</th>
                   ) : null}
                   <th className="px-3 py-2.5 w-1/5">Course & Branch</th>
                   <th className="px-3 py-2.5 hidden md:table-cell w-1/6">Year & Sem</th>
+                  <th className="px-3 py-2.5 text-center w-24">Status</th>
                   <th className="px-3 py-2.5 text-right w-28">Attendance</th>
                 </tr>
               </thead>
@@ -604,7 +626,14 @@ export function AttendancePostSessionView() {
                         {yearSem}
                       </td>
 
-                      {/* 6. Attendance Status Buttons */}
+                      {/* 6. Student Status */}
+                      <td className="px-3 py-2.5 text-center truncate">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          {student.studentStatus || "Regular"}
+                        </span>
+                      </td>
+
+                      {/* 7. Attendance Status Buttons */}
                       <td className="px-3 py-2.5 text-right">
                         <div className="inline-flex shrink-0 items-center rounded-lg border border-border p-0.5 bg-slate-50">
                           {MARKS.map((mark) => (
@@ -640,7 +669,7 @@ export function AttendancePostSessionView() {
         >
           <div className="space-y-4">
             <div className="rounded-lg bg-slate-50 p-3 border border-border">
-              <p className="text-xs text-slate-600 mb-2">Summary Counts (Click to filter list below):</p>
+              <p className="text-xs text-slate-600 mb-2">Regular Students Summary (Click to filter list below):</p>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
@@ -715,7 +744,7 @@ export function AttendancePostSessionView() {
               <div className="flex items-center justify-between mb-2">
                 <h4 className="text-xs font-semibold uppercase text-slate-500">
                   {modalFilter === "all"
-                    ? `All Students (${modalFilteredStudents.length})`
+                    ? `All Regular Students (${modalFilteredStudents.length})`
                     : modalFilter === "present"
                     ? `Present Students (${modalFilteredStudents.length})`
                     : `Absent Students (${modalFilteredStudents.length})`}
@@ -737,7 +766,7 @@ export function AttendancePostSessionView() {
                         {payload.session.sections && payload.session.sections.length > 1 ? (
                           <th className="px-2.5 py-1.5 w-16">Section</th>
                         ) : null}
-                        <th className="px-2.5 py-1.5 text-right w-20">Status</th>
+                        <th className="px-2.5 py-1.5 text-right w-24">Attendance</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border bg-white">

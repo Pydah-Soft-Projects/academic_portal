@@ -580,7 +580,7 @@ export async function getAllBatchesDailyTimetableData(filters: {
       FROM students s
       LEFT JOIN student_sections ss ON ss.student_id = s.id
       WHERE s.branch_id = ?
-        AND (s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved','discontinued','inactive','cancelled'))
+        AND TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci
       GROUP BY TRIM(s.batch), section_name
       HAVING section_name IS NOT NULL AND section_name <> ''
       `,

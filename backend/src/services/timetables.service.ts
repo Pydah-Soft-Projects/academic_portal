@@ -223,7 +223,7 @@ async function countStudentsForScope(filters: TimetablePlannerFilters) {
   if (!filters.branchId) return 0;
   const where = [
     "s.branch_id = ?",
-    `(s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved','discontinued','inactive','cancelled'))`,
+    "TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci",
   ];
   const params: unknown[] = [filters.branchId];
   if (filters.batch) {

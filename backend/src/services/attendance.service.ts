@@ -62,6 +62,7 @@ type StudentRow = RowDataPacket & {
   branch: string | null;
   current_year: number | null;
   current_semester: number | null;
+  student_status?: string | null;
   has_photo?: number;
 };
 
@@ -607,7 +608,7 @@ async function loadSessionContext(sessionId: number) {
 async function loadRosterStudents(row: SessionListRow) {
   const where = [
     "s.branch_id = ?",
-    `(s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved','discontinued','inactive','cancelled'))`,
+    "TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci",
   ];
   const params: unknown[] = [row.branch_id];
 
@@ -652,11 +653,12 @@ async function loadRosterStudents(row: SessionListRow) {
   return queryStudent<StudentRow[]>(
     `
     SELECT s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester,
+           s.student_status,
            CASE WHEN s.student_photo IS NOT NULL AND TRIM(s.student_photo) <> '' THEN 1 ELSE 0 END AS has_photo
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE ${where.join(" AND ")}
-    GROUP BY s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester
+    GROUP BY s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester, s.student_status
     ORDER BY s.student_name
     LIMIT 500
     `,
@@ -804,6 +806,7 @@ export async function getAttendanceSession(sessionId: number) {
           name: student.student_name ?? "Unknown",
           admissionNo: student.admission_number,
           pinNo: student.pin_no ?? null,
+          studentStatus: student.student_status ?? "Regular",
           course: student.course ?? null,
           branch: student.branch ?? null,
           year: student.current_year ?? null,
@@ -901,6 +904,7 @@ export async function getAttendanceSession(sessionId: number) {
       name: item.student.student_name ?? "Unknown",
       admissionNo: item.student.admission_number,
       pinNo: item.student.pin_no ?? null,
+      studentStatus: item.student.student_status ?? "Regular",
       course: item.student.course ?? null,
       branch: item.student.branch ?? null,
       year: item.student.current_year ?? null,
