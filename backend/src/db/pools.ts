@@ -17,12 +17,32 @@ let examPool: mysql.Pool | null = null;
 let mongoClient: MongoClient | null = null;
 let hrmsDb: Db | null = null;
 
+function isConnError(err: any): boolean {
+  if (!err) return false;
+  const code = err.code || "";
+  const errno = err.errno;
+  const msg = String(err.message || "").toLowerCase();
+  return (
+    code === "ECONNRESET" ||
+    code === "PROTOCOL_CONNECTION_LOST" ||
+    code === "ETIMEDOUT" ||
+    code === "EPIPE" ||
+    code === "ECONNREFUSED" ||
+    code === "ER_SERVER_SHUTDOWN" ||
+    errno === -4077 ||
+    err.fatal === true ||
+    msg.includes("econnreset") ||
+    msg.includes("connection lost") ||
+    msg.includes("closed")
+  );
+}
+
 function createPool(config: DbConfig, connectionLimit = 5) {
   if (!config.host || !config.user) {
     return null;
   }
 
-  return mysql.createPool({
+  const pool = mysql.createPool({
     host: config.host,
     port: config.port,
     user: config.user,
@@ -30,11 +50,21 @@ function createPool(config: DbConfig, connectionLimit = 5) {
     database: config.database,
     waitForConnections: true,
     connectionLimit,
+    maxIdle: connectionLimit,
+    idleTimeout: 30000,
     enableKeepAlive: true,
+    keepAliveInitialDelay: 10000,
+    connectTimeout: 10000,
     // Keep MySQL DATE/DATETIME as strings so JS timezones cannot shift calendar days.
     dateStrings: true,
     ...(config.ssl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
+
+  pool.on("error", (err) => {
+    console.warn(`[db-pool:${config.database}] Idle client connection error:`, (err as any)?.code || (err as any)?.message);
+  });
+
+  return pool;
 }
 
 export function getAcademicPool() {
@@ -86,26 +116,66 @@ export async function queryStudent<T = mysql.RowDataPacket[]>(
   sql: string,
   params: unknown[] = [],
 ) {
-  const [rows] = await getStudentPool().query(sql, params);
-  return rows as T;
+  const pool = getStudentPool();
+  try {
+    const [rows] = await pool.query(sql, params);
+    return rows as T;
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[student_db] Connection reset (${err.code || err.message}). Retrying query once...`);
+      const [rows] = await pool.query(sql, params);
+      return rows as T;
+    }
+    throw err;
+  }
 }
 
 export async function executeStudent(sql: string, params: unknown[] = []) {
-  const [result] = await getStudentPool().execute(sql, params as any[]);
-  return result as mysql.ResultSetHeader;
+  const pool = getStudentPool();
+  try {
+    const [result] = await pool.execute(sql, params as any[]);
+    return result as mysql.ResultSetHeader;
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[student_db] Connection reset (${err.code || err.message}). Retrying execute once...`);
+      const [result] = await pool.execute(sql, params as any[]);
+      return result as mysql.ResultSetHeader;
+    }
+    throw err;
+  }
 }
 
 export async function queryExam<T = mysql.RowDataPacket[]>(
   sql: string,
   params: unknown[] = [],
 ) {
-  const [rows] = await getExamPool().query(sql, params as any[]);
-  return rows as T;
+  const pool = getExamPool();
+  try {
+    const [rows] = await pool.query(sql, params as any[]);
+    return rows as T;
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[exam_db] Connection reset (${err.code || err.message}). Retrying query once...`);
+      const [rows] = await pool.query(sql, params as any[]);
+      return rows as T;
+    }
+    throw err;
+  }
 }
 
 export async function executeExam(sql: string, params: unknown[] = []) {
-  const [result] = await getExamPool().execute(sql, params as any[]);
-  return result as mysql.ResultSetHeader;
+  const pool = getExamPool();
+  try {
+    const [result] = await pool.execute(sql, params as any[]);
+    return result as mysql.ResultSetHeader;
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[exam_db] Connection reset (${err.code || err.message}). Retrying execute once...`);
+      const [result] = await pool.execute(sql, params as any[]);
+      return result as mysql.ResultSetHeader;
+    }
+    throw err;
+  }
 }
 
 export async function queryAcademic<T = mysql.RowDataPacket[]>(
@@ -116,8 +186,17 @@ export async function queryAcademic<T = mysql.RowDataPacket[]>(
   if (!pool) {
     throw new Error("Academic Portal database is not configured");
   }
-  const [rows] = await pool.query(sql, params as any[]);
-  return rows as T;
+  try {
+    const [rows] = await pool.query(sql, params as any[]);
+    return rows as T;
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[academic_portal] Connection reset (${err.code || err.message}). Retrying query once...`);
+      const [rows] = await pool.query(sql, params as any[]);
+      return rows as T;
+    }
+    throw err;
+  }
 }
 
 export async function executeAcademic(sql: string, params: unknown[] = []) {
@@ -125,8 +204,17 @@ export async function executeAcademic(sql: string, params: unknown[] = []) {
   if (!pool) {
     throw new Error("Academic Portal database is not configured");
   }
-  const [result] = await pool.execute(sql, params as any[]);
-  return result as mysql.ResultSetHeader;
+  try {
+    const [result] = await pool.execute(sql, params as any[]);
+    return result as mysql.ResultSetHeader;
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[academic_portal] Connection reset (${err.code || err.message}). Retrying execute once...`);
+      const [result] = await pool.execute(sql, params as any[]);
+      return result as mysql.ResultSetHeader;
+    }
+    throw err;
+  }
 }
 
 export async function withAcademicTransaction<T>(
@@ -136,14 +224,28 @@ export async function withAcademicTransaction<T>(
   if (!pool) {
     throw new Error("Academic Portal database is not configured");
   }
-  const conn = await pool.getConnection();
+  let conn: mysql.PoolConnection;
+  try {
+    conn = await pool.getConnection();
+  } catch (err: any) {
+    if (isConnError(err)) {
+      console.warn(`[academic_portal] Connection reset on getConnection (${err.code || err.message}). Retrying once...`);
+      conn = await pool.getConnection();
+    } else {
+      throw err;
+    }
+  }
   try {
     await conn.beginTransaction();
     const result = await fn(conn);
     await conn.commit();
     return result;
   } catch (error) {
-    await conn.rollback();
+    try {
+      await conn.rollback();
+    } catch {
+      // ignore rollback errors if connection was severed
+    }
     throw error;
   } finally {
     conn.release();

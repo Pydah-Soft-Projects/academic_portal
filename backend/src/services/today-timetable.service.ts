@@ -629,6 +629,8 @@ export async function getAllBatchesDailyTimetableData(filters: {
     params.push(filters.semester);
   }
 
+  conds.push("status NOT IN ('superseded', 'archived')");
+
   const planRows = await queryAcademic<
     (RowDataPacket & {
       id: number;
@@ -645,10 +647,6 @@ export async function getAllBatchesDailyTimetableData(filters: {
     `
     SELECT id, college_id, course_id, branch_id, batch, year_of_study, semester_number, section_name, status
     FROM ap_timetable_plans
-    WHERE college_id = ?
-      AND branch_id = ?
-      AND academic_year_label = ?
-      AND status NOT IN ('superseded', 'archived')
     WHERE ${conds.join(" AND ")}
     ORDER BY CASE WHEN status = 'published' THEN 0 ELSE 1 END, year_of_study DESC, batch DESC, section_name ASC
     `,
@@ -680,7 +678,6 @@ export async function getAllBatchesDailyTimetableData(filters: {
       continue; // Skip phantom cohort that has 0 students in the database!
     }
 
-    const key = `${b}_${y}_${s}_${sec || ""}`;
     const key = `${p.college_id}_${p.branch_id}_${b}_${y}_${s}_${sec || ""}`;
     if (!cohortsMap.has(key)) {
       cohortsMap.set(key, {
@@ -821,6 +818,7 @@ export type MasterVsChangedReportFilter = {
   facultyName?: string;
   subjectCode?: string;
   limit?: number;
+  includeStudents?: boolean;
 };
 
 export async function getMasterVsChangedTimetableReport(filters: MasterVsChangedReportFilter) {
@@ -1571,6 +1569,9 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       const attendancePct =
         totalMarked > 0 ? Math.round(((r.present_count || 0) / totalMarked) * 100) : null;
 
+      const codeFromSub = (masterSubjectCode || todaySubjectCode || "").match(/^[0-9]{2}([A-Za-z]{2,5})[0-9]/)?.[1]?.toUpperCase();
+      const resolvedBranchCode = bInfo?.code || bInfo?.name || codeFromSub || "";
+
       return {
         id: r.id,
         date: d,
@@ -1579,7 +1580,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         slotLabel: matchedAct?.slot_label || r.slot_label || (r.period_slot_id ? `P${r.period_slot_id}` : "Session"),
         branchId: Number(r.branch_id) || null,
         branchName: bInfo?.name || "",
-        branchCode: bInfo?.code || bInfo?.name || "",
+        branchCode: resolvedBranchCode,
         batch: r.batch || "Regular",
         sectionName: r.section_name || null,
         semester: r.semester_number || 1,
@@ -1596,7 +1597,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         presentCount: r.present_count || 0,
         absentCount: r.absent_count || 0,
         attendancePct,
-        enrolledCount: resolveEnrolledStrength(r.branch_id, bInfo?.code, r.batch, r.section_name, r.year_of_study) || ((r.present_count || 0) + (r.absent_count || 0)),
+        enrolledCount: resolveEnrolledStrength(r.branch_id, resolvedBranchCode, r.batch, r.section_name, r.year_of_study) || ((r.present_count || 0) + (r.absent_count || 0)),
       };
     })
     .filter((c): c is NonNullable<typeof c> => c !== null);
@@ -1696,6 +1697,9 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
           const start = m.start_time ? String(m.start_time).slice(0, 5) : "";
           const end = m.end_time ? String(m.end_time).slice(0, 5) : "";
 
+          const codeFromSub = (masterSubjectCode || todaySubjectCode || "").match(/^[0-9]{2}([A-Za-z]{2,5})[0-9]/)?.[1]?.toUpperCase();
+          const resolvedBranchCode = bInfo?.code || bInfo?.name || codeFromSub || "";
+
           comparisons.push({
             id: m.id + 1000000,
             date: d,
@@ -1704,7 +1708,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
             slotLabel: matchedAct?.slot_label || m.slot_label || (m.period_slot_id ? `P${m.period_slot_id}` : "Session"),
             branchId: Number(m.branch_id) || null,
             branchName: bInfo?.name || "",
-            branchCode: bInfo?.code || bInfo?.name || "",
+            branchCode: resolvedBranchCode,
             batch: m.batch || "Regular",
             sectionName: m.section_name || null,
             semester: m.semester_number || 1,
@@ -1721,7 +1725,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
             presentCount: 0,
             absentCount: 0,
             attendancePct: null,
-            enrolledCount: resolveEnrolledStrength(Number(m.branch_id), bInfo?.code, m.batch, m.section_name, Number(m.year_of_study) || 0),
+            enrolledCount: resolveEnrolledStrength(Number(m.branch_id), resolvedBranchCode, m.batch, m.section_name, Number(m.year_of_study) || 0),
           });
         }
       }
@@ -1735,6 +1739,194 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     if (secA !== secB) return secA.localeCompare(secB);
     return (a.time || "").localeCompare(b.time || "");
   });
+
+  // If includeStudents requested (for particular staff PDF/Excel audit), load full student attendance roster
+  if (filters.includeStudents && comparisons.length > 0) {
+    const conductedSessionIds = comparisons
+      .filter((c) => c.isConducted && c.id && c.id < 1000000)
+      .map((c) => c.id);
+
+    const sessionStudentsMap = new Map<number, Array<{
+      studentDbId: number;
+      rollNo: string;
+      studentName: string;
+      status: "present" | "absent" | "od" | "leave" | "pending";
+      remarks?: string | null;
+    }>>();
+
+    if (conductedSessionIds.length > 0) {
+      try {
+        const marksRows = await queryAcademic<
+          Array<RowDataPacket & {
+            class_session_id: number;
+            student_db_id: number;
+            admission_number: string | null;
+            status: string;
+            remarks: string | null;
+          }>
+        >(
+          `SELECT ap.class_session_id, aps.student_db_id, aps.admission_number, aps.status, aps.remarks
+           FROM ap_attendance_posts ap
+           INNER JOIN ap_attendance_post_students aps ON aps.attendance_post_id = ap.id
+           WHERE ap.class_session_id IN (${conductedSessionIds.map(() => "?").join(",")})`,
+          conductedSessionIds,
+        );
+
+        const studentIds = Array.from(new Set(marksRows.map((m) => m.student_db_id).filter(Boolean)));
+        const studentMap = new Map<number, { name: string; pinNo: string | null; admissionNo: string | null }>();
+
+        if (studentIds.length > 0) {
+          const chunkSize = 500;
+          for (let i = 0; i < studentIds.length; i += chunkSize) {
+            const chunk = studentIds.slice(i, i + chunkSize);
+            const sRows = await queryStudent<
+              Array<RowDataPacket & {
+                id: number;
+                student_name: string;
+                pin_no: string | null;
+                admission_number: string | null;
+              }>
+            >(
+              `SELECT s.id, s.student_name, s.pin_no, s.admission_number
+               FROM students s
+               WHERE s.id IN (${chunk.map(() => "?").join(",")})`,
+              chunk,
+            );
+            for (const s of sRows) {
+              studentMap.set(s.id, {
+                name: s.student_name,
+                pinNo: s.pin_no,
+                admissionNo: s.admission_number,
+              });
+            }
+          }
+        }
+
+        for (const m of marksRows) {
+          if (!sessionStudentsMap.has(m.class_session_id)) {
+            sessionStudentsMap.set(m.class_session_id, []);
+          }
+          const sInfo = studentMap.get(m.student_db_id);
+          const rollNo = sInfo?.pinNo || sInfo?.admissionNo || m.admission_number || String(m.student_db_id);
+          const studentName = sInfo?.name || `Student #${rollNo}`;
+          const rawStatus = (m.status || "").toLowerCase();
+          const normStatus: "present" | "absent" | "od" | "leave" | "pending" =
+            rawStatus === "present" ? "present" : rawStatus === "absent" ? "absent" : rawStatus === "od" ? "od" : rawStatus === "leave" ? "leave" : "present";
+
+          sessionStudentsMap.get(m.class_session_id)!.push({
+            studentDbId: m.student_db_id,
+            rollNo,
+            studentName,
+            status: normStatus,
+            remarks: m.remarks || null,
+          });
+        }
+
+        for (const [_, list] of sessionStudentsMap.entries()) {
+          list.sort((a, b) => a.rollNo.localeCompare(b.rollNo) || a.studentName.localeCompare(b.studentName));
+        }
+      } catch (err) {
+        console.warn("Failed to load conducted session students:", err);
+      }
+    }
+
+    // For sessions that don't have attendance posts, load enrolled students from students table
+    const unpostedSessions = comparisons.filter((c) => !sessionStudentsMap.has(c.id));
+    if (unpostedSessions.length > 0) {
+      try {
+        const classKeys = new Set<string>();
+        const sessionClassMap = new Map<number, string>();
+        for (const c of unpostedSessions) {
+          const b = (c.batch || "").trim().replace(/^batch\s*/i, "");
+          const sec = (c.sectionName || "").trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "");
+          const bCode = (c.branchCode || "").trim().toUpperCase();
+          if (b && sec) {
+            const key = `${c.branchId || bCode}__${b}__${sec}`;
+            classKeys.add(key);
+            sessionClassMap.set(c.id, key);
+          }
+        }
+
+        if (classKeys.size > 0) {
+          const classStudentsMap = new Map<string, Array<{
+            studentDbId: number;
+            rollNo: string;
+            studentName: string;
+            status: "pending";
+          }>>();
+
+          const unpostedBranchIds = Array.from(new Set(unpostedSessions.map((c) => c.branchId).filter(Boolean))) as number[];
+          const unpostedBatches = Array.from(new Set(unpostedSessions.map((c) => (c.batch || "").trim().replace(/^batch\s*/i, "")).filter(Boolean)));
+
+          if (unpostedBranchIds.length > 0 && unpostedBatches.length > 0) {
+            const enrolledRows = await queryStudent<
+              Array<RowDataPacket & {
+                id: number;
+                branch_id: number;
+                batch: string;
+                section: string;
+                student_name: string;
+                pin_no: string | null;
+                admission_number: string | null;
+              }>
+            >(
+              `SELECT s.id, s.branch_id, TRIM(s.batch) as batch, TRIM(s.section) as section, s.student_name, s.pin_no, s.admission_number
+               FROM students s
+               WHERE s.branch_id IN (${unpostedBranchIds.map(() => "?").join(",")})
+                 AND s.batch IN (${unpostedBatches.map(() => "?").join(",")})
+                 AND TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular'
+                 AND s.section IS NOT NULL AND TRIM(s.section) <> ''`,
+              [...unpostedBranchIds, ...unpostedBatches],
+            );
+
+            for (const s of enrolledRows) {
+              const bInfo = branchMap.get(s.branch_id);
+              const bCode = (bInfo?.code || "").trim().toUpperCase();
+              const secClean = (s.section || "").trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "");
+              const bClean = (s.batch || "").trim().replace(/^batch\s*/i, "");
+              const roll = s.pin_no || s.admission_number || String(s.id);
+              const item = {
+                studentDbId: s.id,
+                rollNo: roll,
+                studentName: s.student_name || `Student #${roll}`,
+                status: "pending" as const,
+              };
+
+              const k1 = `${s.branch_id}__${bClean}__${secClean}`;
+              if (!classStudentsMap.has(k1)) classStudentsMap.set(k1, []);
+              classStudentsMap.get(k1)!.push(item);
+
+              if (bCode) {
+                const k2 = `${bCode}__${bClean}__${secClean}`;
+                if (!classStudentsMap.has(k2)) classStudentsMap.set(k2, []);
+                classStudentsMap.get(k2)!.push(item);
+              }
+            }
+
+            for (const [_, list] of classStudentsMap.entries()) {
+              list.sort((a, b) => a.rollNo.localeCompare(b.rollNo) || a.studentName.localeCompare(b.studentName));
+            }
+
+            for (const c of unpostedSessions) {
+              const key = sessionClassMap.get(c.id);
+              if (key && classStudentsMap.has(key)) {
+                sessionStudentsMap.set(c.id, classStudentsMap.get(key)!);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load enrolled students for unposted sessions:", err);
+      }
+    }
+
+    // Attach student attendance records to comparison sessions
+    comparisons.forEach((c) => {
+      if (c.id && sessionStudentsMap.has(c.id)) {
+        (c as any).students = sessionStudentsMap.get(c.id);
+      }
+    });
+  }
 
   // 5. Build Aggregates
   let totalMasterPeriods = 0;
@@ -2055,6 +2247,27 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         (f.totalMarked || 0) > 0
           ? Math.round(((f.totalPresent || 0) / f.totalMarked) * 100)
           : (f.classesConducted > 0 ? 100 : null);
+      const netTeaching =
+        f.masterAssignedPeriods > 0
+          ? Math.max(0, f.masterAssignedPeriods - f.relievedCount + f.substituteTakenCount)
+          : (f.classesConducted || f.substituteTakenCount);
+      let enrolledSum = 0;
+      const cleanHrms = (f.hrmsId || "").trim().toLowerCase();
+      const cleanName = (f.facultyName || "").trim().toLowerCase();
+      for (const c of comparisons) {
+        const todayHrms = (c.todayFacultyHrmsId || "").trim().toLowerCase();
+        const masterHrms = (c.masterFacultyHrmsId || "").trim().toLowerCase();
+        const todayName = (c.todayFacultyName || "").trim().toLowerCase();
+        const masterName = (c.masterFacultyName || "").trim().toLowerCase();
+        const isMatch =
+          (cleanHrms && (todayHrms === cleanHrms || masterHrms === cleanHrms)) ||
+          (cleanName && (todayName === cleanName || masterName === cleanName));
+        if (isMatch && (c as any).enrolledCount) {
+          enrolledSum = Math.max(enrolledSum, Number((c as any).enrolledCount) || 0);
+        }
+      }
+      const totalEnrolled = Math.max(enrolledSum, f.totalMarked || 0);
+
       return {
         hrmsId: f.hrmsId,
         facultyName: f.facultyName,
@@ -2062,8 +2275,9 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         classesConducted: f.classesConducted,
         relievedCount: f.relievedCount,
         substituteTakenCount: f.substituteTakenCount,
-        netTeachingCount: f.classesConducted || Math.max(0, f.masterAssignedPeriods - f.relievedCount + f.substituteTakenCount),
+        netTeachingCount: netTeaching,
         subjects: Array.from(f.subjects),
+        totalEnrolled,
         totalPresent: f.totalPresent || 0,
         totalAbsent: f.totalAbsent || 0,
         totalMarked: f.totalMarked || 0,

@@ -290,10 +290,20 @@ export function generateSpreadsheetXml(options: ExcelWorkbookOptions): string {
     "SubTotalRow",
   ]);
 
-  // Render each Worksheet
+  // Render each Worksheet with guaranteed unique sheet names
+  const usedSheetNames = new Set<string>();
   for (const sheet of options.sheets) {
-    const sheetName = sanitizeSheetName(sheet.name);
-    xml += ` <Worksheet ss:Name="${escapeXml(sheetName)}">\n`;
+    const baseName = sanitizeSheetName(sheet.name);
+    let uniqueName = baseName;
+    let counter = 1;
+    while (usedSheetNames.has(uniqueName.toLowerCase())) {
+      const suffix = ` (${counter})`;
+      uniqueName = `${baseName.slice(0, Math.max(1, 31 - suffix.length))}${suffix}`;
+      counter++;
+    }
+    usedSheetNames.add(uniqueName.toLowerCase());
+
+    xml += ` <Worksheet ss:Name="${escapeXml(uniqueName)}">\n`;
     xml += `  <Table>\n`;
 
     if (sheet.columns && sheet.columns.length > 0) {
