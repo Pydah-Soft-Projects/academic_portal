@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Response } from "express";
+import type { Request, Response, NextFunction } from "express";
 import type { AuthedRequest } from "../middleware/auth.middleware.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
 import { loadAuthzContext } from "../authz/authorization.service.js";
@@ -7,6 +7,7 @@ import {
   clearSessionCookieOptions,
   getSessionCookieName,
   loginWithCredentials,
+  loginWithSsoToken,
   revokeSessionToken,
   sessionCookieOptions,
 } from "../services/auth.service.js";
@@ -191,6 +192,68 @@ authRouter.post("/login", async (req, res, next) => {
     next(error);
   }
 });
+
+async function handleSsoLogin(req: Request, res: Response, next: NextFunction) {
+  try {
+    const token = String(
+      req.body?.token ?? req.body?.encryptedToken ?? req.body?.ssoToken ?? "",
+    ).trim();
+
+    if (!token) {
+      res.status(400).json({
+        success: false,
+        message: "SSO token is required",
+      });
+      return;
+    }
+
+    const result = await loginWithSsoToken({
+      token,
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    const authz = await loadAuthzContext(result.user.id);
+    res.cookie(getSessionCookieName(), result.sessionToken, sessionCookieOptions(result.expiresAt));
+
+    res.json({
+      success: true,
+      token: result.sessionToken,
+      user: {
+        id: result.user.id,
+        name: result.user.name,
+        email: result.user.email,
+        username: result.user.username,
+        hrmsEmployeeId: result.user.hrmsEmployeeId,
+        hrmsUserId: result.user.hrmsUserId,
+      },
+      authorization: {
+        roles: authz.roles.map((role) => ({
+          roleKey: role.roleKey,
+          label: role.label,
+          collegeId: role.collegeId,
+          branchId: role.branchId,
+        })),
+        permissions: authz.permissions,
+        scope: authz.scope,
+      },
+      expiresAt: result.expiresAt.toISOString(),
+    });
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    if (status && status >= 400 && status < 500) {
+      res.status(status).json({
+        success: false,
+        message: error instanceof Error ? error.message : "SSO login failed",
+      });
+      return;
+    }
+    next(error);
+  }
+}
+
+authRouter.post("/sso-login", handleSsoLogin);
+authRouter.post("/sso-session", handleSsoLogin);
 
 authRouter.post("/logout", async (req: AuthedRequest, res, next) => {
   try {

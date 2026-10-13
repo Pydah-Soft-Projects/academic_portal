@@ -516,6 +516,209 @@ export async function loginWithCredentials(input: {
   throw Object.assign(new Error("Invalid credentials"), { status: 401 });
 }
 
+export type CrmVerifyTokenResponse = {
+  success: boolean;
+  valid: boolean;
+  message?: string;
+  data?: {
+    userId?: string | number;
+    portalId?: string;
+    role?: string;
+    expiresAt?: string;
+    email?: string;
+    employeeId?: string | number;
+    username?: string;
+    name?: string;
+    [key: string]: unknown;
+  };
+};
+
+/**
+ * Authenticate a user via CRM encrypted SSO token.
+ * 1. Verifies token with CRM Backend Gateway (POST /auth/verify-token)
+ * 2. Checks token validity and expiration
+ * 3. Resolves user from Academic Portal (ap_users or linked HRMS profile)
+ * 4. Creates a local session and returns user and session token
+ */
+export async function loginWithSsoToken(input: {
+  token: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}): Promise<LoginResult & { crmData?: CrmVerifyTokenResponse["data"] }> {
+  await ensureAuthSchema();
+
+  const encryptedToken = input.token?.trim();
+  if (!encryptedToken) {
+    throw Object.assign(new Error("SSO token is required"), { status: 400 });
+  }
+
+  // 1) Verify token with CRM Backend Gateway
+  const crmVerifyUrl = `${env.crm.backendUrl.replace(/\/$/, "")}/auth/verify-token`;
+  let verifyResult: CrmVerifyTokenResponse;
+
+  try {
+    const response = await fetch(crmVerifyUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ encryptedToken }),
+      signal: AbortSignal.timeout(10000),
+    });
+
+    const bodyText = await response.text();
+    try {
+      verifyResult = JSON.parse(bodyText);
+    } catch {
+      throw Object.assign(new Error("CRM gateway returned invalid response"), { status: 502 });
+    }
+  } catch (err: unknown) {
+    if (typeof err === "object" && err !== null && "status" in err) {
+      throw err;
+    }
+    const message = err instanceof Error ? err.message : "Failed to connect to CRM gateway";
+    throw Object.assign(new Error(`CRM verify-token request failed: ${message}`), { status: 502 });
+  }
+
+  if (!verifyResult.success || !verifyResult.valid) {
+    throw Object.assign(
+      new Error(verifyResult.message || "Invalid or expired SSO token"),
+      { status: 401 },
+    );
+  }
+
+  const crmData = verifyResult.data;
+  if (!crmData) {
+    throw Object.assign(new Error("CRM response missing token payload"), { status: 401 });
+  }
+
+  // 2) Validate token expiration
+  if (crmData.expiresAt) {
+    const expiryTime = new Date(crmData.expiresAt).getTime();
+    if (Date.now() >= expiryTime) {
+      throw Object.assign(new Error("SSO token has expired"), { status: 401 });
+    }
+  }
+
+  // 3) Resolve user in Academic Portal
+  const rawUserId = text(crmData.userId);
+  const rawEmail = text(crmData.email);
+  const rawEmployeeId = text(crmData.employeeId);
+  const rawUsername = text(crmData.username);
+
+  let apUserRow: ApUserRow | null = null;
+  const queryConditions: string[] = [];
+  const queryParams: unknown[] = [];
+
+  if (rawEmail) {
+    queryConditions.push("LOWER(COALESCE(email, '')) = LOWER(?)");
+    queryParams.push(rawEmail);
+  } else if (rawUserId && rawUserId.includes("@")) {
+    queryConditions.push("LOWER(COALESCE(email, '')) = LOWER(?)");
+    queryParams.push(rawUserId);
+  }
+
+  if (rawEmployeeId) {
+    queryConditions.push("hrms_employee_id = ?");
+    queryParams.push(rawEmployeeId);
+  } else if (rawUserId) {
+    queryConditions.push("hrms_employee_id = ?");
+    queryParams.push(rawUserId);
+  }
+
+  if (rawUsername) {
+    queryConditions.push("LOWER(username) = LOWER(?)");
+    queryParams.push(rawUsername);
+  } else if (rawUserId) {
+    queryConditions.push("LOWER(username) = LOWER(?)");
+    queryParams.push(rawUserId);
+  }
+
+  if (rawUserId && /^\d+$/.test(rawUserId)) {
+    queryConditions.push("id = ?");
+    queryParams.push(Number(rawUserId));
+  }
+
+  if (queryConditions.length > 0) {
+    const rows = await queryAcademic<ApUserRow[]>(
+      `
+      SELECT id, name, email, username, hrms_employee_id, is_active
+      FROM ap_users
+      WHERE (${queryConditions.join(" OR ")})
+      LIMIT 1
+      `,
+      queryParams,
+    );
+    if (rows[0]) {
+      apUserRow = rows[0];
+    }
+  }
+
+  if (apUserRow) {
+    if (Number(apUserRow.is_active) !== 1) {
+      throw Object.assign(new Error("Account is deactivated"), { status: 403 });
+    }
+    const hrmsUserId = apUserRow.hrms_employee_id ?? String(apUserRow.id);
+    const user = mapApUser(apUserRow, hrmsUserId);
+    const session = await createSessionForUser({
+      user,
+      hrmsUserId,
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+    });
+    return { ...session, crmData };
+  }
+
+  // If not directly found in ap_users, resolve via HRMS MongoDB
+  const fallbackIdentifier = rawUserId || rawEmail || rawEmployeeId || rawUsername || "";
+  if (fallbackIdentifier) {
+    let lastError: unknown = null;
+
+    try {
+      const hrmsUser = await findHrmsUserByIdentifier(fallbackIdentifier);
+      if (hrmsUser && hrmsUser.isActive !== false) {
+        const { user, hrmsUserId } = await resolveLinkedApUserFromHrms(hrmsUser);
+        const session = await createSessionForUser({
+          user,
+          hrmsUserId,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+        });
+        return { ...session, crmData };
+      }
+    } catch (err) {
+      lastError = err;
+    }
+
+    try {
+      const emp = await findHrmsEmployeeByIdentifier(fallbackIdentifier);
+      if (emp) {
+        const { user, hrmsUserId } = await resolveLinkedApUserFromEmployee(emp);
+        const session = await createSessionForUser({
+          user,
+          hrmsUserId,
+          ipAddress: input.ipAddress,
+          userAgent: input.userAgent,
+        });
+        return { ...session, crmData };
+      }
+    } catch (err) {
+      lastError = err;
+    }
+
+    if (lastError && typeof lastError === "object" && "status" in lastError) {
+      throw lastError;
+    }
+  }
+
+  throw Object.assign(
+    new Error(
+      "No Academic Portal access yet. Ask an administrator to add you from User Management.",
+    ),
+    { status: 403 },
+  );
+}
+
 /** @deprecated Use loginWithCredentials */
 export const loginWithHrmsIdentity = loginWithCredentials;
 

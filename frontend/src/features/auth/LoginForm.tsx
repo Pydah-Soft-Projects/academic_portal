@@ -18,6 +18,9 @@ export function LoginForm() {
   const searchParams = useSearchParams();
   const { user, loading, refresh } = useAuth();
   const branding = getPortalBranding();
+  const ssoToken = searchParams.get("token");
+  const crmFrontendUrl =
+    process.env.NEXT_PUBLIC_CRM_FRONTEND_URL || "https://crm.pydah.edu.in";
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -26,6 +29,8 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [forgotHint, setForgotHint] = useState(false);
+  const [isVerifyingSso, setIsVerifyingSso] = useState(Boolean(ssoToken));
+  const [ssoError, setSsoError] = useState<string | null>(null);
   /** Avoid SSR/client auth-branch mismatch (loading resolves only on client). */
   const [hydrated, setHydrated] = useState(false);
 
@@ -49,6 +54,47 @@ export function LoginForm() {
     if (!hydrated || loading || !user) return;
     router.replace("/dashboard");
   }, [hydrated, loading, user, router]);
+
+  useEffect(() => {
+    if (!ssoToken || !hydrated || user) return;
+    let cancelled = false;
+
+    async function handleSSOLogin() {
+      setIsVerifyingSso(true);
+      setSsoError(null);
+      try {
+        const response = await apiFetch("/auth/sso-login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: ssoToken }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(
+            typeof body?.message === "string"
+              ? body.message
+              : "SSO authentication failed",
+          );
+        }
+
+        await refresh();
+        if (!cancelled) {
+          router.replace("/dashboard");
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setSsoError(err instanceof Error ? err.message : "SSO authentication failed");
+          setIsVerifyingSso(false);
+        }
+      }
+    }
+
+    void handleSSOLogin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ssoToken, hydrated, user, refresh, router]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -88,12 +134,22 @@ export function LoginForm() {
   }
 
   // Same markup on server + first client paint; auth UI only after hydrate.
-  if (!hydrated || loading || user) {
+  if (!hydrated || loading || user || isVerifyingSso) {
     return (
       <div className="flex h-full min-h-dvh items-center justify-center bg-[#F3F7FB] text-sm text-slate-500">
         <LoadingAnimation
-          label={hydrated && user ? "Redirecting to Academic Portal…" : "Loading Academic Portal…"}
-          subtitle="Please wait while we verify your session."
+          label={
+            isVerifyingSso
+              ? "Verifying Single Sign-On…"
+              : hydrated && user
+                ? "Redirecting to Academic Portal…"
+                : "Loading Academic Portal…"
+          }
+          subtitle={
+            isVerifyingSso
+              ? "Connecting with CRM Gateway. Please wait…"
+              : "Please wait while we verify your session."
+          }
         />
       </div>
     );
@@ -159,6 +215,24 @@ export function LoginForm() {
                 {branding.portalName}
               </p>
             </div>
+
+            {ssoError ? (
+              <div className="mt-6 rounded-lg border border-rose-200 bg-rose-50/90 p-3.5 text-xs text-rose-800 shadow-sm">
+                <p className="font-semibold text-rose-900">Single Sign-On Failed</p>
+                <p className="mt-1 leading-relaxed text-rose-700">{ssoError}</p>
+                <div className="mt-2.5 flex items-center gap-3">
+                  {crmFrontendUrl ? (
+                    <a
+                      href={crmFrontendUrl}
+                      className="font-medium text-navy-900 underline transition hover:text-navy-950"
+                    >
+                      Return to CRM Portal
+                    </a>
+                  ) : null}
+                  <span className="text-slate-400">or sign in with credentials below</span>
+                </div>
+              </div>
+            ) : null}
 
             <form className="mt-8 space-y-4" onSubmit={onSubmit}>
               <label className="block">

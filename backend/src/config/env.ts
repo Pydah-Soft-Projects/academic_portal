@@ -49,6 +49,16 @@ export const env = {
         (process.env.NODE_ENV === "production" ? "true" : "false")) === "true",
   },
   /**
+   * CRM SSO Integration
+   */
+  crm: {
+    backendUrl:
+      process.env.CRM_BACKEND_URL?.trim() ||
+      process.env.NEXT_PUBLIC_CRM_BACKEND_URL?.trim() ||
+      "https://crm-backend.pydah.edu.in",
+    portalId: process.env.AP_SSO_PORTAL_ID?.trim() || "academic-portal",
+  },
+  /**
    * Bootstrap Super Admin password for local/dev seed only.
    * Production must set AP_SUPERADMIN_PASSWORD (or AP_BOOTSTRAP_SUPERADMIN_PASSWORD).
    * Never logged.
