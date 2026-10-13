@@ -340,6 +340,7 @@ todayTimetableRouter.get(
         facultyName: str(req.query.facultyName),
         subjectCode: str(req.query.subjectCode),
         limit: num(req.query.limit) || 300,
+        includeStudents: req.query.includeStudents === "true",
       });
 
       res.json(report);

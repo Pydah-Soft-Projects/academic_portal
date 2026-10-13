@@ -33,9 +33,9 @@ import {
   Info,
   Users,
   Eye,
-  Printer,
   Loader2,
-  Download,
+  LayoutGrid,
+  Table,
 } from "lucide-react";
 
 type KpiModalType = "master" | "conducted" | "changed" | "substituted" | "swapped" | "rate" | null;
@@ -81,6 +81,7 @@ type FacultyStat = {
   substituteTakenCount: number;
   netTeachingCount: number;
   subjects: string[];
+  totalEnrolled?: number;
   totalPresent?: number;
   totalAbsent?: number;
   totalMarked?: number;
@@ -114,6 +115,13 @@ type ComparisonItem = {
   attendancePct: number | null;
   enrolledCount?: number;
   yearOfStudy?: number;
+  students?: Array<{
+    studentDbId?: number;
+    rollNo: string;
+    studentName: string;
+    status: "present" | "absent" | "od" | "leave" | "pending";
+    remarks?: string | null;
+  }>;
 };
 
 type MasterPeriodItem = {
@@ -195,6 +203,38 @@ function cleanSectionCode(raw: string | null | undefined): string {
   return (stripped || trimmed).toUpperCase();
 }
 
+function formatSessionClassInfo(
+  s: {
+    branchCode?: string | null;
+    branchName?: string | null;
+    sectionName?: string | null;
+    batch?: string | null;
+    semester?: number | null;
+    yearOfStudy?: number | null;
+    todaySubjectCode?: string | null;
+    masterSubjectCode?: string | null;
+  },
+  html = true,
+): string {
+  let bCode = (s.branchCode || s.branchName || "").trim();
+  if (!bCode) {
+    const sub = (s.todaySubjectCode || s.masterSubjectCode || "").trim();
+    const m = sub.match(/^[0-9]{2}([A-Za-z]{2,5})[0-9]/);
+    if (m) bCode = m[1].toUpperCase();
+  }
+  const cleanSec = s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All";
+  const batchStr = s.batch ? `Batch ${s.batch}` : "";
+  const semStr = s.semester ? `(Sem ${s.semester})` : s.yearOfStudy ? `(Yr ${s.yearOfStudy})` : "";
+
+  const bullet = html ? "&bull;" : "·";
+  const parts: string[] = [];
+  if (bCode) parts.push(bCode);
+  parts.push(cleanSec);
+  if (batchStr) parts.push(batchStr);
+  if (semStr) parts.push(semStr);
+  return parts.join(` ${bullet} `);
+}
+
 function getTodayDateString(): string {
   const d = new Date();
   const year = d.getFullYear();
@@ -240,6 +280,11 @@ export function MasterVsChangedReport({
 
   // Subject Analysis display mode: "section-wise" (Class & Section wise) or "consolidated"
   const [subjectViewMode, setSubjectViewMode] = useState<"section-wise" | "consolidated">("section-wise");
+
+  // Staff Analytics display mode: "table" (Vertical Roster Table - Default) or "cards" (Cards Grid)
+  const [staffViewMode, setStaffViewMode] = useState<"cards" | "table">("table");
+  // Staff Analytics quick filter tab: "all", "substitutes", "relieved", "variance"
+  const [staffFilterTab, setStaffFilterTab] = useState<"all" | "substitutes" | "relieved" | "variance">("all");
 
   // Pop-up modal state for Staff Profile & Action Log
   const [activeStaffModal, setActiveStaffModal] = useState<FacultyStat | null>(null);
@@ -318,8 +363,8 @@ export function MasterVsChangedReport({
         params.set("sectionName", selectedSection);
         params.set("section", selectedSection);
       }
-      if (selectedStaffHrmsId && activeSection === "variation") params.set("staffHrmsId", selectedStaffHrmsId);
-      if (selectedSubjectCode && activeSection === "variation") params.set("subjectCode", selectedSubjectCode);
+      if (selectedStaffHrmsId) params.set("staffHrmsId", selectedStaffHrmsId);
+      if (selectedSubjectCode) params.set("subjectCode", selectedSubjectCode);
 
       if (dateMode === "today") {
         const todayStr = getTodayDateString();
@@ -354,7 +399,6 @@ export function MasterVsChangedReport({
     selectedSection,
     selectedStaffHrmsId,
     selectedSubjectCode,
-    activeSection,
     dateMode,
     startDate,
     endDate,
@@ -366,7 +410,7 @@ export function MasterVsChangedReport({
 
   // Fetch dedicated complete dataset (up to 1000 sessions) for an individual faculty member
   const fetchDedicatedFacultyData = useCallback(
-    async (f: { hrmsId?: string | null; facultyName: string }) => {
+    async (f: { hrmsId?: string | null; facultyName: string }, includeStudents = false) => {
       if (!academicYear) return null;
       try {
         const params = new URLSearchParams();
@@ -387,6 +431,7 @@ export function MasterVsChangedReport({
         }
         if (f.hrmsId && f.hrmsId !== "N/A") params.set("staffHrmsId", f.hrmsId);
         if (f.facultyName) params.set("facultyName", f.facultyName);
+        if (includeStudents) params.set("includeStudents", "true");
         params.set("limit", "1000");
 
         const res = await apiFetch(`/today-timetable/master-vs-changed-report?${params.toString()}`, {
@@ -464,18 +509,24 @@ export function MasterVsChangedReport({
   );
 
   // Automatically fetch complete verified history when activeStaffModal is opened
+  const activeStaffHrmsId = activeStaffModal?.hrmsId;
+  const activeStaffName = activeStaffModal?.facultyName;
+
   useEffect(() => {
-    if (!activeStaffModal) {
+    if (!activeStaffHrmsId && !activeStaffName) {
       setDedicatedStaffSessions(null);
+      setLoadingDedicatedSessions(false);
       return;
     }
     let cancelled = false;
-    setLoadingDedicatedSessions(true);
-    fetchDedicatedFacultyData(activeStaffModal)
+    fetchDedicatedFacultyData({ hrmsId: activeStaffHrmsId || "", facultyName: activeStaffName || "" })
       .then((json) => {
         if (!cancelled && json?.comparisons) {
           setDedicatedStaffSessions(json.comparisons);
         }
+      })
+      .catch((err) => {
+        console.warn("Background faculty session fetch:", err);
       })
       .finally(() => {
         if (!cancelled) setLoadingDedicatedSessions(false);
@@ -483,7 +534,7 @@ export function MasterVsChangedReport({
     return () => {
       cancelled = true;
     };
-  }, [activeStaffModal, fetchDedicatedFacultyData]);
+  }, [activeStaffHrmsId, activeStaffName, fetchDedicatedFacultyData]);
 
   // Automatically fetch complete verified history when activeSubjectModal is opened
   useEffect(() => {
@@ -780,7 +831,32 @@ export function MasterVsChangedReport({
 
   // Filtered comparison items (Master vs Today)
   const filteredComparisons = useMemo(() => {
-    const list = data?.comparisons ?? [];
+    let list = data?.comparisons ?? [];
+    if (selectedBranch != null) {
+      list = list.filter((c) => c.branchId == null || c.branchId === selectedBranch);
+    }
+    if (selectedBatch) {
+      const targetBatch = selectedBatch.trim().replace(/^batch\s*/i, "");
+      list = list.filter((c) => (c.batch || "").trim().replace(/^batch\s*/i, "") === targetBatch);
+    }
+    if (selectedSection) {
+      const targetSec = cleanSectionCode(selectedSection);
+      list = list.filter((c) => cleanSectionCode(c.sectionName) === targetSec);
+    }
+    if (selectedSubjectCode) {
+      const targetCode = selectedSubjectCode.trim().toUpperCase();
+      list = list.filter((c) =>
+        (c.masterSubjectCode && c.masterSubjectCode.trim().toUpperCase() === targetCode) ||
+        (c.todaySubjectCode && c.todaySubjectCode.trim().toUpperCase() === targetCode)
+      );
+    }
+    if (selectedStaffHrmsId) {
+      const targetHrms = selectedStaffHrmsId.trim().toLowerCase();
+      list = list.filter((c) =>
+        (c.todayFacultyHrmsId && c.todayFacultyHrmsId.trim().toLowerCase() === targetHrms) ||
+        (c.masterFacultyHrmsId && c.masterFacultyHrmsId.trim().toLowerCase() === targetHrms)
+      );
+    }
     if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase();
     return list.filter(
@@ -796,7 +872,7 @@ export function MasterVsChangedReport({
         c.slotLabel.toLowerCase().includes(q) ||
         c.date.includes(q),
     );
-  }, [data?.comparisons, searchQuery]);
+  }, [data?.comparisons, selectedBranch, selectedBatch, selectedSection, selectedSubjectCode, selectedStaffHrmsId, searchQuery]);
 
   // Memoized maps for Assigned Faculty (Master) and Changed Faculty (Substitutions) per Subject
   const { subjectAssignedFacultyMap, subjectChangedFacultyMap } = useMemo(() => {
@@ -888,7 +964,32 @@ export function MasterVsChangedReport({
 
   // Filtered subjects list
   const filteredSubjects = useMemo(() => {
-    const list = data?.subjects ?? [];
+    let list = data?.subjects ?? [];
+    if (selectedBranch != null || selectedBatch || selectedSection) {
+      const allowedSubjectCodes = new Set(
+        filteredComparisons.flatMap((c) => [
+          c.masterSubjectCode?.trim().toUpperCase(),
+          c.todaySubjectCode?.trim().toUpperCase(),
+        ]).filter(Boolean) as string[],
+      );
+      list = list.filter((s) => allowedSubjectCodes.has(s.subjectCode.trim().toUpperCase()));
+    }
+    if (selectedSubjectCode) {
+      const targetCode = selectedSubjectCode.trim().toUpperCase();
+      list = list.filter((s) => s.subjectCode.trim().toUpperCase() === targetCode);
+    }
+    if (selectedStaffHrmsId) {
+      const targetHrms = selectedStaffHrmsId.trim().toLowerCase();
+      const staffObj = (data?.faculties ?? []).find((f) => f.hrmsId.toLowerCase() === targetHrms);
+      const facName = staffObj?.facultyName.toLowerCase();
+      list = list.filter((s) => {
+        const assignedFacs = subjectAssignedFacultyMap.get(s.subjectCode);
+        return (
+          (facName && s.facultyNames.some((f) => f.toLowerCase() === facName)) ||
+          (assignedFacs && facName && Array.from(assignedFacs).some((f) => f.toLowerCase() === facName))
+        );
+      });
+    }
     if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase();
     return list.filter(
@@ -899,11 +1000,51 @@ export function MasterVsChangedReport({
         Array.from(subjectAssignedFacultyMap.get(s.subjectCode) ?? []).some((f) => f.toLowerCase().includes(q)) ||
         Array.from(subjectChangedFacultyMap.get(s.subjectCode)?.values() ?? []).some((cf) => cf.facultyName.toLowerCase().includes(q)),
     );
-  }, [data?.subjects, searchQuery, subjectAssignedFacultyMap, subjectChangedFacultyMap]);
+  }, [data?.subjects, filteredComparisons, selectedBranch, selectedBatch, selectedSection, selectedSubjectCode, selectedStaffHrmsId, searchQuery, subjectAssignedFacultyMap, subjectChangedFacultyMap, data?.faculties]);
 
   // Filtered faculty list
   const filteredFaculties = useMemo(() => {
-    const list = data?.faculties ?? [];
+    let list = data?.faculties ?? [];
+    if (selectedBranch != null || selectedBatch || selectedSection) {
+      const allowedHrmsIds = new Set(
+        filteredComparisons.flatMap((c) => [
+          c.masterFacultyHrmsId?.trim().toLowerCase(),
+          c.todayFacultyHrmsId?.trim().toLowerCase(),
+        ]).filter(Boolean) as string[],
+      );
+      const allowedFacultyNames = new Set(
+        filteredComparisons.flatMap((c) => [
+          c.masterFacultyName?.trim().toLowerCase(),
+          c.todayFacultyName?.trim().toLowerCase(),
+        ]).filter(Boolean) as string[],
+      );
+      list = list.filter((f) => {
+        const hrms = (f.hrmsId || "").trim().toLowerCase();
+        const name = (f.facultyName || "").trim().toLowerCase();
+        return (hrms && allowedHrmsIds.has(hrms)) || (name && allowedFacultyNames.has(name));
+      });
+    }
+    if (selectedStaffHrmsId) {
+      const targetHrms = selectedStaffHrmsId.trim().toLowerCase();
+      list = list.filter((f) => f.hrmsId.trim().toLowerCase() === targetHrms);
+    }
+    if (selectedSubjectCode) {
+      const targetCode = selectedSubjectCode.trim().toUpperCase();
+      list = list.filter((f) =>
+        f.subjects.some((sub) => sub.toUpperCase().includes(targetCode)),
+      );
+    }
+    if (staffFilterTab === "substitutes") {
+      list = list.filter((f) => f.substituteTakenCount > 0);
+    } else if (staffFilterTab === "relieved") {
+      list = list.filter((f) => f.relievedCount > 0);
+    } else if (staffFilterTab === "variance") {
+      list = list.filter(
+        (f) =>
+          Math.abs(f.substituteTakenCount - f.relievedCount) > 0 ||
+          f.classesConducted !== f.masterAssignedPeriods,
+      );
+    }
     if (!searchQuery.trim()) return list;
     const q = searchQuery.toLowerCase();
     return list.filter(
@@ -912,7 +1053,7 @@ export function MasterVsChangedReport({
         f.hrmsId.toLowerCase().includes(q) ||
         f.subjects.some((s) => s.toLowerCase().includes(q)),
     );
-  }, [data?.faculties, searchQuery]);
+  }, [data?.faculties, filteredComparisons, selectedBranch, selectedBatch, selectedSection, selectedStaffHrmsId, selectedSubjectCode, staffFilterTab, searchQuery]);
 
   // Subject Analytics derived metrics
   const subjectAnalytics = useMemo(() => {
@@ -1267,20 +1408,34 @@ export function MasterVsChangedReport({
     }
 
     // Sort cohort keys: by branch code, then by batch (descending), then by section letter
-    const sortedKeys = Array.from(map.keys()).sort((a, b) => {
-      const metaA = cohortMeta.get(a)!;
-      const metaB = cohortMeta.get(b)!;
+    const sortedKeys = Array.from(map.keys())
+      .filter((k) => {
+        const meta = cohortMeta.get(k)!;
+        if (selectedBranch != null && meta.branchId != null && meta.branchId !== selectedBranch) return false;
+        if (selectedBatch) {
+          const targetBatch = selectedBatch.trim().replace(/^batch\s*/i, "");
+          if (meta.batch.trim().replace(/^batch\s*/i, "") !== targetBatch) return false;
+        }
+        if (selectedSection) {
+          const targetSec = cleanSectionCode(selectedSection);
+          if (meta.sectionLetter !== targetSec) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        const metaA = cohortMeta.get(a)!;
+        const metaB = cohortMeta.get(b)!;
 
-      if (metaA.branchCode !== metaB.branchCode) {
-        return metaA.branchCode.localeCompare(metaB.branchCode);
-      }
-      if (metaA.batch !== metaB.batch) {
-        return metaB.batch.localeCompare(metaA.batch);
-      }
-      if (metaA.sectionLetter === "Unassigned") return 1;
-      if (metaB.sectionLetter === "Unassigned") return -1;
-      return metaA.sectionLetter.localeCompare(metaB.sectionLetter);
-    });
+        if (metaA.branchCode !== metaB.branchCode) {
+          return metaA.branchCode.localeCompare(metaB.branchCode);
+        }
+        if (metaA.batch !== metaB.batch) {
+          return metaB.batch.localeCompare(metaA.batch);
+        }
+        if (metaA.sectionLetter === "Unassigned") return 1;
+        if (metaB.sectionLetter === "Unassigned") return -1;
+        return metaA.sectionLetter.localeCompare(metaB.sectionLetter);
+      });
 
     return sortedKeys.map((key) => {
       const rawItems = map.get(key)!;
@@ -1356,7 +1511,29 @@ export function MasterVsChangedReport({
         const secMatch = meta.sectionLetter === "Unassigned" || secL === meta.sectionLetter;
         const branchMatch = !bCode || bCode === meta.branchCode;
         const batchMatch = !bBatch || bBatch.toLowerCase().replace(/^batch\s*/i, "") === meta.batch.toLowerCase().replace(/^batch\s*/i, "");
-        return secMatch && branchMatch && batchMatch;
+        if (!secMatch || !branchMatch || !batchMatch) return false;
+
+        if (selectedSubjectCode) {
+          const targetCode = selectedSubjectCode.trim().toUpperCase();
+          const sCode = (m.subjectCode || m.customLabel || "").trim().toUpperCase();
+          if (sCode !== targetCode) return false;
+        }
+        if (selectedStaffHrmsId) {
+          const targetHrms = selectedStaffHrmsId.trim().toLowerCase();
+          const mHrms = (m.facultyHrmsId || "").trim().toLowerCase();
+          const staffObj = (data?.faculties ?? []).find((f) => f.hrmsId.toLowerCase() === targetHrms);
+          const facName = staffObj?.facultyName.toLowerCase();
+          const mFacName = (m.facultyName || "").trim().toLowerCase();
+          if (mHrms !== targetHrms && (!facName || mFacName !== facName)) return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const matchCode = (m.subjectCode || "").toLowerCase().includes(q);
+          const matchName = (m.subjectName || m.customLabel || "").toLowerCase().includes(q);
+          const matchFac = (m.facultyName || "").toLowerCase().includes(q);
+          if (!matchCode && !matchName && !matchFac) return false;
+        }
+        return true;
       });
 
       for (const m of matchedMasterPeriods) {
@@ -1490,7 +1667,7 @@ export function MasterVsChangedReport({
         }
       }
 
-      const cohortSubjects = Array.from(cSubMap.values()).map((sub) => {
+      const allCohortSubjects = Array.from(cSubMap.values()).map((sub) => {
         const turnoutPct =
           sub.totalMarked > 0
             ? Math.round((sub.totalPresent / sub.totalMarked) * 100)
@@ -1521,6 +1698,34 @@ export function MasterVsChangedReport({
         };
       }).sort((a, b) => b.totalConducted - a.totalConducted || b.masterWeeklyPeriods - a.masterWeeklyPeriods);
 
+      const cohortSubjects = allCohortSubjects.filter((sub) => {
+        if (selectedSubjectCode) {
+          const targetCode = selectedSubjectCode.trim().toUpperCase();
+          if (sub.subjectCode.trim().toUpperCase() !== targetCode) return false;
+        }
+        if (selectedStaffHrmsId) {
+          const targetHrms = selectedStaffHrmsId.trim().toLowerCase();
+          const staffObj = (data?.faculties ?? []).find((f) => f.hrmsId.toLowerCase() === targetHrms);
+          const facName = staffObj?.facultyName.toLowerCase();
+          const matchesAssigned = facName && sub.assignedFaculty.some((f) => f.toLowerCase() === facName);
+          const matchesChanged = facName && sub.changedFaculty.some((cf) => cf.facultyName.toLowerCase() === facName);
+          if (!matchesAssigned && !matchesChanged) return false;
+        }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const matchCode = sub.subjectCode.toLowerCase().includes(q);
+          const matchName = sub.subjectName.toLowerCase().includes(q);
+          const matchAssigned = sub.assignedFaculty.some((f) => f.toLowerCase() === q);
+          const matchChanged = sub.changedFaculty.some((cf) => cf.facultyName.toLowerCase() === q);
+          if (!matchCode && !matchName && !matchAssigned && !matchChanged) return false;
+        }
+        return true;
+      });
+
+      if ((selectedSubjectCode || selectedStaffHrmsId || searchQuery.trim()) && cohortSubjects.length === 0) {
+        return null;
+      }
+
       return {
         sectionKey: key,
         cohortKey: key,
@@ -1539,7 +1744,7 @@ export function MasterVsChangedReport({
         cohortSubjects,
       };
     }).filter((g): g is NonNullable<typeof g> => g !== null && (g.secEnrolled > 0 || g.conductedCount > 0 || g.items.some(i => i.isConducted)));
-  }, [filteredComparisons, getBranchBadge, selectedBatch, data?.masterScheduledPeriods, data?.sectionStrengths, dateMode]);
+  }, [filteredComparisons, getBranchBadge, selectedBatch, selectedBranch, selectedSection, selectedSubjectCode, selectedStaffHrmsId, searchQuery, data?.masterScheduledPeriods, data?.sectionStrengths, data?.faculties, dateMode]);
 
   // Total enrolled students across all cohorts
   const totalCohortStudentsEnrolled = useMemo(() => {
@@ -1884,7 +2089,7 @@ export function MasterVsChangedReport({
       classesConducted: conducted,
       relievedCount: relieved,
       substituteTakenCount: subTaken,
-      netTeachingCount: conducted + subTaken - relieved,
+      netTeachingCount: masterQuota > 0 ? Math.max(0, masterQuota - relieved + subTaken) : conducted,
       subjects: Array.from(subjects),
       totalPresent: totalPres,
       totalAbsent: totalAbs,
@@ -1941,43 +2146,7 @@ export function MasterVsChangedReport({
     setSubjectModalSearch("");
   }, []);
 
-  // Download HTML-based Excel Spreadsheet (.xls)
-  const downloadExcelFile = useCallback((htmlTableContent: string, filename: string) => {
-    const excelHtml = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40">
-      <head>
-        <!--[if gte mso 9]><xml><x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet><x:Name>Report</x:Name><x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions></x:Worksheet></x:ExcelWorksheets></x:ExcelWorkbook></xml><![endif]-->
-        <meta http-equiv="content-type" content="text/html; charset=UTF-8"/>
-        <style>
-          body { font-family: Calibri, Arial, sans-serif; font-size: 11pt; color: #0f172a; }
-          table { border-collapse: collapse; margin-bottom: 24px; width: 100%; }
-          th { background-color: #0f172a; color: #ffffff; font-weight: bold; border: 1px solid #64748b; padding: 7px 10px; text-align: left; }
-          td { border: 1px solid #cbd5e1; padding: 6px 9px; vertical-align: top; }
-          .title-h1 { font-size: 16pt; font-weight: bold; color: #0f172a; }
-          .meta-p { font-size: 10pt; color: #475569; }
-          .section-h2 { font-size: 13pt; font-weight: bold; background-color: #f1f5f9; color: #0f172a; border-bottom: 2px solid #0f172a; padding: 6px; }
-          .kpi-th { background-color: #1e293b; color: #ffffff; font-weight: bold; }
-          .kpi-val { font-size: 12pt; font-weight: bold; }
-          .highlight-sky { background-color: #e0f2fe; color: #0369a1; font-weight: bold; }
-          .highlight-rose { background-color: #ffe4e6; color: #be123c; font-weight: bold; }
-          .highlight-emerald { background-color: #dcfce7; color: #15803d; font-weight: bold; }
-          .highlight-amber { background-color: #fef3c7; color: #92400e; font-weight: bold; }
-        </style>
-      </head>
-      <body>
-        ${htmlTableContent}
-      </body>
-      </html>
-    `;
-    const blob = new Blob([excelHtml], { type: "application/vnd.ms-excel;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename.endsWith(".xls") ? filename : `${filename}.xls`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  }, []);
+
 
   // Print / Export individual Faculty Workload & Action Audit Report to PDF
   const printFacultyPdf = useCallback(
@@ -1986,12 +2155,14 @@ export function MasterVsChangedReport({
       setGeneratingPdfKey(key);
       try {
         let sessionsToUse = customSessions;
-        if (!sessionsToUse) {
-          if (activeStaffModal?.hrmsId === f.hrmsId && dedicatedStaffSessions && dedicatedStaffSessions.length > 0) {
-            sessionsToUse = dedicatedStaffSessions;
-          } else {
-            const fetched = await fetchDedicatedFacultyData(f);
-            sessionsToUse = fetched?.comparisons;
+        if (!sessionsToUse || !sessionsToUse.some((s) => s.students && s.students.length > 0)) {
+          const fetched = await fetchDedicatedFacultyData(f, true);
+          if (fetched?.comparisons && fetched.comparisons.length > 0) {
+            sessionsToUse = fetched.comparisons;
+          } else if (!sessionsToUse) {
+            if (activeStaffModal?.hrmsId === f.hrmsId && dedicatedStaffSessions && dedicatedStaffSessions.length > 0) {
+              sessionsToUse = dedicatedStaffSessions;
+            }
           }
         }
 
@@ -2081,16 +2252,16 @@ export function MasterVsChangedReport({
                 </div>
                 <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
                   <thead>
-                    <tr style="background-color: #1e293b; color: white;">
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Slot & Time</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Class & Section</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Subject Name & Code</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: left;">Action Role Taken</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Conducted</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Enrolled</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Present</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Absent</th>
-                      <th style="padding: 5px 6px; border: 1px solid #94a3b8; text-align: center;">Attendance %</th>
+                    <tr style="background-color: #f1f5f9; color: #0f172a; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Slot & Time</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Class & Section</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Subject Name & Code</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Action Role Taken</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Conducted</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Enrolled</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Present</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Absent</th>
+                      <th style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Attendance %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2104,7 +2275,7 @@ export function MasterVsChangedReport({
                         return `
                       <tr>
                         <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.slotLabel)} (${escapeHtml(s.time)})</td>
-                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${escapeHtml(s.batch)}</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${formatSessionClassInfo(s, true)}</td>
                         <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">
                           <b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</b> 
                           <span style="color: #64748b;">(${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})</span>
@@ -2131,7 +2302,7 @@ export function MasterVsChangedReport({
                     `;
                       })
                       .join("")}
-                    <tr style="background-color: #f8fafc; font-weight: bold; border-top: 2px solid #94a3b8;">
+                    <tr style="background-color: #f8fafc; font-weight: bold; border-top: 2px solid #cbd5e1;">
                       <td colspan="4" style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: right;">Day Total:</td>
                       <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #15803d;">${dayConducted} Held</td>
                       <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center;">${dayEnrolled > 0 || dayConducted > 0 ? dayEnrolled : "—"}</td>
@@ -2141,24 +2312,106 @@ export function MasterVsChangedReport({
                     </tr>
                   </tbody>
                 </table>
+
+                <!-- Detailed Student Attendance Rosters for this Date -->
+                <div style="margin-top: 8px; margin-bottom: 12px;">
+                  <div style="font-size: 10px; font-weight: bold; color: #047857; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px; border-bottom: 1.5px solid #a7f3d0; padding-bottom: 2px;">
+                    Detailed Student Attendance Records &bull; Date: ${d}
+                  </div>
+                  ${sessions.map((s) => {
+                    const classLabel = formatSessionClassInfo(s, true);
+                    const hasStudents = s.students && s.students.length > 0;
+                    const presCount = hasStudents ? s.students!.filter((st) => st.status === 'present').length : s.presentCount || 0;
+                    const absCount = hasStudents ? s.students!.filter((st) => st.status === 'absent').length : s.absentCount || 0;
+                    const enrCount = hasStudents ? s.students!.length : (s.enrolledCount || presCount + absCount);
+
+                    if (!hasStudents) {
+                      return `
+                        <div style="margin-top: 5px; margin-bottom: 6px; padding: 5px 8px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; font-size: 9.5px; display: flex; justify-content: space-between; align-items: center;">
+                          <span>
+                            <strong>${escapeHtml(s.slotLabel)} (${escapeHtml(s.time)})</strong> &bull; 
+                            ${classLabel} &bull; 
+                            <b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "Subject")}</b> (${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})
+                          </span>
+                          <span style="color: #64748b; font-weight: 600;">
+                            ${s.isConducted ? 'Attendance post recorded without individual student list' : `Attendance Pending (${enrCount > 0 ? `${enrCount} Enrolled` : "Scheduled"})`}
+                          </span>
+                        </div>
+                      `;
+                    }
+
+                    return `
+                      <div style="margin-top: 6px; margin-bottom: 10px; border: 1px solid #cbd5e1; border-radius: 4px; overflow: hidden; break-inside: avoid;">
+                        <div style="background-color: #f8fafc; padding: 4px 8px; font-size: 10px; font-weight: bold; border-bottom: 1px solid #cbd5e1; display: flex; justify-content: space-between; align-items: center;">
+                          <span>
+                            📋 <strong>${escapeHtml(s.slotLabel)} (${escapeHtml(s.time)})</strong> &bull; 
+                            ${classLabel} &bull; 
+                            <b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "")}</b> 
+                            <span style="color: #64748b;">(${escapeHtml(s.todaySubjectCode || s.masterSubjectCode || "")})</span>
+                          </span>
+                          <span>
+                            <span style="color: #15803d; font-weight: bold;">${presCount} Present</span> / 
+                            <span style="color: #be123c; font-weight: bold;">${absCount} Absent</span> 
+                            <span style="color: #475569; font-weight: 600;">(Total Enrolled: ${enrCount})</span>
+                          </span>
+                        </div>
+                        <table style="width: 100%; border-collapse: collapse; font-size: 9px;">
+                          <thead>
+                            <tr style="background-color: #f1f5f9; color: #334155; font-weight: 700; border-bottom: 1px solid #cbd5e1;">
+                              <th style="padding: 3px 6px; border: 1px solid #e2e8f0; width: 28px; text-align: center;">#</th>
+                              <th style="padding: 3px 6px; border: 1px solid #e2e8f0; width: 120px; text-align: left;">Roll / PIN No</th>
+                              <th style="padding: 3px 6px; border: 1px solid #e2e8f0; text-align: left;">Student Name</th>
+                              <th style="padding: 3px 6px; border: 1px solid #e2e8f0; width: 85px; text-align: center;">Status</th>
+                              <th style="padding: 3px 6px; border: 1px solid #e2e8f0; width: 110px; text-align: left;">Remarks</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            ${s.students!.map((st, sIdx) => `
+                              <tr style="background-color: ${sIdx % 2 === 0 ? "#ffffff" : "#fbfcfe"};">
+                                <td style="padding: 2.5px 6px; border: 1px solid #e2e8f0; text-align: center; color: #64748b;">${sIdx + 1}</td>
+                                <td style="padding: 2.5px 6px; border: 1px solid #e2e8f0; font-family: monospace; font-weight: 600;">${escapeHtml(st.rollNo)}</td>
+                                <td style="padding: 2.5px 6px; border: 1px solid #e2e8f0; font-weight: 500; color: #0f172a;">${escapeHtml(st.studentName)}</td>
+                                <td style="padding: 2.5px 6px; border: 1px solid #e2e8f0; text-align: center;">
+                                  <span style="font-size: 8.5px; font-weight: bold; padding: 1.5px 6px; border-radius: 3px; display: inline-block; ${
+                                    st.status === 'present'
+                                      ? "background-color: #dcfce7; color: #15803d; border: 1px solid #bbf7d0;"
+                                      : st.status === 'absent'
+                                      ? "background-color: #fee2e2; color: #b91c1c; border: 1px solid #fecaca;"
+                                      : "background-color: #f1f5f9; color: #475569; border: 1px solid #e2e8f0;"
+                                  }">
+                                    ${st.status.toUpperCase()}
+                                  </span>
+                                </td>
+                                <td style="padding: 2.5px 6px; border: 1px solid #e2e8f0; color: #64748b; font-size: 8.5px;">${escapeHtml(st.remarks || "—")}</td>
+                              </tr>
+                            `).join("")}
+                          </tbody>
+                        </table>
+                      </div>
+                    `;
+                  }).join("")}
+                </div>
               </div>
             `;
           });
         }
 
-        const verificationRef = `ACT-${(f.hrmsId || "FAC").replace(/\s+/g, "")}-${Date.now().toString(36).toUpperCase()}`;
+        const effectiveMasterQuota = facultySessions.filter((s) => s.isMasterTeacher).length || f.masterAssignedPeriods;
+        const effectiveConducted = facultySessions.filter((s) => s.isTodayTeacher && s.isConducted).length || f.classesConducted;
+        const effectiveRelieved = facultySessions.filter((s) => !s.isTodayTeacher && s.isMasterTeacher && s.todayFacultyName).length || f.relievedCount;
+        const effectiveSubTaken = facultySessions.filter((s) => s.isTodayTeacher && !s.isMasterTeacher && s.masterFacultyName).length || f.substituteTakenCount;
+        const effectiveNetLoad = effectiveMasterQuota > 0 ? Math.max(0, effectiveMasterQuota - effectiveRelieved + effectiveSubTaken) : effectiveConducted;
+        const netShift = effectiveSubTaken - effectiveRelieved;
+
         const generatedDateTime = `${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
 
         const htmlContent = `
           <div style="font-family: Arial, Helvetica, sans-serif; color: #0f172a; padding: 12px; line-height: 1.4;">
             <!-- Official Institution Masthead -->
             <div style="text-align: center; border-bottom: 3px double #0f172a; padding-bottom: 10px; margin-bottom: 14px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+              <div style="text-align: center; margin-bottom: 4px;">
                 <span style="font-size: 9px; font-weight: bold; color: #64748b; letter-spacing: 1px; text-transform: uppercase;">
                   ACADEMIC PORTAL &bull; TIMETABLE AUDIT SYSTEM
-                </span>
-                <span style="font-size: 9px; font-weight: bold; color: #15803d; background: #dcfce7; padding: 2px 6px; border-radius: 4px; border: 1px solid #bbf7d0;">
-                  OFFICIAL VERIFIED RECORD ✓
                 </span>
               </div>
               <h1 style="margin: 0; font-size: 19px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; text-transform: uppercase;">
@@ -2168,7 +2421,7 @@ export function MasterVsChangedReport({
                 Individual Teaching Record, Quota Conduction & Substitution Audit Log
               </p>
               <p style="margin: 3px 0 0; font-size: 10px; color: #64748b;">
-                Academic Year: <strong>${escapeHtml(academicYear || "Current")}</strong> &bull; Period: <strong>${escapeHtml(dateRangeLabel)}</strong> &bull; Generated: ${generatedDateTime} &bull; Verification Ref: <strong>${verificationRef}</strong>
+                Academic Year: <strong>${escapeHtml(academicYear || "Current")}</strong> &bull; Period: <strong>${escapeHtml(dateRangeLabel)}</strong> &bull; Generated: ${generatedDateTime}
               </p>
             </div>
 
@@ -2193,45 +2446,33 @@ export function MasterVsChangedReport({
               </h3>
               <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
                 <thead>
-                  <tr style="background-color: #0f172a; color: white;">
-                    <th style="padding: 6px; border: 1px solid #64748b;">Master Quota</th>
-                    <th style="padding: 6px; border: 1px solid #64748b;">Classes Conducted</th>
-                    <th style="padding: 6px; border: 1px solid #64748b;">Relieved Away (-)</th>
-                    <th style="padding: 6px; border: 1px solid #64748b;">Substitute Taken (+)</th>
-                    <th style="padding: 6px; border: 1px solid #64748b;">Net Teaching Load</th>
-                    <th style="padding: 6px; border: 1px solid #64748b;">Net Variance</th>
+                  <tr style="background-color: #f1f5f9; color: #0f172a; font-weight: 700; border: 1px solid #cbd5e1;">
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Master Quota</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Classes Conducted</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Relieved Away (-)</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Substitute Taken (+)</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Net Teaching Load</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Net Variance</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Students Enrolled</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Students Present</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Students Absent</th>
+                    <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a;">Attendance Rate</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px;">${f.masterAssignedPeriods} p/wk</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${f.classesConducted} held</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${f.relievedCount > 0 ? `-${f.relievedCount}` : 0}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0284c7;">${f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0f172a;">${f.netTeachingCount} sessions</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 11px;">
-                      ${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount} shift
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #334155;">${effectiveMasterQuota} p/wk</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${effectiveConducted} held</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${effectiveRelieved > 0 ? `-${effectiveRelieved}` : 0}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0284c7;">${effectiveSubTaken > 0 ? `+${effectiveSubTaken}` : 0}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0f172a;">${effectiveNetLoad} sessions</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 11px; color: ${netShift >= 0 ? "#15803d" : "#be123c"};">
+                      ${netShift >= 0 ? "+" : ""}${netShift} shift
                     </td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <!-- Student Attendance Abstract -->
-              <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
-                <thead>
-                  <tr style="background-color: #047857; color: white;">
-                    <th style="padding: 6px; border: 1px solid #065f46;">Total Students Enrolled</th>
-                    <th style="padding: 6px; border: 1px solid #065f46;">Students Present</th>
-                    <th style="padding: 6px; border: 1px solid #065f46;">Students Absent</th>
-                    <th style="padding: 6px; border: 1px solid #065f46;">Attendance %</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px;">${totalEnrolled > 0 ? totalEnrolled : "—"}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${totalPresent > 0 ? `${totalPresent} Present` : (totalEnrolled > 0 ? "0 Present" : "—")}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${totalAbsent > 0 ? `${totalAbsent} Absent` : (totalEnrolled > 0 ? "0 Absent" : "—")}</td>
-                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #0369a1;">${turnoutPct != null ? `${turnoutPct}%` : (f.classesConducted > 0 ? "100%" : "Pending")}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #334155;">${totalEnrolled > 0 ? totalEnrolled : "—"}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #15803d;">${effectiveConducted > 0 && totalPresent > 0 ? totalPresent : (effectiveConducted > 0 ? 0 : "—")}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #be123c;">${effectiveConducted > 0 && totalAbsent > 0 ? totalAbsent : (effectiveConducted > 0 ? 0 : "—")}</td>
+                    <td style="padding: 7px; border: 1px solid #cbd5e1; font-size: 12px; color: #1e40af;">${effectiveConducted > 0 && turnoutPct != null ? `${turnoutPct}%` : (effectiveConducted > 0 ? "100%" : "Pending")}</td>
                   </tr>
                 </tbody>
               </table>
@@ -2243,11 +2484,11 @@ export function MasterVsChangedReport({
                 </tr>
                 <tr>
                   <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Substitutions Covered for Colleagues:</td>
-                  <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #0284c7;">${f.substituteTakenCount} session(s) taken</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #0284c7;">${effectiveSubTaken} session(s) taken (+)</td>
                 </tr>
                 <tr>
                   <td style="font-weight: bold; padding: 5px; border: 1px solid #cbd5e1; background-color: #f1f5f9;">Absence / Relief Covered by Colleagues:</td>
-                  <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #be123c;">${f.relievedCount} session(s) relieved</td>
+                  <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold; color: #be123c;">${effectiveRelieved} session(s) relieved (-)</td>
                 </tr>
               </table>
             </div>
@@ -2316,12 +2557,14 @@ export function MasterVsChangedReport({
       setGeneratingExcelKey(key);
       try {
         let sessionsToUse = customSessions;
-        if (!sessionsToUse) {
-          if (activeStaffModal?.hrmsId === f.hrmsId && dedicatedStaffSessions && dedicatedStaffSessions.length > 0) {
-            sessionsToUse = dedicatedStaffSessions;
-          } else {
-            const fetched = await fetchDedicatedFacultyData(f);
-            sessionsToUse = fetched?.comparisons;
+        if (!sessionsToUse || !sessionsToUse.some((s) => s.students && s.students.length > 0)) {
+          const fetched = await fetchDedicatedFacultyData(f, true);
+          if (fetched?.comparisons && fetched.comparisons.length > 0) {
+            sessionsToUse = fetched.comparisons;
+          } else if (!sessionsToUse) {
+            if (activeStaffModal?.hrmsId === f.hrmsId && dedicatedStaffSessions && dedicatedStaffSessions.length > 0) {
+              sessionsToUse = dedicatedStaffSessions;
+            }
           }
         }
 
@@ -2379,8 +2622,14 @@ export function MasterVsChangedReport({
         });
         const sortedDates = Array.from(dateMap.keys()).sort();
 
-        const totalPresent = facultySessions.reduce((acc, s) => acc + (s.presentCount || 0), 0);
-        const totalAbsent = facultySessions.reduce((acc, s) => acc + (s.absentCount || 0), 0);
+        const effectiveMasterQuota = facultySessions.filter((s) => s.isMasterTeacher).length || f.masterAssignedPeriods;
+        const effectiveConducted = facultySessions.filter((s) => s.isTodayTeacher && s.isConducted).length || f.classesConducted;
+        const effectiveRelieved = facultySessions.filter((s) => !s.isTodayTeacher && s.isMasterTeacher && s.todayFacultyName).length || f.relievedCount;
+        const effectiveSubTaken = facultySessions.filter((s) => s.isTodayTeacher && !s.isMasterTeacher && s.masterFacultyName).length || f.substituteTakenCount;
+        const effectiveNetLoad = effectiveMasterQuota > 0 ? Math.max(0, effectiveMasterQuota - effectiveRelieved + effectiveSubTaken) : effectiveConducted;
+
+        const totalPresent = facultySessions.reduce((acc, s) => acc + (s.isTodayTeacher ? (s.presentCount || 0) : 0), 0);
+        const totalAbsent = facultySessions.reduce((acc, s) => acc + (s.isTodayTeacher ? (s.absentCount || 0) : 0), 0);
         const totalEnrolled = totalPresent + totalAbsent;
         const turnoutPct = totalEnrolled > 0 ? Math.round((totalPresent / totalEnrolled) * 100) : (f.attendancePct != null ? f.attendancePct : null);
 
@@ -2399,8 +2648,7 @@ export function MasterVsChangedReport({
               { value: "Relieved Away (-)", styleId: "KpiLabel" },
               { value: "Substitute Taken (+)", styleId: "KpiLabel" },
               { value: "Net Teaching Load", styleId: "KpiLabel" },
-              { value: "Net Variance", styleId: "KpiLabel" },
-              { value: "Students Enrolled", styleId: "KpiLabel" },
+              { value: "Enrolled", styleId: "KpiLabel" },
               { value: "Students Present", styleId: "KpiLabel" },
               { value: "Students Absent", styleId: "KpiLabel" },
               { value: "Attendance %", styleId: "KpiLabel" },
@@ -2408,35 +2656,34 @@ export function MasterVsChangedReport({
           },
           {
             cells: [
-              { value: f.masterAssignedPeriods, styleId: "CellCenter" },
-              { value: f.classesConducted, styleId: "KpiEmerald" },
-              { value: f.relievedCount > 0 ? `-${f.relievedCount}` : 0, styleId: "KpiRose" },
-              { value: f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0, styleId: "KpiSky" },
-              { value: f.netTeachingCount, styleId: "KpiVal" },
-              { value: (f.substituteTakenCount - f.relievedCount >= 0 ? "+" : "") + (f.substituteTakenCount - f.relievedCount), styleId: "CellCenter" },
-              { value: totalEnrolled > 0 ? totalEnrolled : "—", styleId: "CellCenter" },
-              { value: totalPresent > 0 ? totalPresent : (totalEnrolled > 0 ? 0 : "—"), styleId: "CellPresent" },
-              { value: totalAbsent > 0 ? totalAbsent : (totalEnrolled > 0 ? 0 : "—"), styleId: "CellAbsent" },
-              { value: turnoutPct != null ? `${turnoutPct}%` : (f.classesConducted > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
+              { value: effectiveMasterQuota, styleId: "CellCenter" },
+              { value: effectiveConducted, styleId: "KpiEmerald" },
+              { value: effectiveRelieved > 0 ? `-${effectiveRelieved}` : 0, styleId: "KpiRose" },
+              { value: effectiveSubTaken > 0 ? `+${effectiveSubTaken}` : 0, styleId: "KpiSky" },
+              { value: effectiveNetLoad, styleId: "KpiVal" },
+              { value: f.totalEnrolled || totalEnrolled > 0 ? (f.totalEnrolled || totalEnrolled) : "—", styleId: "CellCenter" },
+              { value: effectiveConducted > 0 && totalPresent > 0 ? totalPresent : (effectiveConducted > 0 ? 0 : "—"), styleId: "CellPresent" },
+              { value: effectiveConducted > 0 && totalAbsent > 0 ? totalAbsent : (effectiveConducted > 0 ? 0 : "—"), styleId: "CellAbsent" },
+              { value: effectiveConducted > 0 && turnoutPct != null ? `${turnoutPct}%` : (effectiveConducted > 0 ? "100%" : "Pending"), styleId: "CellTurnout" },
             ],
           },
           { cells: [] },
           { cells: [{ value: "2. REGISTERED CURRICULUM SUBJECTS & ACTIONS", styleId: "SectionHeader", mergeAcross: 9 }] },
           { cells: [{ value: "Assigned Subjects:", styleId: "CellBoldCenter" }, { value: (f.subjects || []).join(", ") || "None", styleId: "CellNormal", mergeAcross: 8 }] },
-          { cells: [{ value: "Substitutions Covered for Colleagues:", styleId: "CellBoldCenter" }, { value: `${f.substituteTakenCount} session(s) taken`, styleId: "CellNormal", mergeAcross: 8 }] },
-          { cells: [{ value: "Relief Covered by Colleagues:", styleId: "CellBoldCenter" }, { value: `${f.relievedCount} session(s) relieved`, styleId: "CellNormal", mergeAcross: 8 }] },
+          { cells: [{ value: "Substitutions Covered for Colleagues:", styleId: "CellBoldCenter" }, { value: `${effectiveSubTaken} session(s) taken (+)`, styleId: "CellNormal", mergeAcross: 8 }] },
+          { cells: [{ value: "Relief Covered by Colleagues:", styleId: "CellBoldCenter" }, { value: `${effectiveRelieved} session(s) relieved (-)`, styleId: "CellNormal", mergeAcross: 8 }] },
           { cells: [] },
           { cells: [{ value: `3. SUMMARY BY DATE (${sortedDates.length} Days Recorded)`, styleId: "SectionHeader", mergeAcross: 7 }] },
           {
             cells: [
-              { value: "Date", styleId: "ColHeaderNavy" },
-              { value: "Day", styleId: "ColHeaderNavy" },
-              { value: "Total Sessions", styleId: "ColHeaderNavy" },
-              { value: "Conducted", styleId: "ColHeaderNavy" },
-              { value: "Students Enrolled", styleId: "ColHeaderNavy" },
-              { value: "Students Present", styleId: "ColHeaderNavy" },
-              { value: "Students Absent", styleId: "ColHeaderNavy" },
-              { value: "Attendance %", styleId: "ColHeaderNavy" },
+              { value: "Date", styleId: "ColHeaderEmerald" },
+              { value: "Day", styleId: "ColHeaderEmerald" },
+              { value: "Total Sessions", styleId: "ColHeaderEmerald" },
+              { value: "Conducted", styleId: "ColHeaderEmerald" },
+              { value: "Students Enrolled", styleId: "ColHeaderEmerald" },
+              { value: "Students Present", styleId: "ColHeaderEmerald" },
+              { value: "Students Absent", styleId: "ColHeaderEmerald" },
+              { value: "Attendance %", styleId: "ColHeaderEmerald" },
             ],
           },
         ];
@@ -2485,23 +2732,22 @@ export function MasterVsChangedReport({
           const dayHeld = sessions.filter((s) => s.isConducted).length;
 
           const dateRows: ExcelRow[] = [
-            { cells: [{ value: `DATE-WISE TIMETABLE & STUDENT ATTENDANCE LOG — ${d} (${dayName})`, styleId: "Title", mergeAcross: 11 }] },
-            { cells: [{ value: `Faculty: ${f.facultyName} (#${f.hrmsId}) | Day Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 11 }] },
+            { cells: [{ value: `DATE-WISE TIMETABLE & STUDENT ATTENDANCE LOG — ${d} (${dayName})`, styleId: "Title", mergeAcross: 10 }] },
+            { cells: [{ value: `Faculty: ${f.facultyName} (#${f.hrmsId}) | Day Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 10 }] },
             { cells: [] },
             {
               cells: [
-                { value: "Date", styleId: "ColHeaderNavy" },
-                { value: "Day", styleId: "ColHeaderNavy" },
-                { value: "Slot & Time", styleId: "ColHeaderNavy" },
-                { value: "Class & Section", styleId: "ColHeaderNavy" },
-                { value: "Batch", styleId: "ColHeaderNavy" },
-                { value: "Subject", styleId: "ColHeaderNavy" },
-                { value: "Action Role / Status", styleId: "ColHeaderNavy" },
-                { value: "Conducted", styleId: "ColHeaderNavy" },
-                { value: "Enrolled", styleId: "ColHeaderNavy" },
-                { value: "Present", styleId: "ColHeaderNavy" },
-                { value: "Absent", styleId: "ColHeaderNavy" },
-                { value: "Attendance %", styleId: "ColHeaderNavy" },
+                { value: "Date", styleId: "ColHeaderEmerald" },
+                { value: "Day", styleId: "ColHeaderEmerald" },
+                { value: "Slot & Time", styleId: "ColHeaderEmerald" },
+                { value: "Class & Section", styleId: "ColHeaderEmerald" },
+                { value: "Subject", styleId: "ColHeaderEmerald" },
+                { value: "Action Role / Status", styleId: "ColHeaderEmerald" },
+                { value: "Conducted", styleId: "ColHeaderEmerald" },
+                { value: "Enrolled", styleId: "ColHeaderEmerald" },
+                { value: "Present", styleId: "ColHeaderEmerald" },
+                { value: "Absent", styleId: "ColHeaderEmerald" },
+                { value: "Attendance %", styleId: "ColHeaderEmerald" },
               ],
             },
           ];
@@ -2518,8 +2764,7 @@ export function MasterVsChangedReport({
                 { value: s.date, styleId: "CellNormal" },
                 { value: s.dayOfWeek || "", styleId: "CellNormal" },
                 { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
-                { value: s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All", styleId: "CellNormal" },
-                { value: `Batch ${s.batch}`, styleId: "CellCenter" },
+                { value: formatSessionClassInfo(s, false), styleId: "CellNormal" },
                 { value: `${s.todaySubjectName || s.masterSubjectName || "—"} (${s.todaySubjectCode || s.masterSubjectCode || ""})`, styleId: "CellNormal" },
                 { value: s.actionRoleTitle, styleId: "CellNormal" },
                 { value: s.isConducted ? "Conducted ✓" : "Scheduled", styleId: s.isConducted ? "CellPresent" : "CellNormal" },
@@ -2540,7 +2785,6 @@ export function MasterVsChangedReport({
               { value: "", styleId: "SubTotalRow" },
               { value: "", styleId: "SubTotalRow" },
               { value: "", styleId: "SubTotalRow" },
-              { value: "", styleId: "SubTotalRow" },
               { value: `${dayHeld} Held`, styleId: "SubTotalRow" },
               { value: dayEnr > 0 ? dayEnr : "—", styleId: "SubTotalRow" },
               { value: dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—"), styleId: "CellPresent" },
@@ -2552,12 +2796,89 @@ export function MasterVsChangedReport({
           sheets.push({
             name: sanitizeSheetName(d),
             columns: [
-              { width: 12 }, { width: 10 }, { width: 16 }, { width: 14 },
-              { width: 10 }, { width: 24 }, { width: 22 }, { width: 13 },
+              { width: 12 }, { width: 10 }, { width: 16 }, { width: 22 },
+              { width: 24 }, { width: 22 }, { width: 13 },
               { width: 10 }, { width: 10 }, { width: 10 }, { width: 12 }
             ],
             rows: dateRows,
           });
+        });
+
+        // --- Sheet: Full Student Attendance Details ---
+        const studentDetailRows: ExcelRow[] = [
+          { cells: [{ value: `STUDENT-LEVEL ATTENDANCE ROSTER & MARKS AUDIT — ${f.facultyName} (#${f.hrmsId})`, styleId: "Title", mergeAcross: 10 }] },
+          { cells: [{ value: `Faculty: ${f.facultyName} | Scope: ${selectedCohortTitle || "All Sections"} | Period: ${dateRangeLabel}`, styleId: "Subtitle", mergeAcross: 10 }] },
+          { cells: [] },
+          {
+            cells: [
+              { value: "Date", styleId: "ColHeaderEmerald" },
+              { value: "Slot & Time", styleId: "ColHeaderEmerald" },
+              { value: "Class & Section", styleId: "ColHeaderEmerald" },
+              { value: "Subject Code", styleId: "ColHeaderEmerald" },
+              { value: "Subject Name", styleId: "ColHeaderEmerald" },
+              { value: "Role / Delivery", styleId: "ColHeaderEmerald" },
+              { value: "S.No", styleId: "ColHeaderEmerald" },
+              { value: "Roll / PIN No", styleId: "ColHeaderEmerald" },
+              { value: "Student Name", styleId: "ColHeaderEmerald" },
+              { value: "Attendance Status", styleId: "ColHeaderEmerald" },
+              { value: "Remarks", styleId: "ColHeaderEmerald" },
+            ],
+          },
+        ];
+
+        facultySessions.forEach((s) => {
+          const classStr = formatSessionClassInfo(s, false);
+          const subCode = s.todaySubjectCode || s.masterSubjectCode || "—";
+          const subName = s.todaySubjectName || s.masterSubjectName || "—";
+          const role = s.actionRoleTitle || "Regular Class";
+
+          if (s.students && s.students.length > 0) {
+            s.students.forEach((st, sIdx) => {
+              const isPres = st.status === "present";
+              const isAbs = st.status === "absent";
+              studentDetailRows.push({
+                cells: [
+                  { value: s.date, styleId: "CellNormal" },
+                  { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
+                  { value: classStr, styleId: "CellNormal" },
+                  { value: subCode, styleId: "CellCenter" },
+                  { value: subName, styleId: "CellNormal" },
+                  { value: role, styleId: "CellNormal" },
+                  { value: sIdx + 1, styleId: "CellCenter" },
+                  { value: st.rollNo, styleId: "CellNormal" },
+                  { value: st.studentName, styleId: "CellNormal" },
+                  { value: st.status.toUpperCase(), styleId: isPres ? "CellPresent" : isAbs ? "CellAbsent" : "CellNormal" },
+                  { value: st.remarks || "—", styleId: "CellNormal" },
+                ],
+              });
+            });
+          } else {
+            studentDetailRows.push({
+              cells: [
+                { value: s.date, styleId: "CellNormal" },
+                { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
+                { value: classStr, styleId: "CellNormal" },
+                { value: subCode, styleId: "CellCenter" },
+                { value: subName, styleId: "CellNormal" },
+                { value: role, styleId: "CellNormal" },
+                { value: "—", styleId: "CellCenter" },
+                { value: "—", styleId: "CellCenter" },
+                { value: s.isConducted ? "Attendance post recorded without individual student list" : "Attendance Pending (Session Scheduled)", styleId: "CellNormal" },
+                { value: s.isConducted ? "CONDUCTED" : "PENDING", styleId: "CellCenter" },
+                { value: "—", styleId: "CellNormal" },
+              ],
+            });
+          }
+        });
+
+        sheets.push({
+          name: "Student Attendance Details",
+          columns: [
+            { width: 12 }, { width: 16 }, { width: 26 }, { width: 14 },
+            { width: 26 }, { width: 22 }, { width: 6 }, { width: 16 },
+            { width: 26 }, { width: 18 }, { width: 16 }
+          ],
+          rows: studentDetailRows,
         });
 
         downloadExcelWorkbook(
@@ -2577,7 +2898,7 @@ export function MasterVsChangedReport({
       endDate,
       data?.comparisons,
       academicYear,
-      downloadExcelFile,
+      selectedCohortTitle,
     ],
   );
 
@@ -2744,7 +3065,7 @@ export function MasterVsChangedReport({
                         return `
                       <tr>
                         <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.slotLabel)} (${escapeHtml(s.time)})</td>
-                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${escapeHtml(s.batch)}</td>
+                        <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${formatSessionClassInfo(s, true)}</td>
                         <td style="padding: 5px 6px; border: 1px solid #cbd5e1;">${escapeHtml(s.masterFacultyName || "—")}</td>
                         <td style="padding: 5px 6px; border: 1px solid #cbd5e1; font-weight: ${s.isSub ? "bold" : "normal"}; color: ${s.isSub ? "#b45309" : "#0f172a"};">
                           ${escapeHtml(s.todayFacultyName || "—")}
@@ -2798,19 +3119,15 @@ export function MasterVsChangedReport({
               ? `${sub.turnoutPct}%`
               : "—";
 
-        const verificationRef = `ACT-SUB-${sub.subjectCode}-${Date.now().toString(36).toUpperCase()}`;
         const generatedDateTime = `${new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })} at ${new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
 
         const htmlContent = `
           <div style="font-family: Arial, Helvetica, sans-serif; color: #0f172a; padding: 12px; line-height: 1.4;">
             <!-- Official Institution Masthead -->
             <div style="text-align: center; border-bottom: 3px double #0f172a; padding-bottom: 10px; margin-bottom: 14px;">
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+              <div style="text-align: center; margin-bottom: 4px;">
                 <span style="font-size: 9px; font-weight: bold; color: #64748b; letter-spacing: 1px; text-transform: uppercase;">
                   ACADEMIC PORTAL &bull; CURRICULUM DELIVERY AUDIT
-                </span>
-                <span style="font-size: 9px; font-weight: bold; color: #15803d; background: #dcfce7; padding: 2px 6px; border-radius: 4px; border: 1px solid #bbf7d0;">
-                  OFFICIAL VERIFIED RECORD ✓
                 </span>
               </div>
               <h1 style="margin: 0; font-size: 19px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; text-transform: uppercase;">
@@ -2820,7 +3137,7 @@ export function MasterVsChangedReport({
                 Subject Quota Fulfillment, Conduction Audit & Substitution Record
               </p>
               <p style="margin: 3px 0 0; font-size: 10px; color: #64748b;">
-                Academic Year: <strong>${escapeHtml(academicYear || "Current")}</strong> &bull; Period: <strong>${escapeHtml(dateRangeLabel)}</strong> &bull; Generated: ${generatedDateTime} &bull; Verification Ref: <strong>${verificationRef}</strong>
+                Academic Year: <strong>${escapeHtml(academicYear || "Current")}</strong> &bull; Period: <strong>${escapeHtml(dateRangeLabel)}</strong> &bull; Generated: ${generatedDateTime}
               </p>
             </div>
 
@@ -3147,7 +3464,7 @@ export function MasterVsChangedReport({
                 { value: s.date, styleId: "CellNormal" },
                 { value: s.dayOfWeek || "", styleId: "CellNormal" },
                 { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
-                { value: s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All", styleId: "CellNormal" },
+                { value: formatSessionClassInfo(s, false), styleId: "CellNormal" },
                 { value: `Batch ${s.batch}`, styleId: "CellCenter" },
                 { value: s.masterFacultyName || "—", styleId: "CellNormal" },
                 { value: s.todayFacultyName || "—", styleId: "CellNormal" },
@@ -3566,18 +3883,18 @@ export function MasterVsChangedReport({
         { cells: [{ value: "2. FACULTY WORKLOAD & ALLOCATION ROSTER", styleId: "SectionHeader", mergeAcross: 11 }] },
         {
           cells: [
-            { value: "Faculty Name", styleId: "ColHeaderNavy" },
-            { value: "HRMS ID", styleId: "ColHeaderNavy" },
-            { value: "Assigned Subjects", styleId: "ColHeaderNavy" },
-            { value: "Master Quota", styleId: "ColHeaderNavy" },
-            { value: "Conducted", styleId: "ColHeaderNavy" },
-            { value: "Relieved Out", styleId: "ColHeaderNavy" },
-            { value: "Substitute In", styleId: "ColHeaderNavy" },
-            { value: "Net Load", styleId: "ColHeaderNavy" },
-            { value: "Net Variance", styleId: "ColHeaderNavy" },
-            { value: "Students Present", styleId: "ColHeaderNavy" },
-            { value: "Students Absent", styleId: "ColHeaderNavy" },
-            { value: "Attendance %", styleId: "ColHeaderNavy" },
+            { value: "Faculty Name", styleId: "ColHeaderEmerald" },
+            { value: "HRMS ID", styleId: "ColHeaderEmerald" },
+            { value: "Assigned Subjects", styleId: "ColHeaderEmerald" },
+            { value: "Master Quota", styleId: "ColHeaderEmerald" },
+            { value: "Conducted", styleId: "ColHeaderEmerald" },
+            { value: "Relieved Out", styleId: "ColHeaderEmerald" },
+            { value: "Substitute In", styleId: "ColHeaderEmerald" },
+            { value: "Net Load", styleId: "ColHeaderEmerald" },
+            { value: "Enrolled", styleId: "ColHeaderEmerald" },
+            { value: "Students Present", styleId: "ColHeaderEmerald" },
+            { value: "Students Absent", styleId: "ColHeaderEmerald" },
+            { value: "Attendance %", styleId: "ColHeaderEmerald" },
           ],
         },
       ];
@@ -3593,7 +3910,7 @@ export function MasterVsChangedReport({
             { value: f.relievedCount > 0 ? `-${f.relievedCount}` : 0, styleId: "CellAbsent" },
             { value: f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0, styleId: "CellPresent" },
             { value: f.netTeachingCount, styleId: "KpiVal" },
-            { value: (f.substituteTakenCount - f.relievedCount >= 0 ? "+" : "") + (f.substituteTakenCount - f.relievedCount), styleId: "CellCenter" },
+            { value: f.totalEnrolled || f.totalMarked || "—", styleId: "CellCenter" },
             { value: f.totalPresent ?? 0, styleId: "CellPresent" },
             { value: f.totalAbsent ?? 0, styleId: "CellAbsent" },
             { value: f.attendancePct != null ? `${f.attendancePct}%` : "—", styleId: "CellTurnout" },
@@ -3622,25 +3939,24 @@ export function MasterVsChangedReport({
         const dayHeld = sessions.filter((s) => s.isConducted).length;
 
         const dateRows: ExcelRow[] = [
-          { cells: [{ value: `DATE-WISE TIMETABLE & STUDENT ATTENDANCE LOG — ${d} (${dayName})`, styleId: "Title", mergeAcross: 13 }] },
-          { cells: [{ value: `Scope: ${selectedCohortTitle || "All Sections"} | Total Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 13 }] },
+          { cells: [{ value: `DATE-WISE TIMETABLE & STUDENT ATTENDANCE LOG — ${d} (${dayName})`, styleId: "Title", mergeAcross: 12 }] },
+          { cells: [{ value: `Scope: ${selectedCohortTitle || "All Sections"} | Total Sessions: ${sessions.length} | Conducted: ${dayHeld} | Enrolled: ${dayEnr > 0 ? dayEnr : "—"} | Present: ${dayPres > 0 ? dayPres : (dayEnr > 0 ? 0 : "—")} | Absent: ${dayAbs > 0 ? dayAbs : (dayEnr > 0 ? 0 : "—")} | Attendance: ${dayTurnout != null ? `${dayTurnout}%` : (dayHeld > 0 ? "100%" : "Pending")}`, styleId: "Subtitle", mergeAcross: 12 }] },
           { cells: [] },
           {
             cells: [
-              { value: "Date", styleId: "ColHeaderNavy" },
-              { value: "Day", styleId: "ColHeaderNavy" },
-              { value: "Slot & Time", styleId: "ColHeaderNavy" },
-              { value: "Class & Section", styleId: "ColHeaderNavy" },
-              { value: "Batch", styleId: "ColHeaderNavy" },
-              { value: "Subject", styleId: "ColHeaderNavy" },
-              { value: "Master Faculty", styleId: "ColHeaderNavy" },
-              { value: "Faculty In Charge", styleId: "ColHeaderNavy" },
-              { value: "Action Role Taken", styleId: "ColHeaderNavy" },
-              { value: "Conducted", styleId: "ColHeaderNavy" },
-              { value: "Enrolled", styleId: "ColHeaderNavy" },
-              { value: "Present", styleId: "ColHeaderNavy" },
-              { value: "Absent", styleId: "ColHeaderNavy" },
-              { value: "Attendance %", styleId: "ColHeaderNavy" },
+              { value: "Date", styleId: "ColHeaderEmerald" },
+              { value: "Day", styleId: "ColHeaderEmerald" },
+              { value: "Slot & Time", styleId: "ColHeaderEmerald" },
+              { value: "Class & Section", styleId: "ColHeaderEmerald" },
+              { value: "Subject", styleId: "ColHeaderEmerald" },
+              { value: "Master Faculty", styleId: "ColHeaderEmerald" },
+              { value: "Faculty In Charge", styleId: "ColHeaderEmerald" },
+              { value: "Action Role Taken", styleId: "ColHeaderEmerald" },
+              { value: "Conducted", styleId: "ColHeaderEmerald" },
+              { value: "Enrolled", styleId: "ColHeaderEmerald" },
+              { value: "Present", styleId: "ColHeaderEmerald" },
+              { value: "Absent", styleId: "ColHeaderEmerald" },
+              { value: "Attendance %", styleId: "ColHeaderEmerald" },
             ],
           },
         ];
@@ -3658,9 +3974,8 @@ export function MasterVsChangedReport({
               { value: s.date, styleId: "CellNormal" },
               { value: s.dayOfWeek || "", styleId: "CellNormal" },
               { value: `${s.slotLabel} (${s.time})`, styleId: "CellNormal" },
-              { value: s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All", styleId: "CellNormal" },
-              { value: `Batch ${s.batch}`, styleId: "CellCenter" },
-              { value: s.todaySubjectName || s.masterSubjectName || "—", styleId: "CellNormal" },
+              { value: formatSessionClassInfo(s, false), styleId: "CellNormal" },
+              { value: `${s.todaySubjectName || s.masterSubjectName || "—"} (${s.todaySubjectCode || s.masterSubjectCode || ""})`, styleId: "CellNormal" },
               { value: s.masterFacultyName || "—", styleId: "CellNormal" },
               { value: s.todayFacultyName || s.masterFacultyName || "—", styleId: "CellNormal" },
               { value: varianceTitle, styleId: "CellNormal" },
@@ -4154,17 +4469,17 @@ export function MasterVsChangedReport({
             </div>
             <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
               <thead>
-                <tr style="background-color: #0f172a; color: white;">
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Slot & Time</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Class & Section</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Subject</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Faculty In Charge</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: left;">Action Role</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Conducted</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Enrolled</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Present</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Absent</th>
-                  <th style="padding: 5px; border: 1px solid #334155; text-align: center;">Attendance %</th>
+                <tr style="background-color: #f1f5f9; color: #0f172a; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Slot & Time</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Class & Section</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Subject</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Faculty In Charge</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a;">Action Role</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Conducted</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Enrolled</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Present</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Absent</th>
+                  <th style="padding: 5px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a;">Attendance %</th>
                 </tr>
               </thead>
               <tbody>
@@ -4178,7 +4493,7 @@ export function MasterVsChangedReport({
                     return `
                   <tr>
                     <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.slotLabel} (${s.time})</td>
-                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"} &bull; Batch ${s.batch}</td>
+                    <td style="padding: 5px; border: 1px solid #cbd5e1;">${formatSessionClassInfo(s, true)}</td>
                     <td style="padding: 5px; border: 1px solid #cbd5e1;"><b>${escapeHtml(s.todaySubjectName || s.masterSubjectName || "—")}</b></td>
                     <td style="padding: 5px; border: 1px solid #cbd5e1; font-weight: bold;">${escapeHtml(s.todayFacultyName || s.masterFacultyName || "—")}</td>
                     <td style="padding: 5px; border: 1px solid #cbd5e1;">${escapeHtml(s.varianceType === "UNCHANGED" ? "As Master" : s.varianceType === "FACULTY_SUBSTITUTE" ? "Faculty Substitute" : s.varianceType === "SUBJECT_SWAP" ? "Subject Swap" : "Sub & Swap")}</td>
@@ -4217,9 +4532,7 @@ export function MasterVsChangedReport({
             <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #be123c;">${f.relievedCount > 0 ? `-${f.relievedCount}` : 0}</td>
             <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; color: #0284c7;">${f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : 0}</td>
             <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: 800; color: #0f172a;">${f.netTeachingCount}</td>
-            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: ${f.substituteTakenCount - f.relievedCount >= 0 ? "#15803d" : "#be123c"};">
-              ${f.substituteTakenCount - f.relievedCount >= 0 ? "+" : ""}${f.substituteTakenCount - f.relievedCount}
-            </td>
+            <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: 600;">${f.totalEnrolled || f.totalMarked || "—"}</td>
             <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #15803d;">${f.classesConducted > 0 && f.totalPresent != null && f.totalPresent > 0 ? f.totalPresent : (f.classesConducted > 0 && (f.totalPresent != null || f.totalAbsent != null) ? 0 : "—")}</td>
             <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #be123c;">${f.classesConducted > 0 && f.totalAbsent != null && f.totalAbsent > 0 ? f.totalAbsent : (f.classesConducted > 0 && (f.totalPresent != null || f.totalAbsent != null) ? 0 : "—")}</td>
             <td style="padding: 5px 6px; border: 1px solid #cbd5e1; text-align: center; font-weight: bold; color: #0369a1;">${f.classesConducted > 0 && f.attendancePct != null ? `${f.attendancePct}%` : "Pending"}</td>
@@ -4230,9 +4543,9 @@ export function MasterVsChangedReport({
       const htmlContent = `
         <div style="font-family: Arial, sans-serif; color: #0f172a; padding: 16px; max-width: 1050px; margin: 0 auto; line-height: 1.4;">
           <!-- Official Institutional Masthead -->
-          <div style="border-bottom: 2px solid #b45309; padding-bottom: 12px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-start;">
+          <div style="border-bottom: 2px solid #047857; padding-bottom: 12px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-start;">
             <div>
-              <div style="font-size: 10px; font-weight: bold; letter-spacing: 1.5px; text-transform: uppercase; color: #b45309;">Academic Portal &bull; Office of Academic Affairs & HRMS</div>
+              <div style="font-size: 10px; font-weight: bold; letter-spacing: 1.5px; text-transform: uppercase; color: #047857;">Academic Portal &bull; Office of Academic Affairs & HRMS</div>
               <h1 style="margin: 3px 0 2px; font-size: 20px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px;">Faculty Workload & Action Audit Report</h1>
               <p style="margin: 0; font-size: 11px; color: #475569;">
                 Comprehensive Faculty Teaching Workload, Attendance Delivery & Substitution Audit
@@ -4241,7 +4554,7 @@ export function MasterVsChangedReport({
             <div style="text-align: right; font-size: 10px; color: #64748b; font-family: monospace;">
               <div style="font-weight: bold; color: #0f172a; font-size: 11px;">REF: STF-AUD-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}</div>
               <div>Generated: ${new Date().toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}</div>
-              <div>Status: <span style="color: #b45309; font-weight: bold;">OFFICIAL AUDIT</span></div>
+              <div>Status: <span style="color: #047857; font-weight: bold;">OFFICIAL AUDIT</span></div>
             </div>
           </div>
 
@@ -4259,27 +4572,27 @@ export function MasterVsChangedReport({
 
           <!-- 1. Executive Abstract & Student Attendance -->
           <div style="margin-bottom: 16px; break-inside: avoid;">
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 0 0 6px; color: #0f172a; border-bottom: 2px solid #047857; padding-bottom: 3px; font-weight: bold;">
               1. Executive Faculty Abstract & Workload Metrics
             </h3>
             <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
               <thead>
-                <tr style="background-color: #0f172a; color: white;">
-                  <th style="padding: 6px; border: 1px solid #64748b;">Total Staff</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Master Quota</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Conducted</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Relieved Away (-)</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Substitute Taken (+)</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Net Teaching Load</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Students Present</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Students Absent</th>
-                  <th style="padding: 6px; border: 1px solid #64748b;">Attendance %</th>
+                <tr style="background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Total Staff</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Master Quota</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Conducted</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Relieved Away (-)</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Substitute Taken (+)</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Net Teaching Load</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Students Present</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Students Absent</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; color: #0f172a !important; font-weight: 700;">Attendance %</th>
                 </tr>
               </thead>
               <tbody>
                 <tr style="text-align: center; font-weight: bold; background-color: #f8fafc;">
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #b45309;">${staffAnalytics.totalStaff}</td>
-                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px;">${staffAnalytics.totalAssignedLoad} p/wk</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #047857;">${staffAnalytics.totalStaff}</td>
+                  <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #334155;">${staffAnalytics.totalAssignedLoad} p/wk</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #15803d;">${staffAnalytics.totalConducted} held</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #be123c;">${staffAnalytics.totalRelieved}</td>
                   <td style="padding: 8px; border: 1px solid #cbd5e1; font-size: 13px; color: #0284c7;">${staffAnalytics.totalSubstituteTaken}</td>
@@ -4294,24 +4607,24 @@ export function MasterVsChangedReport({
 
           <!-- 2. Faculty Workload & Allocation Roster -->
           <div style="margin-bottom: 16px;">
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 6px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 6px; color: #0f172a; border-bottom: 2px solid #047857; padding-bottom: 3px; font-weight: bold;">
               2. Faculty Workload & Allocation Roster (${facultiesList.length} faculty members)
             </h3>
             <table style="width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 8px;">
               <thead>
-                <tr style="background-color: #0f172a; color: white;">
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: left;">Faculty Name</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: left;">HRMS ID</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: left;">Assigned Subjects</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Master Quota</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Conducted</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Relieved (-)</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Substitute (+)</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Net Load</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Net Variance</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Present</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Absent</th>
-                  <th style="padding: 6px; border: 1px solid #334155; text-align: center;">Attendance %</th>
+                <tr style="background-color: #f1f5f9 !important; color: #0f172a !important; font-weight: 700; border-bottom: 2px solid #cbd5e1;">
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a !important; font-weight: 700;">Faculty Name</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a !important; font-weight: 700;">HRMS ID</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: left; color: #0f172a !important; font-weight: 700;">Assigned Subjects</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Master Quota</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Conducted</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Relieved (-)</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Substitute (+)</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Net Load</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Enrolled</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Present</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Absent</th>
+                  <th style="padding: 6px; border: 1px solid #cbd5e1; text-align: center; color: #0f172a !important; font-weight: 700;">Attendance %</th>
                 </tr>
               </thead>
               <tbody>
@@ -4322,7 +4635,7 @@ export function MasterVsChangedReport({
 
           <!-- 3. Date-wise Data Breakdown -->
           <div>
-            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 1px solid #cbd5e1; padding-bottom: 3px; font-weight: bold;">
+            <h3 style="font-size: 12px; text-transform: uppercase; margin: 12px 0 4px; color: #0f172a; border-bottom: 2px solid #047857; padding-bottom: 3px; font-weight: bold;">
               3. Date-wise Timetable Delivery & Substitution Actions (${dateRangeLabel})
             </h3>
             ${dateTablesHtml || `<p style="color: #64748b; font-size: 11px; padding: 12px 0;">No timetable sessions recorded in the selected range.</p>`}
@@ -5981,7 +6294,7 @@ export function MasterVsChangedReport({
                             </td>
                             <td className="py-2 px-3">
                               <span className="font-medium text-slate-700">
-                                {s.sectionName ? `Section ${cleanSectionCode(s.sectionName)}` : "All"} · Batch {s.batch}
+                                {formatSessionClassInfo(s, false)}
                               </span>
                             </td>
                             <td className="py-2 px-3 text-slate-700">
@@ -6665,18 +6978,141 @@ export function MasterVsChangedReport({
       {/* 8. STAFF ANALYTICS REPORT */}
       {activeSection === "staff" && (
         <div id="staff-analytics-table-container" ref={printAreaRef} className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div>
-              <h4 className="text-xs font-bold uppercase tracking-wider text-navy-900">
-                Faculty Teaching Load & Substitution Report
-              </h4>
-              <p className="text-[11px] text-slate-500">
-                Classes assigned, attended, relief substitution given, and extra classes covered
+              <div className="flex items-center gap-2 flex-wrap">
+                <h4 className="text-sm font-extrabold uppercase tracking-wider text-navy-900">
+                  Faculty Teaching Load & Substitution Report
+                </h4>
+                <span className="rounded-full bg-amber-100 border border-amber-300 px-2.5 py-0.5 text-xs font-bold text-amber-900">
+                  {filteredFaculties.length} Faculty
+                </span>
+                {staffAnalytics.totalConducted > 0 && (
+                  <span className="rounded-full bg-emerald-100 border border-emerald-300 px-2 py-0.5 text-[11px] font-bold text-emerald-800">
+                    {staffAnalytics.totalConducted} Classes Held
+                  </span>
+                )}
+                {staffAnalytics.totalSubstituteTaken > 0 && (
+                  <span className="rounded-full bg-sky-100 border border-sky-300 px-2 py-0.5 text-[11px] font-bold text-sky-800">
+                    +{staffAnalytics.totalSubstituteTaken} Substitutions Taken
+                  </span>
+                )}
+                {staffAnalytics.totalRelieved > 0 && (
+                  <span className="rounded-full bg-rose-100 border border-rose-300 px-2 py-0.5 text-[11px] font-bold text-rose-800">
+                    -{staffAnalytics.totalRelieved} Relieved
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Faculty teaching hours, workload distribution, quota completion &amp; verified substitution audit
               </p>
             </div>
-            <span className="text-xs font-semibold text-slate-600">
-              {filteredFaculties.length} Faculty
-            </span>
+
+            {/* Header Actions: Excel, PDF & View Mode Switcher */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-800 transition-colors shadow-2xs cursor-pointer"
+                title="Export complete Faculty Roster and Session Breakdown to Excel (.xls)"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-700" />
+                <span>Export Staff Excel</span>
+              </button>
+              <button
+                type="button"
+                onClick={handlePrintPdf}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 text-xs font-bold text-rose-800 transition-colors shadow-2xs cursor-pointer"
+                title="Download / Print official verified PDF Faculty Workload Report"
+              >
+                <FileText className="h-3.5 w-3.5 text-rose-700" />
+                <span>Print Staff PDF</span>
+              </button>
+
+              {/* View Switcher: Vertical Table (Default) vs Cards */}
+              <div className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs shadow-2xs">
+                <button
+                  type="button"
+                  onClick={() => setStaffViewMode("table")}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                    staffViewMode === "table"
+                      ? "bg-white text-navy-950 font-bold shadow-xs border border-slate-200"
+                      : "text-slate-600 hover:text-navy-900",
+                  )}
+                  title="Switch to Vertical Table View (Default)"
+                >
+                  <Table className="h-3.5 w-3.5 text-emerald-700" />
+                  <span>Vertical Table</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStaffViewMode("cards")}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                    staffViewMode === "cards"
+                      ? "bg-white text-navy-950 font-bold shadow-xs border border-slate-200"
+                      : "text-slate-600 hover:text-navy-900",
+                  )}
+                  title="Switch to Faculty Cards Grid View"
+                >
+                  <LayoutGrid className="h-3.5 w-3.5 text-slate-500" />
+                  <span>Cards</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Filter Tabs */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 border-b border-slate-100 text-xs">
+            <button
+              type="button"
+              onClick={() => setStaffFilterTab("all")}
+              className={cn(
+                "rounded-lg px-2.5 py-1 font-semibold transition-colors cursor-pointer",
+                staffFilterTab === "all"
+                  ? "bg-navy-900 text-white shadow-2xs"
+                  : "bg-slate-100 text-slate-700 hover:bg-slate-200",
+              )}
+            >
+              All Faculty ({data?.faculties?.length || 0})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStaffFilterTab("substitutes")}
+              className={cn(
+                "rounded-lg px-2.5 py-1 font-semibold transition-colors cursor-pointer inline-flex items-center gap-1",
+                staffFilterTab === "substitutes"
+                  ? "bg-sky-600 text-white shadow-2xs"
+                  : "bg-sky-50 text-sky-800 border border-sky-200 hover:bg-sky-100",
+              )}
+            >
+              Substitutions Covered (+) ({data?.faculties?.filter((f) => f.substituteTakenCount > 0).length || 0})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStaffFilterTab("relieved")}
+              className={cn(
+                "rounded-lg px-2.5 py-1 font-semibold transition-colors cursor-pointer inline-flex items-center gap-1",
+                staffFilterTab === "relieved"
+                  ? "bg-rose-600 text-white shadow-2xs"
+                  : "bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100",
+              )}
+            >
+              Relieved Away (-) ({data?.faculties?.filter((f) => f.relievedCount > 0).length || 0})
+            </button>
+            <button
+              type="button"
+              onClick={() => setStaffFilterTab("variance")}
+              className={cn(
+                "rounded-lg px-2.5 py-1 font-semibold transition-colors cursor-pointer inline-flex items-center gap-1",
+                staffFilterTab === "variance"
+                  ? "bg-amber-600 text-white shadow-2xs"
+                  : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100",
+              )}
+            >
+              Load Variance ({data?.faculties?.filter((f) => Math.abs(f.substituteTakenCount - f.relievedCount) > 0 || f.classesConducted !== f.masterAssignedPeriods).length || 0})
+            </button>
           </div>
 
           {/* Interactive In-Page Staff Focus Drill-Down Card */}
@@ -6838,7 +7274,7 @@ export function MasterVsChangedReport({
                                 <span className="font-mono text-[10px] text-slate-400">{s.todaySubjectCode || s.masterSubjectCode}</span>
                               </td>
                               <td className="py-2 px-3 text-slate-700">
-                                {s.sectionName ? `Section ${cleanSectionCode(s.sectionName)}` : "All"} · Batch {s.batch}
+                                {formatSessionClassInfo(s, false)}
                               </td>
                               <td className="py-2 px-3">
                                 {isSubstituteIn ? (
@@ -6880,148 +7316,454 @@ export function MasterVsChangedReport({
             </div>
           )}
 
-          <div className="overflow-x-auto">
-            {filteredFaculties.length === 0 ? (
-              <div className="p-8 text-center text-xs text-slate-500">
-                No faculty records match the selected filters.
-              </div>
-            ) : (
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase text-slate-600">
-                    <th className="py-2.5 px-3">Faculty Name</th>
-                    <th className="py-2.5 px-2">HRMS ID</th>
-                    <th className="py-2.5 px-3">Assigned Subjects</th>
-                    <th className="py-2.5 px-2 text-center">Master Quota</th>
-                    <th className="py-2.5 px-2 text-center">Conducted</th>
-                    <th className="py-2.5 px-2 text-center">Relieved (Out)</th>
-                    <th className="py-2.5 px-2 text-center">Substitute (In)</th>
-                    <th className="py-2.5 px-2 text-center">Net Load</th>
-                    <th className="py-2.5 px-2 text-center text-emerald-800">Present</th>
-                    <th className="py-2.5 px-2 text-center text-rose-800">Absent</th>
-                    <th className="py-2.5 px-2 text-center text-sky-800">Attendance %</th>
-                    <th className="py-2.5 px-3 text-right">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredFaculties.map((f) => (
-                    <tr
-                      key={f.hrmsId}
-                      onClick={() => {
-                        setActiveStaffModal(f);
-                        setStaffModalSearch("");
-                      }}
-                      className={cn(
-                        "cursor-pointer hover:bg-amber-50/70 transition-colors group",
-                        activeStaffModal?.hrmsId === f.hrmsId ? "bg-amber-50/90 border-l-4 border-l-amber-500 font-medium" : "",
-                      )}
-                    >
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="h-7 w-7 rounded-full bg-slate-100 border border-slate-300 flex items-center justify-center font-bold text-[10px] text-slate-700">
-                            {f.facultyName.slice(0, 2).toUpperCase()}
+          {filteredFaculties.length === 0 ? (
+            <div className="p-12 text-center text-xs text-slate-500 rounded-xl border border-dashed border-slate-300">
+              No faculty records match the selected filters.
+            </div>
+          ) : staffViewMode === "cards" ? (
+            /* Modern Executive Faculty Cards Grid */
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {filteredFaculties.map((f) => {
+                const quotaPct =
+                  f.masterAssignedPeriods > 0
+                    ? Math.min(100, Math.round((f.classesConducted / f.masterAssignedPeriods) * 100))
+                    : f.classesConducted > 0
+                    ? 100
+                    : 0;
+
+                const initials = (f.facultyName || "NA")
+                  .split(" ")
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .map((n) => n[0])
+                  .join("")
+                  .toUpperCase();
+
+                const isQuotaMet = f.masterAssignedPeriods > 0 && f.classesConducted >= f.masterAssignedPeriods;
+
+                return (
+                  <div
+                    key={f.hrmsId}
+                    className={cn(
+                      "group relative flex flex-col justify-between rounded-xl border bg-white p-4 transition-all duration-200 hover:shadow-md hover:border-amber-400",
+                      activeStaffModal?.hrmsId === f.hrmsId
+                        ? "border-amber-400 ring-2 ring-amber-400/30"
+                        : "border-slate-200",
+                    )}
+                  >
+                    <div>
+                      {/* Card Top: Avatar, Name, HRMS, and Status Badge */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-amber-500 via-amber-600 to-indigo-700 text-white font-extrabold text-sm shadow-sm ring-2 ring-white">
+                            {initials}
                           </div>
-                          <div>
-                            <p className="font-bold text-navy-900 group-hover:text-amber-900 transition-colors">{f.facultyName}</p>
-                            {activeStaffModal?.hrmsId === f.hrmsId && (
-                              <span className="rounded bg-amber-600 text-white text-[9px] font-bold px-1.5 py-0.2 shadow-2xs">
-                                Viewing ✓
+                          <div className="min-w-0">
+                            <h5
+                              className="font-extrabold text-navy-950 text-sm truncate group-hover:text-amber-900 transition-colors"
+                              title={f.facultyName}
+                            >
+                              {f.facultyName}
+                            </h5>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className="font-mono text-[11px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                #{f.hrmsId}
                               </span>
-                            )}
+                              {f.subjects.length > 0 && (
+                                <span
+                                  className="text-[10px] text-slate-400 truncate max-w-[120px]"
+                                  title={f.subjects.join(", ")}
+                                >
+                                  {f.subjects[0]}
+                                  {f.subjects.length > 1 ? ` +${f.subjects.length - 1}` : ""}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </td>
-                      <td className="py-3 px-2 font-mono text-[11px] text-slate-500">#{f.hrmsId}</td>
-                      <td className="py-3 px-3 text-slate-600">
-                        <div className="flex flex-wrap gap-1 max-w-xs">
+
+                        {/* Status Badge */}
+                        <div className="shrink-0 text-right">
+                          {isQuotaMet ? (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-200">
+                              Quota Met ✓
+                            </span>
+                          ) : f.substituteTakenCount > 0 ? (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-sky-50 px-2 py-0.5 text-[10px] font-bold text-sky-800 border border-sky-200">
+                              +{f.substituteTakenCount} Sub Duty
+                            </span>
+                          ) : f.relievedCount > 0 ? (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-800 border border-rose-200">
+                              -{f.relievedCount} Relieved
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                              Scheduled
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Workload Conduction Progress Bar */}
+                      <div className="mt-3.5 space-y-1">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-semibold text-slate-600">Conduction vs Assigned</span>
+                          <span className="font-bold text-navy-900">
+                            {f.classesConducted} / {f.masterAssignedPeriods}{" "}
+                            <span className="text-[10px] text-slate-400">({quotaPct}%)</span>
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden border border-slate-200/60">
+                          <div
+                            className={cn(
+                              "h-full rounded-full transition-all duration-300",
+                              quotaPct >= 100
+                                ? "bg-emerald-500"
+                                : quotaPct > 50
+                                ? "bg-amber-500"
+                                : "bg-sky-500",
+                            )}
+                            style={{ width: `${Math.max(4, quotaPct)}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* 6 Key Metrics Tiles */}
+                      <div className="mt-3.5 grid grid-cols-3 gap-2">
+                        <div className="rounded-lg bg-slate-50 p-2 border border-slate-200/80 text-center">
+                          <span className="text-[9.5px] font-bold uppercase text-slate-500 block tracking-tight">
+                            Master Quota
+                          </span>
+                          <span className="text-sm font-extrabold text-navy-950 mt-0.5 block">
+                            {f.masterAssignedPeriods}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-emerald-50/70 p-2 border border-emerald-200 text-center">
+                          <span className="text-[9.5px] font-bold uppercase text-emerald-800 block tracking-tight">
+                            Conducted
+                          </span>
+                          <span className="text-sm font-extrabold text-emerald-700 mt-0.5 block">
+                            {f.classesConducted}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-indigo-50/70 p-2 border border-indigo-200 text-center">
+                          <span className="text-[9.5px] font-bold uppercase text-indigo-800 block tracking-tight">
+                            Net Load
+                          </span>
+                          <span className="text-sm font-extrabold text-indigo-900 mt-0.5 block">
+                            {f.netTeachingCount}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-rose-50/70 p-2 border border-rose-200 text-center">
+                          <span className="text-[9.5px] font-bold uppercase text-rose-800 block tracking-tight">
+                            Relieved (-)
+                          </span>
+                          <span className="text-sm font-extrabold text-rose-700 mt-0.5 block">
+                            {f.relievedCount > 0 ? `-${f.relievedCount}` : "0"}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-sky-50/70 p-2 border border-sky-200 text-center">
+                          <span className="text-[9.5px] font-bold uppercase text-sky-800 block tracking-tight">
+                            Sub In (+)
+                          </span>
+                          <span className="text-sm font-extrabold text-sky-700 mt-0.5 block">
+                            {f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : "0"}
+                          </span>
+                        </div>
+                        <div className="rounded-lg bg-slate-50 p-2 border border-slate-200/80 text-center">
+                          <span className="text-[9.5px] font-bold uppercase text-slate-500 block tracking-tight">
+                            Attendance %
+                          </span>
+                          <span className="text-sm font-extrabold text-sky-800 mt-0.5 block">
+                            {f.attendancePct != null ? `${f.attendancePct}%` : "—"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Assigned Subjects Chips */}
+                      {f.subjects.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-1">
                           {f.subjects.map((sub, i) => (
-                            <span key={i} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px]">
+                            <span
+                              key={i}
+                              className="inline-block rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700 border border-slate-200/60"
+                            >
                               {sub}
                             </span>
                           ))}
                         </div>
-                      </td>
-                      <td className="py-3 px-2 text-center font-semibold text-slate-800">
-                        {f.masterAssignedPeriods}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-emerald-700">
-                        {f.classesConducted}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-rose-600">
-                        {f.relievedCount > 0 ? `-${f.relievedCount}` : "0"}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-sky-600">
-                        {f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : "0"}
-                      </td>
-                      <td className="py-3 px-2 text-center font-extrabold text-navy-950">
-                        {f.netTeachingCount}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-emerald-700">
-                        {f.totalPresent ?? "—"}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-rose-600">
-                        {f.totalAbsent ?? "—"}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-sky-700">
-                        {f.attendancePct != null ? `${f.attendancePct}%` : "—"}
-                      </td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="inline-flex items-center justify-end gap-1.5 flex-nowrap">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void exportFacultyExcel(f);
-                            }}
-                            disabled={generatingExcelKey === (f.hrmsId || f.facultyName)}
-                            className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
-                            title={`Export ${f.facultyName}'s workload and verified action history to Excel`}
-                          >
-                            {generatingExcelKey === (f.hrmsId || f.facultyName) ? (
-                              <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
-                            ) : (
-                              <FileSpreadsheet className="h-3 w-3 text-emerald-700" />
-                            )}
-                            <span className="hidden xl:inline">Excel</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void printFacultyPdf(f);
-                            }}
-                            disabled={generatingPdfKey === (f.hrmsId || f.facultyName)}
-                            className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
-                            title={`Download official verified PDF for ${f.facultyName}`}
-                          >
-                            {generatingPdfKey === (f.hrmsId || f.facultyName) ? (
-                              <Loader2 className="h-3 w-3 animate-spin text-rose-700" />
-                            ) : (
-                              <FileText className="h-3 w-3 text-rose-700" />
-                            )}
-                            <span className="hidden xl:inline">PDF</span>
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActiveStaffModal(f);
-                              setStaffModalSearch("");
-                            }}
-                            className="inline-flex items-center gap-1 rounded-md bg-navy-900 hover:bg-navy-800 text-white font-semibold text-[10px] px-2 py-1 shadow-xs transition-colors cursor-pointer"
-                            title={`View ${f.facultyName}'s full profile, workload, and action history`}
-                          >
-                            <Eye className="h-3 w-3" />
-                            <span>View</span>
-                          </button>
-                        </div>
-                      </td>
+                      )}
+                    </div>
+
+                    {/* Card Footer: Action Buttons */}
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void exportFacultyExcel(f);
+                          }}
+                          disabled={generatingExcelKey === (f.hrmsId || f.facultyName)}
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2.5 py-1.5 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                          title={`Export ${f.facultyName}'s workload and actions to Excel`}
+                        >
+                          {generatingExcelKey === (f.hrmsId || f.facultyName) ? (
+                            <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
+                          ) : (
+                            <FileSpreadsheet className="h-3 w-3 text-emerald-700" />
+                          )}
+                          <span>Excel</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void printFacultyPdf(f);
+                          }}
+                          disabled={generatingPdfKey === (f.hrmsId || f.facultyName)}
+                          className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[10px] px-2.5 py-1.5 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                          title={`Download verified PDF for ${f.facultyName}`}
+                        >
+                          {generatingPdfKey === (f.hrmsId || f.facultyName) ? (
+                            <Loader2 className="h-3 w-3 animate-spin text-rose-700" />
+                          ) : (
+                            <FileText className="h-3 w-3 text-rose-700" />
+                          )}
+                          <span>PDF</span>
+                        </button>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveStaffModal(f);
+                          setStaffModalSearch("");
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md bg-navy-900 hover:bg-navy-800 text-white font-bold text-[10px] px-3 py-1.5 shadow-xs transition-colors cursor-pointer"
+                        title={`View ${f.facultyName}'s full profile & session audit log`}
+                      >
+                        <Eye className="h-3 w-3" />
+                        <span>View</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            /* Modern Vertical Roster Table (Matching Subject Analysis UI) */
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs">
+              {/* Distinct Header Banner matching Subject Analysis */}
+              <div className="border-b border-slate-200 bg-linear-to-r from-slate-50 via-emerald-50/20 to-slate-50 px-4 py-3 flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-700 text-white font-black text-sm shadow-2xs">
+                    FA
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-navy-950">
+                        Faculty Workload & Action Audit Roster
+                      </h4>
+                      <span className="rounded bg-indigo-50 border border-indigo-200 px-2 py-0.5 text-[10px] font-bold text-indigo-700">
+                        Official Roster
+                      </span>
+                      <span className="rounded bg-slate-200/80 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                        {filteredFaculties.length} Faculty Member{filteredFaculties.length !== 1 ? "s" : ""}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Individual faculty teaching hours, workload distribution, quota completion &amp; verified substitution audit
+                    </p>
+                  </div>
+                </div>
+
+                {/* Roster Summary Badges */}
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-bold text-emerald-700 border border-emerald-200">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                    {staffAnalytics.totalConducted} Conducted
+                  </span>
+                  {staffAnalytics.totalSubstituteTaken > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-2.5 py-0.5 text-[10px] font-bold text-sky-700 border border-sky-200">
+                      +{staffAnalytics.totalSubstituteTaken} Substitutions Taken
+                    </span>
+                  )}
+                  {staffAnalytics.totalRelieved > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-0.5 text-[10px] font-bold text-rose-700 border border-rose-200">
+                      -{staffAnalytics.totalRelieved} Relieved Away
+                    </span>
+                  )}
+                  {staffAnalytics.overallTurnoutPct != null ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold text-indigo-800 border border-indigo-200">
+                      {staffAnalytics.overallTurnoutPct}% Avg Turnout
+                    </span>
+                  ) : (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                      Turnout Pending
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Table View */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-100/80 text-[10px] font-bold uppercase tracking-wider text-slate-800">
+                      <th className="py-2.5 px-3">Faculty Name &amp; HRMS</th>
+                      <th className="py-2.5 px-3">Assigned Curriculum Subjects</th>
+                      <th className="py-2.5 px-2 text-center">Master Quota</th>
+                      <th className="py-2.5 px-2 text-center">Conducted</th>
+                      <th className="py-2.5 px-2 text-center">Relieved (-)</th>
+                      <th className="py-2.5 px-2 text-center">Substitute (+)</th>
+                      <th className="py-2.5 px-2 text-center">Net Load</th>
+                      <th className="py-2.5 px-2 text-center">Enrolled</th>
+                      <th className="py-2.5 px-2 text-center text-emerald-800">Present</th>
+                      <th className="py-2.5 px-2 text-center text-rose-800">Absent</th>
+                      <th className="py-2.5 px-2 text-center text-sky-800">Attendance %</th>
+                      <th className="py-2.5 px-3 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredFaculties.map((f) => {
+                      return (
+                        <tr
+                          key={f.hrmsId}
+                          onClick={() => {
+                            setActiveStaffModal(f);
+                            setStaffModalSearch("");
+                          }}
+                          className={cn(
+                            "cursor-pointer hover:bg-emerald-50/40 transition-colors group",
+                            activeStaffModal?.hrmsId === f.hrmsId
+                              ? "bg-emerald-50/80 border-l-4 border-l-emerald-600 font-medium"
+                              : "",
+                          )}
+                        >
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="h-8 w-8 rounded-full bg-slate-100 border border-slate-300 flex items-center justify-center font-bold text-[11px] text-slate-700 shadow-2xs shrink-0">
+                                {f.facultyName.slice(0, 2).toUpperCase()}
+                              </div>
+                              <div>
+                                <p className="font-bold text-navy-950 group-hover:text-emerald-800 transition-colors">
+                                  {f.facultyName}
+                                </p>
+                                <div className="flex items-center gap-1.5 mt-0.5">
+                                  <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
+                                    #{f.hrmsId}
+                                  </span>
+                                  {activeStaffModal?.hrmsId === f.hrmsId && (
+                                    <span className="rounded bg-emerald-600 text-white text-[9px] font-bold px-1.5 py-0.2 shadow-2xs">
+                                      Viewing &bull; Audit Active
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-slate-600">
+                            {f.subjects.length > 0 ? (
+                              <div className="flex flex-wrap gap-1 max-w-xs">
+                                {f.subjects.map((sub, i) => (
+                                  <span key={i} className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 border border-slate-200/60">
+                                    {sub}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px]">No formal subjects</span>
+                            )}
+                          </td>
+                          <td className="py-3 px-2 text-center font-semibold text-slate-800">
+                            {f.masterAssignedPeriods} p/wk
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-emerald-700">
+                            {f.classesConducted} held
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-rose-600">
+                            {f.relievedCount > 0 ? `-${f.relievedCount}` : "0"}
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-sky-600">
+                            {f.substituteTakenCount > 0 ? `+${f.substituteTakenCount}` : "0"}
+                          </td>
+                          <td className="py-3 px-2 text-center font-extrabold text-navy-950">
+                            {f.netTeachingCount}
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-slate-800">
+                            {f.totalEnrolled && f.totalEnrolled > 0
+                              ? f.totalEnrolled
+                              : (f.totalMarked && f.totalMarked > 0 ? f.totalMarked : "—")}
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-emerald-700">
+                            {f.classesConducted > 0 && f.totalPresent != null && f.totalPresent > 0 ? f.totalPresent : (f.classesConducted > 0 && (f.totalPresent != null || f.totalAbsent != null) ? 0 : "—")}
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-rose-600">
+                            {f.classesConducted > 0 && f.totalAbsent != null && f.totalAbsent > 0 ? f.totalAbsent : (f.classesConducted > 0 && (f.totalPresent != null || f.totalAbsent != null) ? 0 : "—")}
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-sky-700">
+                            {f.classesConducted > 0 && f.attendancePct != null ? `${f.attendancePct}%` : "Pending"}
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <div className="inline-flex items-center justify-end gap-1.5 flex-nowrap">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void exportFacultyExcel(f);
+                                }}
+                                disabled={generatingExcelKey === (f.hrmsId || f.facultyName)}
+                                className="inline-flex items-center gap-1 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                title={`Export ${f.facultyName}'s workload and verified action history to Excel`}
+                              >
+                                {generatingExcelKey === (f.hrmsId || f.facultyName) ? (
+                                  <Loader2 className="h-3 w-3 animate-spin text-emerald-700" />
+                                ) : (
+                                  <FileSpreadsheet className="h-3 w-3 text-emerald-700" />
+                                )}
+                                <span className="hidden xl:inline">Excel</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void printFacultyPdf(f);
+                                }}
+                                disabled={generatingPdfKey === (f.hrmsId || f.facultyName)}
+                                className="inline-flex items-center gap-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 font-bold text-[10px] px-2 py-1 shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                title={`Download official verified PDF for ${f.facultyName}`}
+                              >
+                                {generatingPdfKey === (f.hrmsId || f.facultyName) ? (
+                                  <Loader2 className="h-3 w-3 animate-spin text-rose-700" />
+                                ) : (
+                                  <FileText className="h-3 w-3 text-rose-700" />
+                                )}
+                                <span className="hidden xl:inline">PDF</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveStaffModal(f);
+                                  setStaffModalSearch("");
+                                }}
+                                className="inline-flex items-center gap-1 rounded-md bg-navy-900 hover:bg-navy-800 text-white font-semibold text-[10px] px-2 py-1 shadow-xs transition-colors cursor-pointer"
+                                title={`View ${f.facultyName}'s full profile, workload, and action history`}
+                              >
+                                <Eye className="h-3 w-3" />
+                                <span>View</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -7916,10 +8658,10 @@ export function MasterVsChangedReport({
               </div>
             </div>
 
-            {/* Modal Body: Single smooth view, NO outer scrollbar */}
-            <div className="flex-1 min-h-0 flex flex-col p-4 sm:p-5 gap-3 bg-slate-50/50 overflow-hidden">
-              {/* Top Summary Cards (Fixed / Non-scrolling) */}
-              <div className="shrink-0 space-y-2.5">
+            {/* Modal Body: Smooth scrollable view so all lower sections & table rows are clearly visible */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-3.5 bg-slate-50/50">
+              {/* Top Summary Cards */}
+              <div className="space-y-2.5">
                 {/* 5 Workload & Action Metric Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                   <div className="rounded-xl bg-white p-3 border border-slate-200 shadow-2xs">
@@ -7973,6 +8715,25 @@ export function MasterVsChangedReport({
                   </div>
                 </div>
 
+                {/* Mathematical Calculation Breakdown Banner */}
+                <div className="rounded-xl bg-linear-to-r from-emerald-50/80 via-slate-50 to-emerald-50/80 border border-emerald-300/80 p-2.5 flex flex-wrap items-center justify-between gap-2.5 text-xs shadow-2xs">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="rounded-md bg-emerald-700 text-white font-extrabold text-[10px] uppercase px-2 py-0.5 tracking-wider shadow-2xs">
+                      Calculation Formula
+                    </span>
+                    <span className="text-slate-800 text-[11px]">
+                      <strong>Net Workload Quota</strong> = Master Quota (<span className="font-semibold text-slate-900">{activeStaffModal.masterAssignedPeriods}</span>) &minus; Relieved (<span className="font-semibold text-rose-700">{activeStaffModal.relievedCount}</span>) + Substitute (<span className="font-semibold text-sky-700">{activeStaffModal.substituteTakenCount}</span>) = <strong className="text-emerald-800 font-extrabold">{activeStaffModal.netTeachingCount} Target Periods</strong>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2.5 text-[11px] font-semibold text-slate-700">
+                    <span>Delivered Classes: <strong className="text-emerald-700">{activeStaffModal.classesConducted} held</strong></span>
+                    <span>&bull;</span>
+                    <span>Net Shift: <strong className={activeStaffModal.substituteTakenCount - activeStaffModal.relievedCount >= 0 ? "text-emerald-700" : "text-rose-700"}>
+                      {activeStaffModal.substituteTakenCount - activeStaffModal.relievedCount >= 0 ? "+" : ""}{activeStaffModal.substituteTakenCount - activeStaffModal.relievedCount} variance
+                    </strong></span>
+                  </div>
+                </div>
+
                 {/* Assigned Subjects & Quick Action Brief */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
                   <div className="rounded-xl bg-white p-3 border border-slate-200 shadow-2xs">
@@ -8022,24 +8783,18 @@ export function MasterVsChangedReport({
                 </div>
               </div>
 
-              {/* Timetable Sessions & Action History Log - Fills remaining height with single scrollbar */}
-              <div className="flex-1 min-h-0 flex flex-col rounded-xl bg-white border border-slate-200 shadow-2xs overflow-hidden">
+              {/* Timetable Sessions & Action History Log */}
+              <div className="flex flex-col rounded-xl bg-white border border-slate-200 shadow-2xs overflow-hidden min-h-[360px]">
                 <div className="shrink-0 p-3 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-2.5">
                   <div>
                     <h4 className="text-xs font-bold uppercase tracking-wider text-navy-950 flex items-center gap-1.5">
                       <CalendarCheck className="h-4 w-4 text-emerald-600" />
-                      Detailed Timetable Delivery & Substitution Actions
+                      Detailed Timetable Delivery &amp; Substitution Actions
                     </h4>
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="text-[11px] text-slate-500">
                         Showing {filteredModalStaffSessions.length} sessions involving {activeStaffModal.facultyName}
                       </p>
-                      {loadingDedicatedSessions && (
-                        <span className="inline-flex items-center gap-1 rounded bg-amber-100 border border-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-900 animate-pulse">
-                          <Loader2 className="h-3 w-3 animate-spin text-amber-700" />
-                          Verifying official timetable records...
-                        </span>
-                      )}
                     </div>
                   </div>
 
@@ -8076,7 +8831,7 @@ export function MasterVsChangedReport({
                   </div>
                 </div>
 
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
+                <div className="flex-1 min-h-[260px] max-h-[520px] overflow-y-auto overflow-x-auto">
                   {filteredModalStaffSessions.length === 0 ? (
                     <div className="p-8 text-center text-xs text-slate-400">
                       No matching sessions found for this faculty member in the selected date range.
@@ -8110,10 +8865,9 @@ export function MasterVsChangedReport({
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-slate-700">
-                              <span className="font-medium text-slate-900 block">
-                                {s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All Sections"}
+                              <span className="font-semibold text-slate-900 block">
+                                {formatSessionClassInfo(s, false)}
                               </span>
-                              <span className="text-[10px] text-slate-500">Batch {s.batch}</span>
                             </td>
                             <td className="py-2.5 px-3">
                               <p className="font-bold text-navy-900">
@@ -8291,10 +9045,10 @@ export function MasterVsChangedReport({
               </div>
             </div>
 
-            {/* Modal Body: Single smooth view, NO outer scrollbar */}
-            <div className="flex-1 min-h-0 flex flex-col p-4 sm:p-5 gap-3 bg-slate-50/50 overflow-hidden">
-              {/* Top Summary Cards (Fixed / Non-scrolling) */}
-              <div className="shrink-0 space-y-2.5">
+            {/* Modal Body: Smooth scrollable view so all lower sections & table rows are clearly visible */}
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-5 space-y-3.5 bg-slate-50/50">
+              {/* Top Summary Cards */}
+              <div className="space-y-2.5">
                 {/* 4 Key Metric Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                   <div className="rounded-xl bg-white p-3 border border-slate-200 shadow-2xs">
@@ -8423,8 +9177,8 @@ export function MasterVsChangedReport({
                 </div>
               </div>
 
-              {/* Delivery Log Table - Fills remaining height with single scrollbar */}
-              <div className="flex-1 min-h-0 flex flex-col rounded-xl bg-white border border-slate-200 shadow-2xs overflow-hidden">
+              {/* Delivery Log Table */}
+              <div className="flex flex-col rounded-xl bg-white border border-slate-200 shadow-2xs overflow-hidden min-h-[360px]">
                 <div className="shrink-0 p-3 border-b border-slate-200 bg-slate-50 flex flex-wrap items-center justify-between gap-2.5">
                   <div>
                     <h4 className="text-xs font-bold uppercase tracking-wider text-navy-950 flex items-center gap-1.5">
@@ -8477,7 +9231,7 @@ export function MasterVsChangedReport({
                   </div>
                 </div>
 
-                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto">
+                <div className="flex-1 min-h-[260px] max-h-[520px] overflow-y-auto overflow-x-auto">
                   {filteredModalSubjectSessions.length === 0 ? (
                     <div className="p-8 text-center text-xs text-slate-400">
                       No matching sessions found for this subject in the selected date range.
@@ -8511,10 +9265,9 @@ export function MasterVsChangedReport({
                               </span>
                             </td>
                             <td className="py-2.5 px-3 text-slate-700">
-                              <span className="font-medium text-slate-900 block">
-                                {s.sectionName ? `Sec ${cleanSectionCode(s.sectionName)}` : "All"}
+                              <span className="font-semibold text-slate-900 block">
+                                {formatSessionClassInfo(s, false)}
                               </span>
-                              <span className="text-[10px] text-slate-500">Batch {s.batch}</span>
                             </td>
                             <td className="py-2.5 px-3">
                               {s.masterFacultyName ? (
