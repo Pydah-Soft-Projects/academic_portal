@@ -3,6 +3,7 @@ import type { Request, Response, NextFunction } from "express";
 import type { AuthedRequest } from "../middleware/auth.middleware.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
 import { loadAuthzContext } from "../authz/authorization.service.js";
+import { env } from "../config/env.js";
 import {
   clearSessionCookieOptions,
   getSessionCookieName,
@@ -110,7 +111,10 @@ export async function sendCurrentUser(req: AuthedRequest, res: Response) {
       hrmsEmployeeId: user.hrmsEmployeeId,
       hrmsUserId: user.hrmsUserId,
       profilePhoto: profilePhoto ?? null,
+      loginMethod: user.loginMethod ?? "credentials",
+      isSso: Boolean(user.isSso || user.loginMethod === "sso"),
     },
+    crmFrontendUrl: env.crm.frontendUrl,
     authorization: {
       roles: (authz?.roles ?? []).map((role) => ({
         roleKey: role.roleKey,
@@ -226,7 +230,10 @@ async function handleSsoLogin(req: Request, res: Response, next: NextFunction) {
         username: result.user.username,
         hrmsEmployeeId: result.user.hrmsEmployeeId,
         hrmsUserId: result.user.hrmsUserId,
+        loginMethod: "sso",
+        isSso: true,
       },
+      crmFrontendUrl: env.crm.frontendUrl,
       authorization: {
         roles: authz.roles.map((role) => ({
           roleKey: role.roleKey,
@@ -257,9 +264,14 @@ authRouter.post("/sso-session", handleSsoLogin);
 
 authRouter.post("/logout", async (req: AuthedRequest, res, next) => {
   try {
+    const isSso = Boolean(req.authUser?.isSso || req.authUser?.loginMethod === "sso");
     await revokeSessionToken(req.sessionToken);
     res.cookie(getSessionCookieName(), "", clearSessionCookieOptions());
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      isSso,
+      crmFrontendUrl: env.crm.frontendUrl,
+    });
   } catch (error) {
     next(error);
   }

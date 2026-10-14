@@ -77,6 +77,12 @@ export function LoginForm() {
           );
         }
 
+        try {
+          window.localStorage.setItem("ap_is_sso", "true");
+        } catch {
+          /* ignore */
+        }
+
         await refresh();
         if (!cancelled) {
           router.replace("/dashboard");
@@ -115,6 +121,7 @@ export function LoginForm() {
       }
 
       try {
+        window.localStorage.removeItem("ap_is_sso");
         if (rememberMe) {
           window.localStorage.setItem(REMEMBER_KEY, identifier.trim());
         } else {

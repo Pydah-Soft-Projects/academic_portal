@@ -11,6 +11,10 @@ import {
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 
+const SSO_STORAGE_KEY = "ap_is_sso";
+const DEFAULT_CRM_URL =
+  process.env.NEXT_PUBLIC_CRM_FRONTEND_URL || "https://crm.pydah.edu.in";
+
 export type AuthUser = {
   id: number;
   name: string;
@@ -19,6 +23,8 @@ export type AuthUser = {
   hrmsEmployeeId: string | null;
   hrmsUserId: string;
   profilePhoto?: string | null;
+  loginMethod?: string;
+  isSso?: boolean;
 };
 
 export type AuthRole = {
@@ -44,6 +50,8 @@ type AuthContextValue = {
   user: AuthUser | null;
   authorization: Authorization | null;
   loading: boolean;
+  isSso: boolean;
+  crmUrl: string;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   hasPermission: (...permissions: string[]) => boolean;
@@ -62,7 +70,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authorization, setAuthorization] = useState<Authorization | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isSso, setIsSso] = useState(false);
+  const [crmUrl, setCrmUrl] = useState(DEFAULT_CRM_URL);
   const router = useRouter();
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(SSO_STORAGE_KEY);
+      if (stored === "true") {
+        setIsSso(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -80,9 +101,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const body = (await response.json()) as {
         user: AuthUser;
         authorization?: Authorization;
+        crmFrontendUrl?: string;
       };
       setUser(body.user);
       setAuthorization(body.authorization ?? EMPTY_AUTHZ);
+      if (body.crmFrontendUrl) {
+        setCrmUrl(body.crmFrontendUrl);
+      }
+      const ssoActive = Boolean(body.user?.isSso || body.user?.loginMethod === "sso");
+      setIsSso(ssoActive);
+      try {
+        if (ssoActive) {
+          window.localStorage.setItem(SSO_STORAGE_KEY, "true");
+        } else {
+          window.localStorage.removeItem(SSO_STORAGE_KEY);
+        }
+      } catch {
+        /* ignore */
+      }
     } catch {
       setUser(null);
       setAuthorization(null);
@@ -103,14 +139,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [refresh]);
 
   const logout = useCallback(async () => {
+    let ssoActive = isSso;
     try {
-      await apiFetch("/auth/logout", { method: "POST" });
+      if (typeof window !== "undefined" && window.localStorage.getItem(SSO_STORAGE_KEY) === "true") {
+        ssoActive = true;
+      }
+    } catch {
+      /* ignore */
+    }
+
+    let backendCrmUrl = crmUrl;
+    try {
+      const res = await apiFetch("/auth/logout", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (typeof data?.isSso === "boolean") {
+        ssoActive = ssoActive || data.isSso;
+      }
+      if (typeof data?.crmFrontendUrl === "string" && data.crmFrontendUrl) {
+        backendCrmUrl = data.crmFrontendUrl;
+      }
+    } catch {
+      /* proceed with client-side cleanup */
     } finally {
+      try {
+        window.localStorage.removeItem(SSO_STORAGE_KEY);
+      } catch {
+        /* ignore */
+      }
       setUser(null);
       setAuthorization(null);
-      router.replace("/login");
+      setIsSso(false);
+
+      if (ssoActive) {
+        const target = backendCrmUrl || DEFAULT_CRM_URL;
+        window.location.replace(target);
+      } else {
+        router.replace("/login");
+      }
     }
-  }, [router]);
+  }, [isSso, crmUrl, router]);
 
   const hasAnyPermission = useCallback(
     (...permissions: string[]) => {
@@ -133,12 +200,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       user,
       authorization,
       loading,
+      isSso,
+      crmUrl,
       refresh,
       logout,
       hasPermission,
       hasAnyPermission,
     }),
-    [user, authorization, loading, refresh, logout, hasPermission, hasAnyPermission],
+    [user, authorization, loading, isSso, crmUrl, refresh, logout, hasPermission, hasAnyPermission],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

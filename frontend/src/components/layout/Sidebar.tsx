@@ -19,6 +19,7 @@ import { isTeachingStaffOnly, isSuperAdminUser } from "@/lib/teaching-scope";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { apiFetch } from "@/lib/api";
+import { LogoutConfirmModal } from "@/components/auth/LogoutConfirmModal";
 
 type Props = {
   open: boolean;
@@ -33,6 +34,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
   const { user, authorization, logout, refresh, hasAnyPermission, hasPermission } =
     useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [logoutModalOpen, setLogoutModalOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [mounted, setMounted] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<{
@@ -490,10 +492,10 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               </button>
               <button
                 type="button"
-                onClick={() => void logout()}
+                onClick={() => setLogoutModalOpen(true)}
                 onMouseEnter={(e) => showTooltip("Sign out", e)}
                 onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white"
+                className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -535,8 +537,8 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               </button>
               <button
                 type="button"
-                onClick={() => void logout()}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white"
+                onClick={() => setLogoutModalOpen(true)}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -557,6 +559,11 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
           }}
         />
       ) : null}
+
+      <LogoutConfirmModal
+        isOpen={logoutModalOpen}
+        onClose={() => setLogoutModalOpen(false)}
+      />
 
       {mounted && typeof document !== "undefined"
         ? createPortal(

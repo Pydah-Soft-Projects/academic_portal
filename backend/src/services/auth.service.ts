@@ -47,6 +47,8 @@ export type AuthUser = {
   hrmsEmployeeId: string | null;
   hrmsUserId: string;
   isActive: boolean;
+  loginMethod?: "credentials" | "sso";
+  isSso?: boolean;
 };
 
 type ApUserRow = RowDataPacket & {
@@ -105,6 +107,15 @@ export async function ensureAuthSchema() {
           CONSTRAINT fk_ap_sessions_user FOREIGN KEY (user_id) REFERENCES ap_users(id)
         )
       `);
+
+      try {
+        await executeAcademic(`
+          ALTER TABLE ap_sessions
+          ADD COLUMN login_method VARCHAR(32) NOT NULL DEFAULT 'credentials'
+        `);
+      } catch {
+        // column already exists or table altered
+      }
 
       try {
         await executeAcademic(`
@@ -385,28 +396,60 @@ async function createSessionForUser(input: {
   hrmsUserId: string;
   ipAddress?: string | null;
   userAgent?: string | null;
+  loginMethod?: "credentials" | "sso";
 }): Promise<LoginResult> {
   const sessionToken = newSessionToken();
   const tokenHash = sha256(sessionToken);
   const expiresAt = new Date(Date.now() + env.auth.sessionTtlHours * 60 * 60 * 1000);
+  const loginMethod = input.loginMethod ?? "credentials";
 
-  await executeAcademic(
-    `
-    INSERT INTO ap_sessions
-      (user_id, session_token_hash, hrms_user_id, expires_at, last_seen_at, ip_address, user_agent)
-    VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, ?)
-    `,
-    [
-      input.user.id,
-      tokenHash,
-      input.hrmsUserId,
-      toMysqlUtcDateTime(expiresAt),
-      text(input.ipAddress),
-      text(input.userAgent)?.slice(0, 512) ?? null,
-    ],
-  );
+  try {
+    await executeAcademic(
+      `
+      INSERT INTO ap_sessions
+        (user_id, session_token_hash, hrms_user_id, login_method, expires_at, last_seen_at, ip_address, user_agent)
+      VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(), ?, ?)
+      `,
+      [
+        input.user.id,
+        tokenHash,
+        input.hrmsUserId,
+        loginMethod,
+        toMysqlUtcDateTime(expiresAt),
+        text(input.ipAddress),
+        text(input.userAgent)?.slice(0, 512) ?? null,
+      ],
+    );
+  } catch (err: unknown) {
+    const msg = String((err as { message?: string })?.message || "");
+    if (msg.includes("Unknown column 'login_method'")) {
+      await executeAcademic(
+        `
+        INSERT INTO ap_sessions
+          (user_id, session_token_hash, hrms_user_id, expires_at, last_seen_at, ip_address, user_agent)
+        VALUES (?, ?, ?, ?, UTC_TIMESTAMP(), ?, ?)
+        `,
+        [
+          input.user.id,
+          tokenHash,
+          input.hrmsUserId,
+          toMysqlUtcDateTime(expiresAt),
+          text(input.ipAddress),
+          text(input.userAgent)?.slice(0, 512) ?? null,
+        ],
+      );
+    } else {
+      throw err;
+    }
+  }
 
-  return { user: input.user, sessionToken, expiresAt };
+  const updatedUser: AuthUser = {
+    ...input.user,
+    loginMethod,
+    isSso: loginMethod === "sso",
+  };
+
+  return { user: updatedUser, sessionToken, expiresAt };
 }
 
 async function tryLocalPasswordLogin(input: {
@@ -693,6 +736,7 @@ export async function loginWithSsoToken(input: {
       hrmsUserId,
       ipAddress: input.ipAddress,
       userAgent: input.userAgent,
+      loginMethod: "sso",
     });
     return { ...session, crmData };
   }
@@ -711,6 +755,7 @@ export async function loginWithSsoToken(input: {
           hrmsUserId,
           ipAddress: input.ipAddress,
           userAgent: input.userAgent,
+          loginMethod: "sso",
         });
         return { ...session, crmData };
       }
@@ -727,6 +772,7 @@ export async function loginWithSsoToken(input: {
           hrmsUserId,
           ipAddress: input.ipAddress,
           userAgent: input.userAgent,
+          loginMethod: "sso",
         });
         return { ...session, crmData };
       }
@@ -833,23 +879,50 @@ export async function seedSuperAdmin(password = SUPER_ADMIN_SEED.password) {
 export async function getUserForSessionToken(sessionToken: string): Promise<AuthUser | null> {
   await ensureAuthSchema();
   const tokenHash = sha256(sessionToken);
-  const rows = await queryAcademic<
-    (ApUserRow & { hrms_user_id: string; session_id: number; expires_at: string })[]
-  >(
-    `
-    SELECT
-      u.id, u.name, u.email, u.username, u.hrms_employee_id, u.is_active,
-      s.id AS session_id, s.hrms_user_id, s.expires_at
-    FROM ap_sessions s
-    INNER JOIN ap_users u ON u.id = s.user_id
-    WHERE s.session_token_hash = ?
-      AND s.revoked_at IS NULL
-      AND s.expires_at > UTC_TIMESTAMP()
-      AND u.is_active = 1
-    LIMIT 1
-    `,
-    [tokenHash],
-  );
+  let rows: (ApUserRow & { hrms_user_id: string; session_id: number; expires_at: string; login_method?: string })[] = [];
+
+  try {
+    rows = await queryAcademic<
+      (ApUserRow & { hrms_user_id: string; session_id: number; expires_at: string; login_method?: string })[]
+    >(
+      `
+      SELECT
+        u.id, u.name, u.email, u.username, u.hrms_employee_id, u.is_active,
+        s.id AS session_id, s.hrms_user_id, s.expires_at, s.login_method
+      FROM ap_sessions s
+      INNER JOIN ap_users u ON u.id = s.user_id
+      WHERE s.session_token_hash = ?
+        AND s.revoked_at IS NULL
+        AND s.expires_at > UTC_TIMESTAMP()
+        AND u.is_active = 1
+      LIMIT 1
+      `,
+      [tokenHash],
+    );
+  } catch (err: unknown) {
+    const msg = String((err as { message?: string })?.message || "");
+    if (msg.includes("Unknown column 's.login_method'")) {
+      rows = await queryAcademic<
+        (ApUserRow & { hrms_user_id: string; session_id: number; expires_at: string })[]
+      >(
+        `
+        SELECT
+          u.id, u.name, u.email, u.username, u.hrms_employee_id, u.is_active,
+          s.id AS session_id, s.hrms_user_id, s.expires_at
+        FROM ap_sessions s
+        INNER JOIN ap_users u ON u.id = s.user_id
+        WHERE s.session_token_hash = ?
+          AND s.revoked_at IS NULL
+          AND s.expires_at > UTC_TIMESTAMP()
+          AND u.is_active = 1
+        LIMIT 1
+        `,
+        [tokenHash],
+      );
+    } else {
+      throw err;
+    }
+  }
 
   const row = rows[0];
   if (!row) return null;
@@ -858,7 +931,10 @@ export async function getUserForSessionToken(sessionToken: string): Promise<Auth
     row.session_id,
   ]);
 
-  return mapApUser(row, row.hrms_user_id);
+  const user = mapApUser(row, row.hrms_user_id);
+  user.loginMethod = row.login_method === "sso" ? "sso" : "credentials";
+  user.isSso = row.login_method === "sso";
+  return user;
 }
 
 export async function revokeSessionToken(sessionToken: string | null | undefined) {
