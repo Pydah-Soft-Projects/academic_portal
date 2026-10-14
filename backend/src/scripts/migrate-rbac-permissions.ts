@@ -91,6 +91,24 @@ const PERMISSION_META: Record<
     displayName: "Edit Today Timetable",
     description: "Edit daily timetable periods and faculty assignments",
   },
+  "combined_timetable.view": {
+    module: "combined_timetable",
+    action: "view",
+    displayName: "View Combined Classes",
+    description: "View combined class timetables and overview",
+  },
+  "combined_timetable.edit": {
+    module: "combined_timetable",
+    action: "edit",
+    displayName: "Edit Combined Timetables",
+    description: "Create and edit combined timetable drafts",
+  },
+  "combined_timetable.publish": {
+    module: "combined_timetable",
+    action: "publish",
+    displayName: "Publish Combined Timetables",
+    description: "Publish combined timetables across branches",
+  },
   "attendance.view": {
     module: "attendance",
     action: "view",
@@ -264,6 +282,18 @@ const PERMISSION_META: Record<
     action: "edit",
     displayName: "Edit Internal Marks & Access",
     description: "Manage internal marks upload access, enter student marks, submit, and approve submissions",
+  },
+  "internal_marks_mgmt.view": {
+    module: "internal_marks_mgmt",
+    action: "view",
+    displayName: "View Internal Marks Management",
+    description: "View internal marks configurations and deadlines",
+  },
+  "internal_marks_mgmt.edit": {
+    module: "internal_marks_mgmt",
+    action: "edit",
+    displayName: "Edit Internal Marks Management",
+    description: "Manage internal marks configurations, weightages, and policies",
   },
 };
 

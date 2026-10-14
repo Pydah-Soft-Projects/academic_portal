@@ -88,7 +88,7 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "Combined Classes",
         href: "/timetables/combined",
         icon: GitMerge,
-        permissions: ["timetable.view"],
+        permissions: ["combined_timetable.view"],
       },
       {
         label: "Today Timetable",

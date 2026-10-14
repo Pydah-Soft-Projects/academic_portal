@@ -116,6 +116,25 @@ export const PERMISSION_PRESENTATION: Record<
     kind: "write",
     sensitive: true,
   },
+  "combined_timetable.view": {
+    key: "combined_timetable.view",
+    label: "View Combined Classes",
+    description: "View combined class timetables, multi-branch schedules, and overview.",
+    kind: "read",
+  },
+  "combined_timetable.edit": {
+    key: "combined_timetable.edit",
+    label: "Create / Edit Combined Timetables",
+    description: "Create and edit combined timetable drafts across multiple branches.",
+    kind: "write",
+  },
+  "combined_timetable.publish": {
+    key: "combined_timetable.publish",
+    label: "Publish Combined Timetables",
+    description: "Publish combined timetables live to all merged branches and sections.",
+    kind: "write",
+    sensitive: true,
+  },
   "attendance.view": {
     key: "attendance.view",
     label: "View Attendance Posting",
@@ -364,6 +383,18 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
     iconName: "CalendarDays",
     sidebarUnlockPermissions: ["timetable.view"],
     permissions: [asDef("timetable.view"), asDef("timetable.edit"), asDef("timetable.publish")],
+  },
+  {
+    group: "Academics",
+    label: "Combined Classes",
+    href: "/timetables/combined",
+    iconName: "GitMerge",
+    sidebarUnlockPermissions: ["combined_timetable.view"],
+    permissions: [
+      asDef("combined_timetable.view"),
+      asDef("combined_timetable.edit"),
+      asDef("combined_timetable.publish"),
+    ],
   },
   {
     group: "Academics",

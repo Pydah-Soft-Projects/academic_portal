@@ -87,6 +87,24 @@ const PERMISSION_META: Record<
     displayName: "Edit Today Timetable",
     description: "Edit daily timetable periods and faculty assignments",
   },
+  "combined_timetable.view": {
+    module: "combined_timetable",
+    action: "view",
+    displayName: "View Combined Classes",
+    description: "View combined class timetables and overview",
+  },
+  "combined_timetable.edit": {
+    module: "combined_timetable",
+    action: "edit",
+    displayName: "Edit Combined Timetables",
+    description: "Create and edit combined timetable drafts",
+  },
+  "combined_timetable.publish": {
+    module: "combined_timetable",
+    action: "publish",
+    displayName: "Publish Combined Timetables",
+    description: "Publish combined timetables across branches",
+  },
   "attendance.view": {
     module: "attendance",
     action: "view",
