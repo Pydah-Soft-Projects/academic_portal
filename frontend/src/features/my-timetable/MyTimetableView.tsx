@@ -5,7 +5,6 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
-import { TimetableDaySection } from "./TimetableDaySection";
 import { TimetableSummary } from "./TimetableSummary";
 import { TimetableTodayPanel } from "./TimetableTodayPanel";
 import { DateSubstitutionsPanel } from "./DateSubstitutionsPanel";
@@ -16,13 +15,11 @@ import {
 import { useMyTimetable } from "./useMyTimetable";
 import { WorkloadTimetableGrid } from "@/features/workload/WorkloadTimetableGrid";
 import {
-  countWeekClasses,
   getTodayDayCode,
   getWeekDates,
   hasActiveAcademicFilters,
   linkedAccountMessage,
   startOfWeekMonday,
-  WEEK_DAY_CODES,
 } from "./utils";
 
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -50,20 +47,7 @@ function TimetableSkeleton() {
         </div>
         <Skeleton className="h-20 w-full rounded-lg" variant="subtle" />
       </div>
-      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, index) => (
-          <div key={index} className="p-4 rounded-xl border border-border bg-card shadow-xs space-y-3">
-            <div className="flex items-center justify-between">
-              <Skeleton className="h-4 w-28 rounded" />
-              <Skeleton className="h-4 w-12 rounded-full" variant="subtle" />
-            </div>
-            <div className="space-y-2">
-              <Skeleton className="h-12 w-full rounded-lg" variant="subtle" />
-              <Skeleton className="h-12 w-full rounded-lg" variant="subtle" />
-            </div>
-          </div>
-        ))}
-      </div>
+      <Skeleton className="h-72 w-full rounded-xl" variant="subtle" />
     </div>
   );
 }
@@ -90,7 +74,6 @@ export function MyTimetableView() {
   );
 
   const classesToday = todayDay?.classCount ?? 0;
-  const weekClassCount = payload ? countWeekClasses(payload.weekDays) : 0;
 
   if (loading) {
     return (
@@ -196,9 +179,7 @@ export function MyTimetableView() {
         <div className="mb-4">
           <WorkloadTimetableGrid timetable={payload.timetable} />
         </div>
-      ) : null}
-
-      {weekClassCount === 0 ? (
+      ) : (
         <EmptyState
           title="No classes scheduled for this week"
           description={
@@ -208,23 +189,6 @@ export function MyTimetableView() {
           }
           className="mb-4"
         />
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {WEEK_DAY_CODES.map((code) => {
-            const day = payload.weekDays.find((item) => item.dayOfWeek === code);
-            if (!day) return null;
-            const date = weekDates.byDayCode[code]!;
-            return (
-              <TimetableDaySection
-                key={code}
-                day={day}
-                date={date}
-                isToday={isCurrentWeek && code === todayCode}
-                compact
-              />
-            );
-          })}
-        </div>
       )}
 
       <p className="mt-4 text-center text-xs text-slate-400">
