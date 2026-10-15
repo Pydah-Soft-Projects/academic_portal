@@ -38,6 +38,7 @@ import {
   BookOpen,
   UserCog,
   Settings,
+  GitMerge,
 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -69,6 +70,7 @@ const SIDEBAR_ICON_MAP: Record<string, React.ComponentType<{ className?: string 
   BookOpen,
   UserCog,
   Settings,
+  GitMerge,
 };
 
 const GROUP_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -83,7 +85,6 @@ const GROUP_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>
 };
 import {
   PERMISSION_MATRIX_MODULES,
-  PERMISSION_PRESENTATION,
   allMatrixPermissionKeys,
   moduleAccessState,
   summarizeRoleAccess,

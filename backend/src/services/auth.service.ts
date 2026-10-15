@@ -122,7 +122,10 @@ export async function ensureAuthSchema() {
           INSERT INTO ap_permissions (permission_key, module, action, display_name, description, is_active)
           VALUES
             ('today_timetable.view', 'today_timetable', 'view', 'View Today Timetable', 'View daily timetable schedules and activity logs.', 1),
-            ('today_timetable.edit', 'today_timetable', 'edit', 'Edit Today Timetable', 'Edit daily timetable periods, subject and faculty assignments.', 1)
+            ('today_timetable.edit', 'today_timetable', 'edit', 'Edit Today Timetable', 'Edit daily timetable periods, subject and faculty assignments.', 1),
+            ('combined_timetable.view', 'combined_timetable', 'view', 'View Combined Classes', 'View combined class timetables, multi-branch schedules, and overview.', 1),
+            ('combined_timetable.edit', 'combined_timetable', 'edit', 'Edit Combined Timetables', 'Create and edit combined timetable drafts across multiple branches.', 1),
+            ('combined_timetable.publish', 'combined_timetable', 'publish', 'Publish Combined Timetables', 'Publish combined timetables live to all merged branches and sections.', 1)
           ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), description = VALUES(description), is_active = 1
         `);
 
@@ -142,6 +145,33 @@ export async function ensureAuthSchema() {
           CROSS JOIN ap_permissions p
           WHERE p.permission_key = 'today_timetable.view'
             AND r.role_key = 'staff'
+        `);
+
+        await executeAcademic(`
+          INSERT IGNORE INTO ap_role_permissions (role_id, permission_id)
+          SELECT r.id, p.id
+          FROM ap_roles r
+          CROSS JOIN ap_permissions p
+          WHERE p.permission_key IN ('combined_timetable.view', 'combined_timetable.edit', 'combined_timetable.publish')
+            AND r.role_key IN ('super_admin', 'vice_principal')
+        `);
+
+        await executeAcademic(`
+          INSERT IGNORE INTO ap_role_permissions (role_id, permission_id)
+          SELECT r.id, p.id
+          FROM ap_roles r
+          CROSS JOIN ap_permissions p
+          WHERE p.permission_key IN ('combined_timetable.view', 'combined_timetable.edit')
+            AND r.role_key = 'hod'
+        `);
+
+        await executeAcademic(`
+          INSERT IGNORE INTO ap_role_permissions (role_id, permission_id)
+          SELECT r.id, p.id
+          FROM ap_roles r
+          CROSS JOIN ap_permissions p
+          WHERE p.permission_key = 'combined_timetable.view'
+            AND r.role_key IN ('principal', 'class_teacher', 'staff')
         `);
 
         await ensureInternalMarksSchema();
