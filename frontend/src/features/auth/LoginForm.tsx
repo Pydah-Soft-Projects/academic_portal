@@ -1,7 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import Link from "next/link";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { apiFetch } from "@/lib/api";
@@ -31,6 +30,7 @@ export function LoginForm() {
   const [forgotHint, setForgotHint] = useState(false);
   const [isVerifyingSso, setIsVerifyingSso] = useState(Boolean(ssoToken));
   const [ssoError, setSsoError] = useState<string | null>(null);
+  const hasAttemptedSso = useRef(false);
   /** Avoid SSR/client auth-branch mismatch (loading resolves only on client). */
   const [hydrated, setHydrated] = useState(false);
 
@@ -51,17 +51,31 @@ export function LoginForm() {
   }, []);
 
   useEffect(() => {
-    if (!hydrated || loading || !user) return;
+    // Only redirect to dashboard if not processing an incoming SSO token
+    if (!hydrated || loading || !user || ssoToken) return;
     router.replace("/dashboard");
-  }, [hydrated, loading, user, router]);
+  }, [hydrated, loading, user, ssoToken, router]);
 
   useEffect(() => {
-    if (!ssoToken || !hydrated || user) return;
+    if (!ssoToken || !hydrated || hasAttemptedSso.current) return;
+    hasAttemptedSso.current = true;
     let cancelled = false;
 
     async function handleSSOLogin() {
       setIsVerifyingSso(true);
       setSsoError(null);
+
+      // Section 112: Clear old session so the incoming SSO login takes over cleanly
+      try {
+        window.localStorage.removeItem("accessToken");
+        window.localStorage.removeItem("token");
+        window.localStorage.removeItem("user");
+        window.localStorage.removeItem("ap_is_sso");
+        window.sessionStorage.clear();
+      } catch {
+        /* ignore */
+      }
+
       try {
         const response = await apiFetch("/auth/sso-login", {
           method: "POST",
@@ -100,7 +114,7 @@ export function LoginForm() {
     return () => {
       cancelled = true;
     };
-  }, [ssoToken, hydrated, user, refresh, router]);
+  }, [ssoToken, hydrated, refresh, router]);
 
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -161,8 +175,6 @@ export function LoginForm() {
       </div>
     );
   }
-
-  const backHref = branding.collegeWebsite || "/";
 
   return (
     <div className="relative flex h-full min-h-dvh items-center justify-center overflow-hidden bg-[#F3F7FB] px-3 py-6 sm:px-6">

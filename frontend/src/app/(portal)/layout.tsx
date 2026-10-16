@@ -3,6 +3,7 @@ import { AuthProvider } from "@/components/auth/AuthProvider";
 import { RequireAuth } from "@/components/auth/RequireAuth";
 import { PathPermissionGuard } from "@/components/auth/PathPermissionGuard";
 import { LoadingProvider } from "@/context/LoadingContext";
+import { PortalSwitcher } from "@/components/portal-switcher/PortalSwitcher";
 
 export default function PortalLayout({
   children,
@@ -16,6 +17,7 @@ export default function PortalLayout({
           <AppShell>
             <PathPermissionGuard>{children}</PathPermissionGuard>
           </AppShell>
+          <PortalSwitcher />
         </LoadingProvider>
       </RequireAuth>
     </AuthProvider>

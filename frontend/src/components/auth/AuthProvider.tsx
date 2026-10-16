@@ -76,9 +76,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(SSO_STORAGE_KEY);
-      if (stored === "true") {
-        setIsSso(true);
+      const urlParams = new URLSearchParams(window.location.search);
+      const incomingToken = urlParams.get("token");
+      if (incomingToken) {
+        // Clear old session so incoming SSO login takes over cleanly
+        window.localStorage.removeItem("accessToken");
+        window.localStorage.removeItem("token");
+        window.localStorage.removeItem("user");
+        window.localStorage.removeItem(SSO_STORAGE_KEY);
+        window.sessionStorage.clear();
+      } else {
+        const stored = window.localStorage.getItem(SSO_STORAGE_KEY);
+        if (stored === "true") {
+          setIsSso(true);
+        }
       }
     } catch {
       /* ignore */
