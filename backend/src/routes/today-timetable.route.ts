@@ -93,7 +93,7 @@ todayTimetableRouter.get("/", requirePermission("today_timetable.view", "timetab
     const sectionName = str(req.query.section);
     const timetableDate = str(req.query.date);
 
-    if (!collegeId || !courseId || !branchId || !batch || !semester || !academicYear) {
+    if (!collegeId || !courseId || !branchId || !semester || !academicYear) {
       res.json({
         date: timetableDate ?? null,
         overrides: {},
@@ -106,7 +106,7 @@ todayTimetableRouter.get("/", requirePermission("today_timetable.view", "timetab
       collegeId,
       courseId,
       branchId,
-      batch,
+      batch: batch ?? "",
       semester,
       sectionName,
       academicYear,
@@ -137,7 +137,7 @@ todayTimetableRouter.post("/override", requirePermission("today_timetable.edit",
     const timetableDate = str(body.date || body.timetableDate);
     const timingSlotId = num(body.slotId || body.timingSlotId);
 
-    if (!collegeId || !courseId || !branchId || !batch || !semester || !academicYear || !timetableDate || !timingSlotId) {
+    if (!collegeId || !courseId || !branchId || !semester || !academicYear || !timetableDate || !timingSlotId) {
       res.status(400).json({ message: "Missing required parameters for daily timetable override" });
       return;
     }

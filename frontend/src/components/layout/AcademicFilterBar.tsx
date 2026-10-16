@@ -59,7 +59,7 @@ export function AcademicFilterBar({
 
   const isTodayTimetable =
     pathname === "/today-timetable" || pathname.startsWith("/today-timetable/");
-  const shouldHideBatch = Boolean(hideBatch) || isTodayTimetable;
+  const shouldHideBatch = true;
   const shouldHideSection = Boolean(hideSection) || isTodayTimetable;
 
   const isDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
@@ -84,8 +84,7 @@ export function AcademicFilterBar({
     isTodayTimetable;
   const isAttendanceAnalytics =
     pathname === "/attendance-analytics" || pathname.startsWith("/attendance-analytics");
-  const usesBatchProgressYear =
-    !isTodayTimetable && (isTimetablesPage || isMentoringPage || isAttendanceAnalytics);
+  const usesBatchProgressYear = false;
 
   useEffect(() => {
     setSearchDraft(filters.q);
@@ -130,68 +129,6 @@ export function AcademicFilterBar({
     }, 300);
     return () => window.clearTimeout(timer);
   }, [searchDraft, showStudentQuerySearch, filters.q, setFilters]);
-
-  // Students list scoped by batch does not use Year / Semester filters.
-  useEffect(() => {
-    if (!showSearch || filters.batch === "all") return;
-    if (filters.year === "all" && filters.semester === "all") return;
-    setFilters({ year: "all", semester: "all" });
-  }, [showSearch, filters.batch, filters.year, filters.semester, setFilters]);
-
-  // Timetables / Mentoring: prefill Year + Semester from Regular students in the selected batch.
-  useEffect(() => {
-    if (!usesBatchProgressYear) return;
-    if (
-      filters.collegeId === "all" ||
-      filters.courseId === "all" ||
-      filters.branchId === "all" ||
-      filters.batch === "all" ||
-      (filters.year !== "all" && filters.semester !== "all")
-    ) {
-      return;
-    }
-
-    const collegeId = Number(filters.collegeId);
-    const courseId = Number(filters.courseId);
-    const branchId = Number(filters.branchId);
-    const batch = String(filters.batch);
-    let cancelled = false;
-
-    async function prefillYearSemester() {
-      try {
-        const params = new URLSearchParams({
-          collegeId: String(collegeId),
-          courseId: String(courseId),
-          branchId: String(branchId),
-          batch,
-        });
-        const response = await apiFetch(`/catalog/batch-progress?${params}`,
-          { cache: "no-store" },
-        );
-        const body = await response.json().catch(() => ({}));
-        if (!response.ok || cancelled) return;
-        const data = (body as {
-          data?: { year: number | null; semester: number | null };
-        }).data;
-        if (data?.year == null || data?.semester == null) return;
-        setFilters({ year: data.year, semester: data.semester });
-      } catch {
-        // keep manual filters if lookup fails
-      }
-    }
-
-    void prefillYearSemester();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    usesBatchProgressYear,
-    filters.collegeId,
-    filters.courseId,
-    filters.branchId,
-    filters.batch,
-    setFilters,
-  ]);
 
   const isGlobalScope = authorization?.scope?.isGlobal ?? true;
   const showAllColleges = isGlobalScope && (masters?.colleges.length ?? 0) > 1;
@@ -272,21 +209,8 @@ export function AcademicFilterBar({
     selectedBranch?.hasSections && sectionsForBranch.length > 0,
   );
 
-  // On Students, batch already scopes the cohort — Year / Semester are redundant.
-  // On Timetables / Mentoring, batch triggers auto year+semester from batch progress (read-only).
-  // On Attendance Analytics, batch auto-prefills Year + Semester on initial state, but keeps them selectable.
-  const autoYearSemesterFromBatch =
-    !shouldHideBatch &&
-    (isTimetablesPage || isMentoringPage) &&
-    filters.batch !== "all" &&
-    filters.collegeId !== "all" &&
-    filters.courseId !== "all" &&
-    filters.branchId !== "all";
-
-  const showYearSemesterFilters = !(
-    (showSearch && filters.batch !== "all") ||
-    autoYearSemesterFromBatch
-  );
+  const autoYearSemesterFromBatch = false;
+  const showYearSemesterFilters = true;
 
   const readOnlyFieldClassName =
     "flex h-11 sm:h-9 w-full sm:w-auto sm:min-w-[140px] items-center rounded-md border border-border bg-slate-50 px-2 text-sm text-slate-700";
@@ -754,13 +678,6 @@ export function AcademicFilterBar({
               }
               const branchObj = masters?.branches.find((b) => b.id === bId);
               const matchingCourseId = branchObj?.courseId ?? filters.courseId;
-              const batchesForThisBranch =
-                masters?.batches.filter((b) => b.branchId === bId).map((b) => b.batch) ?? [];
-              const defaultBatch =
-                filters.batch !== "all" && batchesForThisBranch.includes(filters.batch)
-                  ? filters.batch
-                  : batchesForThisBranch[0] ?? "all";
-
               const sectionsForThisBranch =
                 masters?.sections.filter((s) => s.branchId === bId).map((s) => s.name) ?? [];
               const defaultSection = branchObj?.hasSections
@@ -772,7 +689,7 @@ export function AcademicFilterBar({
               setFilters({
                 branchId: bId,
                 courseId: matchingCourseId,
-                batch: defaultBatch,
+                batch: "all",
                 section: defaultSection,
                 ...(isTimetablesPage && (filters.year === "all" || filters.semester === "all")
                   ? { year: 1, semester: 1 }
@@ -819,20 +736,7 @@ export function AcademicFilterBar({
           </FilterField>
         )}
 
-        {autoYearSemesterFromBatch ? (
-          <>
-            <FilterField label="Year">
-              <div className={readOnlyFieldClassName} aria-live="polite">
-                {filters.year === "all" ? "Resolving…" : `Year ${filters.year}`}
-              </div>
-            </FilterField>
-            <FilterField label="Semester">
-              <div className={readOnlyFieldClassName} aria-live="polite">
-                {filters.semester === "all" ? "Resolving…" : `Semester ${filters.semester}`}
-              </div>
-            </FilterField>
-          </>
-        ) : null}
+
 
         {showYearSemesterFilters ? (
           <>

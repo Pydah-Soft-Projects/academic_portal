@@ -178,12 +178,12 @@ export async function getSemesterDatesGrid(input: {
     FROM semesters sem
     LEFT JOIN academic_years ay ON ay.id = sem.academic_year_id
     WHERE sem.course_id = ?
-      AND TRIM(COALESCE(sem.batch, '')) COLLATE utf8mb4_unicode_ci
-          = TRIM(?) COLLATE utf8mb4_unicode_ci
+      AND (? = '' OR TRIM(COALESCE(sem.batch, '')) COLLATE utf8mb4_unicode_ci
+          = TRIM(?) COLLATE utf8mb4_unicode_ci)
       AND (sem.college_id = ? OR sem.college_id IS NULL)
     ORDER BY sem.year_of_study, sem.semester_number, sem.college_id DESC
     `,
-    [input.courseId, input.batch, input.collegeId],
+    [input.courseId, input.batch || "", input.batch || "", input.collegeId],
   );
 
   const rows = slots.map((slot) => {
@@ -262,8 +262,8 @@ export async function upsertSemesterDates(input: {
     FROM semesters sem
     LEFT JOIN academic_years ay ON ay.id = sem.academic_year_id
     WHERE sem.course_id = ?
-      AND TRIM(COALESCE(sem.batch, '')) COLLATE utf8mb4_unicode_ci
-          = TRIM(?) COLLATE utf8mb4_unicode_ci
+      AND (? = '' OR TRIM(COALESCE(sem.batch, '')) COLLATE utf8mb4_unicode_ci
+          = TRIM(?) COLLATE utf8mb4_unicode_ci)
       AND sem.year_of_study = ?
       AND sem.semester_number = ?
       AND (sem.college_id = ? OR sem.college_id IS NULL)
@@ -272,7 +272,8 @@ export async function upsertSemesterDates(input: {
     `,
     [
       input.courseId,
-      input.batch,
+      input.batch || "",
+      input.batch || "",
       input.yearOfStudy,
       input.semesterNumber,
       input.collegeId,
@@ -292,8 +293,7 @@ export async function upsertSemesterDates(input: {
     return { id: current.id, action: "updated" as const };
   }
 
-  const session = sessionLabelFor(input.batch, input.yearOfStudy);
-  if (!session) throw new Error("Invalid batch for academic session mapping");
+  const session = sessionLabelFor(input.batch, input.yearOfStudy) || `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`;
   const academicYearId = await ensureAcademicYearId(session);
 
   const inserted = await executeStudent(

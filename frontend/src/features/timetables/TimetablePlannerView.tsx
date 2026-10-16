@@ -1154,7 +1154,6 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     filters.collegeId !== "all" &&
     filters.courseId !== "all" &&
     filters.branchId !== "all" &&
-    filters.batch !== "all" &&
     filters.semester !== "all" &&
     Boolean(filters.academicYear) &&
     (!needsSection || filters.section !== "all");
@@ -1165,7 +1164,9 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     params.set("collegeId", String(filters.collegeId));
     params.set("courseId", String(filters.courseId));
     params.set("branchId", String(filters.branchId));
-    params.set("batch", String(filters.batch));
+    if (filters.batch && filters.batch !== "all") {
+      params.set("batch", String(filters.batch));
+    }
     params.set("semester", String(filters.semester));
     params.set("academicYear", filters.academicYear);
     if (filters.year !== "all") params.set("year", String(filters.year));
@@ -1792,7 +1793,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       courseId: Number(filters.courseId),
       branchId: Number(filters.branchId),
       academicYear: filters.academicYear,
-      batch: String(filters.batch),
+      batch: filters.batch !== "all" && filters.batch ? String(filters.batch) : (planner?.context?.batch && planner.context.batch !== "—" ? planner.context.batch : ""),
       year: filters.year === "all" ? null : Number(filters.year),
       semester: Number(filters.semester),
       section: filters.section === "all" ? null : filters.section,
@@ -1910,7 +1911,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   };
 
   const missingLabel = !filtersComplete
-    ? "Select College, Course, Branch, Batch, Semester" +
+    ? "Select College, Course, Branch, Semester" +
       (needsSection ? ", and Section" : "") +
       " to open the timetable."
     : null;
