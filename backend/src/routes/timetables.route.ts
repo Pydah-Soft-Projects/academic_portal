@@ -48,6 +48,18 @@ function str(value: unknown) {
 }
 
 function filtersFromQuery(req: AuthedRequest) {
+  let queryBranchIds: number[] | undefined;
+  if (typeof req.query.branchIds === "string") {
+    queryBranchIds = req.query.branchIds
+      .split(",")
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0);
+  } else if (Array.isArray(req.query.branchIds)) {
+    queryBranchIds = (req.query.branchIds as string[])
+      .map(Number)
+      .filter((n) => Number.isFinite(n) && n > 0);
+  }
+
   const scoped = scopedFilters(req, {
     collegeId: num(req.query.collegeId),
     branchId: num(req.query.branchId),
@@ -57,7 +69,7 @@ function filtersFromQuery(req: AuthedRequest) {
     collegeIds: scoped.collegeIds,
     courseId: num(req.query.courseId),
     branchId: scoped.branchId,
-    branchIds: scoped.branchIds,
+    branchIds: scoped.branchIds ?? queryBranchIds,
     section: str(req.query.section),
     batch: str(req.query.batch),
     year: num(req.query.year),

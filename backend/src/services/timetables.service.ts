@@ -119,6 +119,8 @@ export type AssignmentInput = {
   rotationPattern?: string | null;
   /** Label for free/special periods (CRT, Games, Library, etc.) */
   customLabel?: string | null;
+  /** Specific branches this assignment applies to in combined timetable */
+  participatingBranchIds?: number[] | null;
 };
 
 /** Free/special period: labeled activity without an EMS subject (CRT, Games, etc.). */
@@ -2644,6 +2646,13 @@ export async function saveCombinedTimetable(input: {
   }> = [];
 
   for (const branchId of branchIds) {
+    const branchAssignments = input.assignments.filter((a) => {
+      if (Array.isArray(a.participatingBranchIds) && a.participatingBranchIds.length > 0) {
+        return a.participatingBranchIds.includes(branchId);
+      }
+      return true;
+    });
+
     const draftResult = await saveTimetableDraft({
       collegeId: input.collegeId,
       courseId: input.courseId,
@@ -2654,7 +2663,7 @@ export async function saveCombinedTimetable(input: {
       semester: input.semester,
       section: input.section && input.section !== "all" ? input.section : null,
       notes: input.notes ?? `Combined classes across ${branchIds.length} branches`,
-      assignments: input.assignments,
+      assignments: branchAssignments,
       actorUserId: input.actorUserId,
       ipAddress: input.ipAddress,
     });
@@ -3053,6 +3062,9 @@ export type TimetableRosterStudent = {
   admission_number: string;
   section: string | null;
   batch: string | null;
+  branch_id?: number | null;
+  branch_name?: string | null;
+  branch_code?: string | null;
   current_year: number | null;
   current_semester: number | null;
 };
@@ -3098,9 +3110,13 @@ export async function getTimetableRoster(
       s.admission_number,
       COALESCE(ss.section_name, s.section) AS section,
       s.batch,
+      s.branch_id,
+      cb.name AS branch_name,
+      cb.code AS branch_code,
       s.current_year,
       s.current_semester
     FROM students s
+    LEFT JOIN course_branches cb ON cb.id = s.branch_id
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE ${where.length > 0 ? where.join(" AND ") : "1=1"}
   `;
@@ -3110,7 +3126,7 @@ export async function getTimetableRoster(
   const hasSection = Boolean(filters.section && filters.section !== "all");
 
   if (hasSection) {
-    const sectionSql = `${baseSql} AND (s.section = ? OR ss.section_name = ?) ORDER BY COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 500`;
+    const sectionSql = `${baseSql} AND (s.section = ? OR ss.section_name = ?) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
     rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
       sectionSql,
       [...params, filters.section, filters.section],
@@ -3119,7 +3135,7 @@ export async function getTimetableRoster(
 
   // Fallback 1: if section had 0 students (or no section specified), query without section filter
   if (rows.length === 0) {
-    const fallbackSql = `${baseSql} ORDER BY COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 500`;
+    const fallbackSql = `${baseSql} ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
     rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
       fallbackSql,
       params,
@@ -3144,13 +3160,17 @@ export async function getTimetableRoster(
         s.admission_number,
         COALESCE(ss.section_name, s.section) AS section,
         s.batch,
+        s.branch_id,
+        cb.name AS branch_name,
+        cb.code AS branch_code,
         s.current_year,
         s.current_semester
       FROM students s
+      LEFT JOIN course_branches cb ON cb.id = s.branch_id
       LEFT JOIN student_sections ss ON ss.student_id = s.id
       WHERE ${noBatchWhere.length > 0 ? noBatchWhere.join(" AND ") : "1=1"}
-      ORDER BY COALESCE(s.pin_no, s.admission_number, s.id) ASC
-      LIMIT 500
+      ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC
+      LIMIT 2000
     `;
     rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
       wideSql,
@@ -3165,6 +3185,9 @@ export async function getTimetableRoster(
     admission_number: r.admission_number ?? "",
     section: r.section ?? null,
     batch: r.batch ?? null,
+    branch_id: r.branch_id != null ? Number(r.branch_id) : null,
+    branch_name: r.branch_name ?? null,
+    branch_code: r.branch_code ?? null,
     current_year: r.current_year != null ? Number(r.current_year) : null,
     current_semester: r.current_semester != null ? Number(r.current_semester) : null,
   }));

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  ArrowLeft,
   ArrowRight,
   BookOpen,
   Briefcase,
@@ -13,7 +14,9 @@ import {
   CheckSquare,
   Clock,
   Copy,
+  GitFork,
   GraduationCap,
+  Hash,
   Info,
   Layers,
   Layers3,
@@ -21,6 +24,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Sliders,
   Sparkles,
   Square,
   Trash2,
@@ -127,7 +131,32 @@ type FacultyOption = {
   employeeGroup: string;
 };
 
-type LocalPeriodAssignment = {
+export type LocalBatchAssignment = {
+  subjectId: number | null;
+  subjectCode: string;
+  subjectName: string;
+  entryType: "theory" | "lab" | "other";
+  hrmsEmployeeId: string;
+  facultyName: string;
+  roomLabel: string;
+  batchLabel: string;
+  studentIds: number[];
+  studentCount: number;
+};
+
+export type StudentRosterItem = {
+  id: number;
+  pin_no: string | null;
+  student_name: string | null;
+  admission_number: string;
+  section: string | null;
+  batch: string | null;
+  branch_id?: number | null;
+  branch_name?: string | null;
+  branch_code?: string | null;
+};
+
+export type LocalPeriodAssignment = {
   dayOfWeek: string;
   timingSlotId: number;
   subjectId: number | null;
@@ -139,6 +168,11 @@ type LocalPeriodAssignment = {
   roomLabel: string;
   batchLabel: string;
   customLabel: string;
+  participatingBranchIds?: number[];
+  isSplit?: boolean;
+  weeklyRotation?: boolean;
+  batch1?: LocalBatchAssignment;
+  batch2?: LocalBatchAssignment;
 };
 
 const SPECIAL_PERIOD_PRESETS = [
@@ -327,13 +361,13 @@ export function CombinedTimetableCreationView() {
     return masters.branches.filter((b) => b.courseId === courseId);
   }, [masters, courseId]);
 
-  // Default select first 2 branches or all branches if few
+  // Default select only the first branch; user will manually select additional branches
   useEffect(() => {
     if (branchesForCourse.length > 0) {
       const valid = selectedBranchIds.filter((id) => branchesForCourse.some((b) => b.id === id));
       if (valid.length === 0) {
-        // Select first 2 or all if <= 3
-        const initial = branchesForCourse.slice(0, Math.min(3, branchesForCourse.length)).map((b) => b.id);
+        // Select only the first branch by default
+        const initial = branchesForCourse.slice(0, 1).map((b) => b.id);
         setSelectedBranchIds(initial);
       } else {
         setSelectedBranchIds(valid);
@@ -470,19 +504,53 @@ export function CombinedTimetableCreationView() {
     for (const entry of branchOverview.plan.entries) {
       const dayCode = (DAY_LABEL_TO_CODE[entry.dayOfWeek] ?? entry.dayOfWeek) as string;
       const key = `${dayCode}:${entry.timingSlotId}`;
-      newAssignments[key] = {
-        dayOfWeek: dayCode,
-        timingSlotId: entry.timingSlotId,
-        subjectId: entry.subjectId,
-        subjectCode: entry.subjectCode ?? "",
-        subjectName: entry.subjectName ?? "",
-        entryType: (entry.entryType as "theory" | "lab" | "other") || "theory",
-        hrmsEmployeeId: entry.facultyHrmsId ?? "",
-        facultyName: entry.facultyName ?? "",
-        roomLabel: entry.roomLabel ?? "",
-        batchLabel: entry.batchLabel ?? "",
-        customLabel: entry.customLabel ?? "",
-      };
+
+      const existingAssignment = newAssignments[key];
+      if (existingAssignment) {
+        // Slot has parallel batch entries -> convert to split slot!
+        newAssignments[key] = {
+          ...existingAssignment,
+          isSplit: true,
+          batch1: existingAssignment.batch1 || {
+            subjectId: existingAssignment.subjectId,
+            subjectCode: existingAssignment.subjectCode,
+            subjectName: existingAssignment.subjectName,
+            entryType: existingAssignment.entryType,
+            hrmsEmployeeId: existingAssignment.hrmsEmployeeId,
+            facultyName: existingAssignment.facultyName,
+            roomLabel: existingAssignment.roomLabel,
+            batchLabel: existingAssignment.batchLabel || "Batch 1",
+            studentIds: [],
+            studentCount: 0,
+          },
+          batch2: {
+            subjectId: entry.subjectId,
+            subjectCode: entry.subjectCode ?? "",
+            subjectName: entry.subjectName ?? "",
+            entryType: (entry.entryType as "theory" | "lab" | "other") || "theory",
+            hrmsEmployeeId: entry.facultyHrmsId ?? "",
+            facultyName: entry.facultyName ?? "",
+            roomLabel: entry.roomLabel ?? "",
+            batchLabel: entry.batchLabel || "Batch 2",
+            studentIds: [],
+            studentCount: 0,
+          },
+        };
+      } else {
+        newAssignments[key] = {
+          dayOfWeek: dayCode,
+          timingSlotId: entry.timingSlotId,
+          subjectId: entry.subjectId,
+          subjectCode: entry.subjectCode ?? "",
+          subjectName: entry.subjectName ?? "",
+          entryType: (entry.entryType as "theory" | "lab" | "other") || "theory",
+          hrmsEmployeeId: entry.facultyHrmsId ?? "",
+          facultyName: entry.facultyName ?? "",
+          roomLabel: entry.roomLabel ?? "",
+          batchLabel: entry.batchLabel ?? "",
+          customLabel: entry.customLabel ?? "",
+        };
+      }
     }
 
     setAssignments(newAssignments);
@@ -594,21 +662,26 @@ export function CombinedTimetableCreationView() {
       }
     >();
 
-    for (const a of Object.values(assignments)) {
-      const key = a.subjectId
-        ? `sub-${a.subjectId}`
-        : `custom-${a.subjectCode || a.customLabel || "unlabeled"}`;
-      const slot = timingSlotMap.get(a.timingSlotId);
-      const minutes = calculateSlotDurationMinutes(slot);
-
-      const code = a.subjectCode || a.customLabel || "—";
-      const name = a.subjectName || a.customLabel || "Period";
-      const type = a.entryType;
+    const addSubjectSlot = (
+      subjectId: number | null,
+      subjectCode: string,
+      subjectName: string,
+      customLabel: string,
+      entryType: string,
+      facultyName: string,
+      minutes: number,
+    ) => {
+      const key = subjectId
+        ? `sub-${subjectId}`
+        : `custom-${subjectCode || customLabel || "unlabeled"}`;
+      const code = subjectCode || customLabel || "—";
+      const name = subjectName || customLabel || "Period";
+      const type = entryType;
 
       const existing = map.get(key);
       if (!existing) {
         const facultySet = new Set<string>();
-        if (a.facultyName) facultySet.add(a.facultyName);
+        if (facultyName) facultySet.add(facultyName);
         map.set(key, {
           code,
           name,
@@ -620,7 +693,19 @@ export function CombinedTimetableCreationView() {
       } else {
         existing.slotsCount += 1;
         existing.totalMinutes += minutes;
-        if (a.facultyName) existing.facultySet.add(a.facultyName);
+        if (facultyName) existing.facultySet.add(facultyName);
+      }
+    };
+
+    for (const a of Object.values(assignments)) {
+      const slot = timingSlotMap.get(a.timingSlotId);
+      const minutes = calculateSlotDurationMinutes(slot);
+
+      if (a.isSplit && a.batch1 && a.batch2) {
+        addSubjectSlot(a.batch1.subjectId, a.batch1.subjectCode, a.batch1.subjectName, "", a.batch1.entryType, a.batch1.facultyName, minutes);
+        addSubjectSlot(a.batch2.subjectId, a.batch2.subjectCode, a.batch2.subjectName, "", a.batch2.entryType, a.batch2.facultyName, minutes);
+      } else {
+        addSubjectSlot(a.subjectId, a.subjectCode, a.subjectName, a.customLabel, a.entryType, a.facultyName, minutes);
       }
     }
 
@@ -651,31 +736,35 @@ export function CombinedTimetableCreationView() {
 
     let unassignedSlots = 0;
 
-    for (const a of Object.values(assignments)) {
-      const slot = timingSlotMap.get(a.timingSlotId);
-      const minutes = calculateSlotDurationMinutes(slot);
-
-      if (!a.hrmsEmployeeId && !a.facultyName) {
+    const addFacultyWorkload = (
+      hrmsEmployeeId: string,
+      facultyName: string,
+      subjectCode: string,
+      customLabel: string,
+      dayOfWeek: string,
+      minutes: number,
+    ) => {
+      if (!hrmsEmployeeId && !facultyName) {
         unassignedSlots += 1;
-        continue;
+        return;
       }
 
-      const key = a.hrmsEmployeeId || a.facultyName;
+      const key = hrmsEmployeeId || facultyName;
       const existing = map.get(key);
-      const facultyOpt = facultyList.find((f) => f.hrmsEmployeeId === a.hrmsEmployeeId);
+      const facultyOpt = facultyList.find((f) => f.hrmsEmployeeId === hrmsEmployeeId);
 
       if (!existing) {
         const subjectsSet = new Set<string>();
-        if (a.subjectCode || a.customLabel) subjectsSet.add(a.subjectCode || a.customLabel);
+        if (subjectCode || customLabel) subjectsSet.add(subjectCode || customLabel);
         const daysSet = new Set<string>();
-        if (a.dayOfWeek) {
-          const dayName = DAY_CODE_TO_LABEL[a.dayOfWeek as keyof typeof DAY_CODE_TO_LABEL] || a.dayOfWeek;
+        if (dayOfWeek) {
+          const dayName = DAY_CODE_TO_LABEL[dayOfWeek as keyof typeof DAY_CODE_TO_LABEL] || dayOfWeek;
           daysSet.add(dayName.slice(0, 3));
         }
 
         map.set(key, {
-          hrmsId: a.hrmsEmployeeId || "—",
-          name: a.facultyName || facultyOpt?.name || "Faculty",
+          hrmsId: hrmsEmployeeId || "—",
+          name: facultyName || facultyOpt?.name || "Faculty",
           department: facultyOpt?.department || facultyOpt?.division || "—",
           designation: facultyOpt?.designation || "Faculty",
           slotsCount: 1,
@@ -686,11 +775,23 @@ export function CombinedTimetableCreationView() {
       } else {
         existing.slotsCount += 1;
         existing.totalMinutes += minutes;
-        if (a.subjectCode || a.customLabel) existing.subjectsSet.add(a.subjectCode || a.customLabel);
-        if (a.dayOfWeek) {
-          const dayName = DAY_CODE_TO_LABEL[a.dayOfWeek as keyof typeof DAY_CODE_TO_LABEL] || a.dayOfWeek;
+        if (subjectCode || customLabel) existing.subjectsSet.add(subjectCode || customLabel);
+        if (dayOfWeek) {
+          const dayName = DAY_CODE_TO_LABEL[dayOfWeek as keyof typeof DAY_CODE_TO_LABEL] || dayOfWeek;
           existing.daysSet.add(dayName.slice(0, 3));
         }
+      }
+    };
+
+    for (const a of Object.values(assignments)) {
+      const slot = timingSlotMap.get(a.timingSlotId);
+      const minutes = calculateSlotDurationMinutes(slot);
+
+      if (a.isSplit && a.batch1 && a.batch2) {
+        addFacultyWorkload(a.batch1.hrmsEmployeeId, a.batch1.facultyName, a.batch1.subjectCode, "", a.dayOfWeek, minutes);
+        addFacultyWorkload(a.batch2.hrmsEmployeeId, a.batch2.facultyName, a.batch2.subjectCode, "", a.dayOfWeek, minutes);
+      } else {
+        addFacultyWorkload(a.hrmsEmployeeId, a.facultyName, a.subjectCode, a.customLabel, a.dayOfWeek, minutes);
       }
     }
 
@@ -760,18 +861,59 @@ export function CombinedTimetableCreationView() {
       return;
     }
 
-    const assignmentList = Object.values(assignments).map((a) => ({
-      dayOfWeek: a.dayOfWeek,
-      timingSlotId: a.timingSlotId,
-      subjectId: a.subjectId,
-      subjectCode: a.subjectCode,
-      subjectName: a.subjectName,
-      entryType: a.entryType,
-      hrmsEmployeeId: a.hrmsEmployeeId || null,
-      roomLabel: a.roomLabel || null,
-      batchLabel: a.batchLabel || "",
-      customLabel: a.customLabel || null,
-    }));
+    const assignmentList = Object.values(assignments).flatMap((a) => {
+      if (a.isSplit && a.batch1 && a.batch2) {
+        return [
+          {
+            dayOfWeek: a.dayOfWeek,
+            timingSlotId: a.timingSlotId,
+            subjectId: a.batch1.subjectId,
+            subjectCode: a.batch1.subjectCode,
+            subjectName: a.batch1.subjectName,
+            entryType: a.batch1.entryType,
+            hrmsEmployeeId: a.batch1.hrmsEmployeeId || null,
+            roomLabel: a.batch1.roomLabel || null,
+            batchLabel: "Batch 1",
+            customLabel: null,
+            studentIds: a.batch1.studentIds,
+            studentCount: a.batch1.studentIds.length,
+            weeklyRotation: a.weeklyRotation,
+            participatingBranchIds: a.participatingBranchIds,
+          },
+          {
+            dayOfWeek: a.dayOfWeek,
+            timingSlotId: a.timingSlotId,
+            subjectId: a.batch2.subjectId,
+            subjectCode: a.batch2.subjectCode,
+            subjectName: a.batch2.subjectName,
+            entryType: a.batch2.entryType,
+            hrmsEmployeeId: a.batch2.hrmsEmployeeId || null,
+            roomLabel: a.batch2.roomLabel || null,
+            batchLabel: "Batch 2",
+            customLabel: null,
+            studentIds: a.batch2.studentIds,
+            studentCount: a.batch2.studentIds.length,
+            weeklyRotation: a.weeklyRotation,
+            participatingBranchIds: a.participatingBranchIds,
+          },
+        ];
+      }
+      return [
+        {
+          dayOfWeek: a.dayOfWeek,
+          timingSlotId: a.timingSlotId,
+          subjectId: a.subjectId,
+          subjectCode: a.subjectCode,
+          subjectName: a.subjectName,
+          entryType: a.entryType,
+          hrmsEmployeeId: a.hrmsEmployeeId || null,
+          roomLabel: a.roomLabel || null,
+          batchLabel: a.batchLabel || "",
+          customLabel: a.customLabel || null,
+          participatingBranchIds: a.participatingBranchIds,
+        },
+      ];
+    });
 
     if (assignmentList.length === 0) {
       setSaveStatus({
@@ -1309,58 +1451,121 @@ export function CombinedTimetableCreationView() {
                         className="p-1 border-r border-slate-200 last:border-r-0 align-top h-20 min-w-[130px]"
                       >
                         {assignment ? (
-                          <div
-                            onClick={() =>
-                              setActiveSlotModal({
-                                day: dayCode,
-                                slot,
-                                current: assignment,
-                              })
-                            }
-                            className={cn(
-                              "h-full rounded-lg p-2 border transition-all cursor-pointer flex flex-col justify-between group",
-                              assignment.entryType === "lab"
-                                ? "border-amber-200 bg-amber-50/70 hover:bg-amber-100/60"
-                                : assignment.entryType === "other"
-                                  ? "border-purple-200 bg-purple-50/70 hover:bg-purple-100/60"
-                                  : "border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/60",
-                            )}
-                          >
-                            <div>
-                              <div className="flex items-center justify-between gap-1 mb-1">
-                                <span className="font-bold text-[11px] text-navy-950 truncate max-w-[90px]">
-                                  {assignment.customLabel || assignment.subjectCode}
-                                </span>
-                                <span
-                                  className={cn(
-                                    "rounded px-1 text-[9px] font-bold uppercase",
-                                    assignment.entryType === "lab"
-                                      ? "bg-amber-200 text-amber-900"
-                                      : assignment.entryType === "other"
-                                        ? "bg-purple-200 text-purple-900"
-                                        : "bg-indigo-200 text-indigo-900",
+                          assignment.isSplit && assignment.batch1 && assignment.batch2 ? (
+                            <div
+                              onClick={() =>
+                                setActiveSlotModal({
+                                  day: dayCode,
+                                  slot,
+                                  current: assignment,
+                                })
+                              }
+                              className="h-full min-h-[95px] rounded-lg p-1.5 border border-indigo-200 bg-white hover:border-indigo-400 hover:shadow-xs transition-all cursor-pointer flex flex-col justify-between gap-1 group"
+                            >
+                              {/* Batch 1 mini card */}
+                              <div className="rounded border border-indigo-100 bg-indigo-50/80 p-1.5">
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="rounded bg-indigo-200 px-1 py-0.2 text-[8px] font-bold text-indigo-950 uppercase tracking-wider">
+                                    B1
+                                  </span>
+                                  <span className="font-bold text-[10px] text-navy-950 truncate max-w-[65px]" title={assignment.batch1.subjectName}>
+                                    {assignment.batch1.subjectCode || "Lab 1"}
+                                  </span>
+                                  <span className="text-[9px] font-bold text-indigo-700 bg-white px-1 rounded shadow-2xs">
+                                    {assignment.batch1.studentCount}s
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 flex items-center justify-between text-[9px] text-slate-500">
+                                  <span className="truncate max-w-[60px]" title={assignment.batch1.facultyName}>
+                                    {assignment.batch1.facultyName || "—"}
+                                  </span>
+                                  {assignment.batch1.roomLabel && (
+                                    <span className="truncate max-w-[40px] font-medium text-slate-700">
+                                      {assignment.batch1.roomLabel}
+                                    </span>
                                   )}
-                                >
-                                  {assignment.entryType}
-                                </span>
+                                </div>
                               </div>
 
-                              <p className="text-[10px] text-slate-700 font-medium line-clamp-1">
-                                {assignment.subjectName || assignment.customLabel}
-                              </p>
+                              {/* Batch 2 mini card */}
+                              <div className="rounded border border-emerald-100 bg-emerald-50/80 p-1.5">
+                                <div className="flex items-center justify-between gap-1">
+                                  <span className="rounded bg-emerald-200 px-1 py-0.2 text-[8px] font-bold text-emerald-950 uppercase tracking-wider">
+                                    B2
+                                  </span>
+                                  <span className="font-bold text-[10px] text-navy-950 truncate max-w-[65px]" title={assignment.batch2.subjectName}>
+                                    {assignment.batch2.subjectCode || "Lab 2"}
+                                  </span>
+                                  <span className="text-[9px] font-bold text-emerald-700 bg-white px-1 rounded shadow-2xs">
+                                    {assignment.batch2.studentCount}s
+                                  </span>
+                                </div>
+                                <div className="mt-0.5 flex items-center justify-between text-[9px] text-slate-500">
+                                  <span className="truncate max-w-[60px]" title={assignment.batch2.facultyName}>
+                                    {assignment.batch2.facultyName || "—"}
+                                  </span>
+                                  {assignment.batch2.roomLabel && (
+                                    <span className="truncate max-w-[40px] font-medium text-slate-700">
+                                      {assignment.batch2.roomLabel}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-
-                            <div className="mt-1 pt-1 border-t border-slate-200/50 flex items-center justify-between text-[10px] text-slate-500">
-                              <span className="truncate max-w-[70px]" title={assignment.facultyName}>
-                                {assignment.facultyName || "No faculty"}
-                              </span>
-                              {assignment.roomLabel && (
-                                <span className="font-semibold text-slate-700 truncate max-w-[40px]">
-                                  {assignment.roomLabel}
-                                </span>
+                          ) : (
+                            <div
+                              onClick={() =>
+                                setActiveSlotModal({
+                                  day: dayCode,
+                                  slot,
+                                  current: assignment,
+                                })
+                              }
+                              className={cn(
+                                "h-full rounded-lg p-2 border transition-all cursor-pointer flex flex-col justify-between group",
+                                assignment.entryType === "lab"
+                                  ? "border-amber-200 bg-amber-50/70 hover:bg-amber-100/60"
+                                  : assignment.entryType === "other"
+                                    ? "border-purple-200 bg-purple-50/70 hover:bg-purple-100/60"
+                                    : "border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/60",
                               )}
+                            >
+                              <div>
+                                <div className="flex items-center justify-between gap-1 mb-1">
+                                  <span className="font-bold text-[11px] text-navy-950 truncate max-w-[90px]">
+                                    {assignment.customLabel || assignment.subjectCode}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      "rounded px-1 text-[9px] font-bold uppercase",
+                                      assignment.entryType === "lab"
+                                        ? "bg-amber-200 text-amber-900"
+                                        : assignment.entryType === "other"
+                                          ? "bg-purple-200 text-purple-900"
+                                          : "bg-indigo-200 text-indigo-900",
+                                    )}
+                                  >
+                                    {assignment.entryType}
+                                  </span>
+                                </div>
+
+                                <p className="text-[10px] text-slate-700 font-medium line-clamp-1">
+                                  {assignment.subjectName || assignment.customLabel}
+                                </p>
+                              </div>
+
+                              <div className="mt-1 pt-1 border-t border-slate-200/50 flex items-center justify-between text-[10px] text-slate-500">
+                                <span className="truncate max-w-[70px]" title={assignment.facultyName}>
+                                  {assignment.facultyName || "No faculty"}
+                                </span>
+                                {assignment.roomLabel && (
+                                  <span className="font-semibold text-slate-700 truncate max-w-[40px]">
+                                    {assignment.roomLabel}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          </div>
+                          )
                         ) : (
                           <button
                             type="button"
@@ -1396,7 +1601,12 @@ export function CombinedTimetableCreationView() {
           existing={activeSlotModal.current}
           subjects={subjects}
           facultyList={facultyList}
-          selectedBranchCount={selectedBranchIds.length}
+          availableBranches={selectedBranches}
+          collegeId={collegeId}
+          courseId={courseId}
+          academicYear={currentAcademicYear || academicYear}
+          year={year}
+          semester={semester}
           onSave={handleSaveSlotAssignment}
           onClear={() => handleClearSlotAssignment(activeSlotModal.day, activeSlotModal.slot.id)}
         />
@@ -1438,7 +1648,12 @@ type PeriodEditModalProps = {
   existing?: LocalPeriodAssignment;
   subjects: CombinedSubject[];
   facultyList: FacultyOption[];
-  selectedBranchCount: number;
+  availableBranches: Array<{ id: number; name: string; code: string | null }>;
+  collegeId: number | null;
+  courseId: number | null;
+  academicYear: string;
+  year: number | null;
+  semester: number | null;
   onSave: (assignment: LocalPeriodAssignment) => void;
   onClear: () => void;
 };
@@ -1451,44 +1666,285 @@ function PeriodEditModal({
   existing,
   subjects,
   facultyList,
-  selectedBranchCount,
+  availableBranches,
+  collegeId,
+  courseId,
+  academicYear,
+  year,
+  semester,
   onSave,
   onClear,
 }: PeriodEditModalProps) {
+  // Wizard Step: 1 = Configuration & Branches, 2 = Student Selection (when split)
+  const [currentStep, setCurrentStep] = useState<1 | 2>(1);
+
+  // Split Slot Toggle
+  const [isSplit, setIsSplit] = useState<boolean>(existing?.isSplit ?? false);
+  const [weeklyRotation, setWeeklyRotation] = useState<boolean>(existing?.weeklyRotation ?? false);
+
+  // Participating Branches for this slot (by default, all available branches in combined draft)
+  const [participatingBranchIds, setParticipatingBranchIds] = useState<number[]>(
+    existing?.participatingBranchIds && existing.participatingBranchIds.length > 0
+      ? existing.participatingBranchIds
+      : availableBranches.map((b) => b.id),
+  );
+
+  // Single Slot Configuration (when isSplit is false)
   const [mode, setMode] = useState<"subject" | "special">(
     existing?.entryType === "other" && existing.customLabel ? "special" : "subject",
   );
-
   const [selectedSubjectId, setSelectedSubjectId] = useState<number | null>(existing?.subjectId ?? null);
   const [entryType, setEntryType] = useState<"theory" | "lab" | "other">(existing?.entryType ?? "theory");
   const [facultyHrmsId, setFacultyHrmsId] = useState<string>(existing?.hrmsEmployeeId ?? "");
   const [roomLabel, setRoomLabel] = useState<string>(existing?.roomLabel ?? "");
   const [customLabel, setCustomLabel] = useState<string>(existing?.customLabel ?? "");
-  const [batchLabel, setBatchLabel] = useState<string>(existing?.batchLabel ?? "");
   const [facultySearch, setFacultySearch] = useState<string>("");
 
+  // Batch 1 Configuration (when isSplit is true)
+  const [b1SubjectId, setB1SubjectId] = useState<number | null>(
+    existing?.batch1?.subjectId ?? existing?.subjectId ?? (subjects[0]?.id ?? null),
+  );
+  const [b1EntryType, setB1EntryType] = useState<"theory" | "lab" | "other">(
+    existing?.batch1?.entryType ?? (existing?.entryType === "lab" ? "lab" : "lab"),
+  );
+  const [b1FacultyHrmsId, setB1FacultyHrmsId] = useState<string>(
+    existing?.batch1?.hrmsEmployeeId ?? existing?.hrmsEmployeeId ?? "",
+  );
+  const [b1RoomLabel, setB1RoomLabel] = useState<string>(
+    existing?.batch1?.roomLabel ?? existing?.roomLabel ?? "",
+  );
+  const [b1FacultySearch, setB1FacultySearch] = useState<string>("");
+
+  // Batch 2 Configuration (when isSplit is true)
+  const [b2SubjectId, setB2SubjectId] = useState<number | null>(
+    existing?.batch2?.subjectId ?? (subjects[1]?.id ?? subjects[0]?.id ?? null),
+  );
+  const [b2EntryType, setB2EntryType] = useState<"theory" | "lab" | "other">(
+    existing?.batch2?.entryType ?? "lab",
+  );
+  const [b2FacultyHrmsId, setB2FacultyHrmsId] = useState<string>(
+    existing?.batch2?.hrmsEmployeeId ?? "",
+  );
+  const [b2RoomLabel, setB2RoomLabel] = useState<string>(
+    existing?.batch2?.roomLabel ?? "",
+  );
+  const [b2FacultySearch, setB2FacultySearch] = useState<string>("");
+
+  const b1Sub = useMemo(() => subjects.find((s) => s.id === b1SubjectId), [subjects, b1SubjectId]);
+  const b2Sub = useMemo(() => subjects.find((s) => s.id === b2SubjectId), [subjects, b2SubjectId]);
+
+  // Step 2: Student Roster & Allocation State
+  const [students, setStudents] = useState<StudentRosterItem[]>([]);
+  const [isLoadingStudents, setIsLoadingStudents] = useState<boolean>(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [studentBatchMap, setStudentBatchMap] = useState<Record<number, "Batch 1" | "Batch 2" | null>>({});
+
+  // Individual Branch PIN Dropdown States for Batch 1 and Batch 2
+  const [b1BranchPins, setB1BranchPins] = useState<Record<number, { fromPin: string; toPin: string }>>({});
+  const [b2BranchPins, setB2BranchPins] = useState<Record<number, { fromPin: string; toPin: string }>>({});
+
+  // Filter / Search for Individual Student List
+  const [studentSearch, setStudentSearch] = useState<string>("");
+  const [studentBranchFilter, setStudentBranchFilter] = useState<number | "all">("all");
+  const [studentTabFilter, setStudentTabFilter] = useState<"all" | "Batch 1" | "Batch 2" | "unassigned">("all");
+
+  // Participating branches list helper
+  const participatingBranchesList = useMemo(() => {
+    return availableBranches.filter((b) => participatingBranchIds.includes(b.id));
+  }, [availableBranches, participatingBranchIds]);
+
+  // Grouped students per participating branch (sorted by PIN)
+  const branchesWithStudents = useMemo(() => {
+    return participatingBranchesList.map((b) => {
+      const bStudents = students
+        .filter((s) => s.branch_id === b.id)
+        .sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+      return {
+        branch: b,
+        students: bStudents,
+      };
+    });
+  }, [participatingBranchesList, students]);
+
+  // Sync initial and updated From/To PIN defaults for each branch in both batches
+  useEffect(() => {
+    if (students.length === 0) return;
+
+    setB1BranchPins((prev) => {
+      const next = { ...prev };
+      participatingBranchesList.forEach((b) => {
+        const bStudents = students
+          .filter((s) => s.branch_id === b.id)
+          .sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+        if (bStudents.length > 0) {
+          const curFrom = next[b.id]?.fromPin;
+          const curTo = next[b.id]?.toPin;
+          const hasFrom = bStudents.some((s) => s.pin_no === curFrom);
+          const hasTo = bStudents.some((s) => s.pin_no === curTo);
+          next[b.id] = {
+            fromPin: hasFrom && curFrom ? curFrom : bStudents[0]?.pin_no || "",
+            toPin: hasTo && curTo ? curTo : bStudents[bStudents.length - 1]?.pin_no || "",
+          };
+        }
+      });
+      return next;
+    });
+
+    setB2BranchPins((prev) => {
+      const next = { ...prev };
+      participatingBranchesList.forEach((b) => {
+        const bStudents = students
+          .filter((s) => s.branch_id === b.id)
+          .sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+        if (bStudents.length > 0) {
+          const curFrom = next[b.id]?.fromPin;
+          const curTo = next[b.id]?.toPin;
+          const hasFrom = bStudents.some((s) => s.pin_no === curFrom);
+          const hasTo = bStudents.some((s) => s.pin_no === curTo);
+          next[b.id] = {
+            fromPin: hasFrom && curFrom ? curFrom : bStudents[0]?.pin_no || "",
+            toPin: hasTo && curTo ? curTo : bStudents[bStudents.length - 1]?.pin_no || "",
+          };
+        }
+      });
+      return next;
+    });
+  }, [students, participatingBranchesList]);
+
+  // Initialize from existing assignment on mount/change
   useEffect(() => {
     if (existing) {
+      setIsSplit(Boolean(existing.isSplit));
+      setWeeklyRotation(Boolean(existing.weeklyRotation));
+      if (existing.participatingBranchIds && existing.participatingBranchIds.length > 0) {
+        setParticipatingBranchIds(existing.participatingBranchIds);
+      } else {
+        setParticipatingBranchIds(availableBranches.map((b) => b.id));
+      }
+
+      // Single slot
       setSelectedSubjectId(existing.subjectId);
       setEntryType(existing.entryType);
       setFacultyHrmsId(existing.hrmsEmployeeId);
       setRoomLabel(existing.roomLabel);
       setCustomLabel(existing.customLabel);
-      setBatchLabel(existing.batchLabel);
       setMode(existing.entryType === "other" && existing.customLabel ? "special" : "subject");
+
+      // Batch 1
+      if (existing.batch1) {
+        setB1SubjectId(existing.batch1.subjectId);
+        setB1EntryType(existing.batch1.entryType);
+        setB1FacultyHrmsId(existing.batch1.hrmsEmployeeId);
+        setB1RoomLabel(existing.batch1.roomLabel);
+      } else {
+        setB1SubjectId(existing.subjectId);
+        setB1EntryType(existing.entryType);
+        setB1FacultyHrmsId(existing.hrmsEmployeeId);
+        setB1RoomLabel(existing.roomLabel);
+      }
+
+      // Batch 2
+      if (existing.batch2) {
+        setB2SubjectId(existing.batch2.subjectId);
+        setB2EntryType(existing.batch2.entryType);
+        setB2FacultyHrmsId(existing.batch2.hrmsEmployeeId);
+        setB2RoomLabel(existing.batch2.roomLabel);
+      }
+
+      // Initialize batch map if students were assigned
+      const initialMap: Record<number, "Batch 1" | "Batch 2" | null> = {};
+      if (existing.batch1?.studentIds) {
+        for (const sid of existing.batch1.studentIds) {
+          initialMap[sid] = "Batch 1";
+        }
+      }
+      if (existing.batch2?.studentIds) {
+        for (const sid of existing.batch2.studentIds) {
+          initialMap[sid] = "Batch 2";
+        }
+      }
+      setStudentBatchMap(initialMap);
     } else {
-      // Default to first subject if available
+      // Default initialization
+      setIsSplit(false);
+      setCurrentStep(1);
+      setParticipatingBranchIds(availableBranches.map((b) => b.id));
       if (subjects.length > 0) {
         setSelectedSubjectId(subjects[0].id);
+        setB1SubjectId(subjects[0].id);
+        setB2SubjectId(subjects[1]?.id ?? subjects[0].id);
       }
+      setStudentBatchMap({});
     }
-  }, [existing, subjects]);
+  }, [existing, subjects, availableBranches]);
 
-  if (!isOpen) return null;
+  // Fetch Student Roster for Participating Branches
+  const loadStudentRoster = useCallback(async () => {
+    if (!collegeId || !courseId || semester == null || participatingBranchIds.length === 0) {
+      setStudents([]);
+      return;
+    }
 
-  const currentSubject = subjects.find((s) => s.id === selectedSubjectId);
+    setIsLoadingStudents(true);
+    setFetchError(null);
+    try {
+      const params = new URLSearchParams({
+        collegeId: String(collegeId),
+        courseId: String(courseId),
+        branchIds: participatingBranchIds.join(","),
+        semester: String(semester),
+      });
+      if (year != null) params.set("year", String(year));
+      if (academicYear) params.set("academicYear", academicYear);
 
-  const filteredFaculty = facultyList.filter(
+      const res = await apiFetch(`/timetables/roster?${params.toString()}`);
+      if (!res.ok) {
+        throw new Error("Failed to load student roster");
+      }
+      const json = await res.json();
+      const list: StudentRosterItem[] = json.data ?? [];
+      setStudents(list);
+    } catch (err) {
+      console.error("Error loading roster:", err);
+      setFetchError((err as Error).message || "Could not fetch student roster.");
+    } finally {
+      setIsLoadingStudents(false);
+    }
+  }, [collegeId, courseId, semester, year, academicYear, participatingBranchIds]);
+
+  // Handle advancing to Step 2
+  const handleProceedToStep2 = async () => {
+    if (participatingBranchIds.length === 0) {
+      alert("Please select at least one participating branch for this split slot.");
+      return;
+    }
+    if (!b1SubjectId) {
+      alert("Please select a subject for Batch 1.");
+      return;
+    }
+    if (!b2SubjectId) {
+      alert("Please select a subject for Batch 2.");
+      return;
+    }
+
+    // Load roster and switch step
+    await loadStudentRoster();
+    setCurrentStep(2);
+  };
+
+  // Branch participation toggle
+  const toggleParticipatingBranch = (bId: number) => {
+    setParticipatingBranchIds((prev) => {
+      if (prev.includes(bId)) {
+        if (prev.length <= 1) return prev; // keep at least 1 branch
+        return prev.filter((id) => id !== bId);
+      }
+      return [...prev, bId];
+    });
+  };
+
+  // Filter faculty lists
+  const filteredSingleFaculty = facultyList.filter(
     (f) =>
       !facultySearch ||
       f.name.toLowerCase().includes(facultySearch.toLowerCase()) ||
@@ -1496,7 +1952,225 @@ function PeriodEditModal({
       f.hrmsEmployeeId.toLowerCase().includes(facultySearch.toLowerCase()),
   );
 
-  const handleApply = () => {
+  const filteredB1Faculty = facultyList.filter(
+    (f) =>
+      !b1FacultySearch ||
+      f.name.toLowerCase().includes(b1FacultySearch.toLowerCase()) ||
+      f.department.toLowerCase().includes(b1FacultySearch.toLowerCase()) ||
+      f.hrmsEmployeeId.toLowerCase().includes(b1FacultySearch.toLowerCase()),
+  );
+
+  const filteredB2Faculty = facultyList.filter(
+    (f) =>
+      !b2FacultySearch ||
+      f.name.toLowerCase().includes(b2FacultySearch.toLowerCase()) ||
+      f.department.toLowerCase().includes(b2FacultySearch.toLowerCase()) ||
+      f.hrmsEmployeeId.toLowerCase().includes(b2FacultySearch.toLowerCase()),
+  );
+
+  // Computed student counts
+  const countBatch1 = useMemo(
+    () => students.filter((s) => studentBatchMap[s.id] === "Batch 1").length,
+    [students, studentBatchMap],
+  );
+  const countBatch2 = useMemo(
+    () => students.filter((s) => studentBatchMap[s.id] === "Batch 2").length,
+    [students, studentBatchMap],
+  );
+  const countUnassigned = useMemo(
+    () => students.filter((s) => !studentBatchMap[s.id]).length,
+    [students, studentBatchMap],
+  );
+
+  // Quick Action: 50 / 50 Split
+  const handleSplit5050 = () => {
+    if (students.length === 0) return;
+    const sorted = [...students].sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+    const half = Math.ceil(sorted.length / 2);
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+
+    sorted.forEach((student, idx) => {
+      newMap[student.id] = idx < half ? "Batch 1" : "Batch 2";
+    });
+
+    setStudentBatchMap(newMap);
+  };
+
+  // Quick Action: Odd / Even Split by PIN
+  const handleSplitOddEven = () => {
+    if (students.length === 0) return;
+    const sorted = [...students].sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+
+    sorted.forEach((student, idx) => {
+      const match = (student.pin_no || "").match(/\d+$/);
+      const numVal = match ? parseInt(match[0], 10) : idx + 1;
+      newMap[student.id] = numVal % 2 === 1 ? "Batch 1" : "Batch 2";
+    });
+
+    setStudentBatchMap(newMap);
+  };
+
+  // Quick Action: Assign All to a batch
+  const handleAssignAllToBatch = (target: "Batch 1" | "Batch 2") => {
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+    students.forEach((s) => {
+      newMap[s.id] = target;
+    });
+    setStudentBatchMap(newMap);
+  };
+
+  // Quick Action: Clear all
+  const handleClearAllStudentBatches = () => {
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+    students.forEach((s) => {
+      newMap[s.id] = null;
+    });
+    setStudentBatchMap(newMap);
+  };
+
+  // Quick action: Assign all students of a branch to a batch
+  const handleAssignBranchToBatch = (bId: number | "all", target: "Batch 1" | "Batch 2") => {
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+    students.forEach((s) => {
+      if (bId === "all" || s.branch_id === bId) {
+        newMap[s.id] = target;
+      }
+    });
+    setStudentBatchMap(newMap);
+  };
+
+  // Quick action: 50/50 split within a branch
+  const handleSplitBranch5050 = (bId: number | "all") => {
+    const list = (bId === "all" ? students : students.filter((s) => s.branch_id === bId)).sort(
+      (a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""),
+    );
+    const half = Math.ceil(list.length / 2);
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+    list.forEach((s, idx) => {
+      newMap[s.id] = idx < half ? "Batch 1" : "Batch 2";
+    });
+    setStudentBatchMap(newMap);
+  };
+
+  // Batch 1: Apply PIN Range for a specific branch
+  const handleApplyB1BranchRange = (branchId: number) => {
+    const pinConfig = b1BranchPins[branchId];
+    const bStudents = students
+      .filter((s) => s.branch_id === branchId)
+      .sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+
+    if (!pinConfig?.fromPin || !pinConfig?.toPin) {
+      alert("Please select both 'From PIN' and 'To PIN' for this branch.");
+      return;
+    }
+
+    const fromIdx = bStudents.findIndex((s) => s.pin_no === pinConfig.fromPin);
+    const toIdx = bStudents.findIndex((s) => s.pin_no === pinConfig.toPin);
+
+    if (fromIdx === -1 || toIdx === -1) {
+      alert("Selected PINs not found in this branch.");
+      return;
+    }
+
+    const start = Math.min(fromIdx, toIdx);
+    const end = Math.max(fromIdx, toIdx);
+    const selectedSlice = bStudents.slice(start, end + 1);
+
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+    selectedSlice.forEach((s) => {
+      newMap[s.id] = "Batch 1";
+    });
+
+    setStudentBatchMap(newMap);
+  };
+
+  // Batch 2: Apply PIN Range for a specific branch
+  const handleApplyB2BranchRange = (branchId: number) => {
+    const pinConfig = b2BranchPins[branchId];
+    const bStudents = students
+      .filter((s) => s.branch_id === branchId)
+      .sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+
+    if (!pinConfig?.fromPin || !pinConfig?.toPin) {
+      alert("Please select both 'From PIN' and 'To PIN' for this branch.");
+      return;
+    }
+
+    const fromIdx = bStudents.findIndex((s) => s.pin_no === pinConfig.fromPin);
+    const toIdx = bStudents.findIndex((s) => s.pin_no === pinConfig.toPin);
+
+    if (fromIdx === -1 || toIdx === -1) {
+      alert("Selected PINs not found in this branch.");
+      return;
+    }
+
+    const start = Math.min(fromIdx, toIdx);
+    const end = Math.max(fromIdx, toIdx);
+    const selectedSlice = bStudents.slice(start, end + 1);
+
+    const newMap: Record<number, "Batch 1" | "Batch 2" | null> = { ...studentBatchMap };
+    selectedSlice.forEach((s) => {
+      newMap[s.id] = "Batch 2";
+    });
+
+    setStudentBatchMap(newMap);
+  };
+
+  // Individual Student Toggle
+  const handleToggleStudent = (studentId: number, target: "Batch 1" | "Batch 2") => {
+    setStudentBatchMap((prev) => {
+      const current = prev[studentId];
+      return {
+        ...prev,
+        [studentId]: current === target ? null : target,
+      };
+    });
+  };
+
+  // Filtered Students List for Individual Selection
+  const filteredStudents = useMemo(() => {
+    let list = [...students];
+
+    // Branch filter
+    if (studentBranchFilter !== "all") {
+      list = list.filter((s) => s.branch_id === studentBranchFilter);
+    }
+
+    // Tab filter
+    if (studentTabFilter === "Batch 1") {
+      list = list.filter((s) => studentBatchMap[s.id] === "Batch 1");
+    } else if (studentTabFilter === "Batch 2") {
+      list = list.filter((s) => studentBatchMap[s.id] === "Batch 2");
+    } else if (studentTabFilter === "unassigned") {
+      list = list.filter((s) => !studentBatchMap[s.id]);
+    }
+
+    // Search query
+    if (studentSearch.trim()) {
+      const q = studentSearch.trim().toLowerCase();
+      list = list.filter(
+        (s) =>
+          (s.pin_no && s.pin_no.toLowerCase().includes(q)) ||
+          (s.student_name && s.student_name.toLowerCase().includes(q)) ||
+          (s.admission_number && s.admission_number.toLowerCase().includes(q)) ||
+          (s.branch_name && s.branch_name.toLowerCase().includes(q)),
+      );
+    }
+
+    // Sorted by PIN
+    return list.sort((a, b) => (a.pin_no || "").localeCompare(b.pin_no || ""));
+  }, [students, studentBatchMap, studentBranchFilter, studentTabFilter, studentSearch]);
+
+  // Apply Single Slot
+  const handleApplySingle = () => {
+    if (participatingBranchIds.length === 0) {
+      alert("Please select at least one participating branch.");
+      return;
+    }
+
+    const currentSubject = subjects.find((s) => s.id === selectedSubjectId);
+
     if (mode === "subject") {
       if (!selectedSubjectId && !currentSubject) {
         alert("Please select a subject.");
@@ -1514,8 +2188,10 @@ function PeriodEditModal({
         hrmsEmployeeId: facultyHrmsId,
         facultyName: chosenFaculty?.name ?? "",
         roomLabel,
-        batchLabel,
+        batchLabel: "",
         customLabel: "",
+        participatingBranchIds,
+        isSplit: false,
       });
     } else {
       if (!customLabel.trim()) {
@@ -1534,16 +2210,76 @@ function PeriodEditModal({
         hrmsEmployeeId: facultyHrmsId,
         facultyName: chosenFaculty?.name ?? "",
         roomLabel,
-        batchLabel,
+        batchLabel: "",
         customLabel,
+        participatingBranchIds,
+        isSplit: false,
       });
     }
   };
 
+  // Apply Split Slot (from Step 2)
+  const handleApplySplit = () => {
+    const b1StudentIds = students.filter((s) => studentBatchMap[s.id] === "Batch 1").map((s) => s.id);
+    const b2StudentIds = students.filter((s) => studentBatchMap[s.id] === "Batch 2").map((s) => s.id);
+
+    if (b1StudentIds.length === 0 && b2StudentIds.length === 0) {
+      if (!window.confirm("No students have been allocated to Batch 1 or Batch 2 yet. Do you still want to apply this split slot?")) {
+        return;
+      }
+    }
+
+    const b1Fac = facultyList.find((f) => f.hrmsEmployeeId === b1FacultyHrmsId);
+    const b2Fac = facultyList.find((f) => f.hrmsEmployeeId === b2FacultyHrmsId);
+
+    onSave({
+      dayOfWeek: dayCode,
+      timingSlotId: slot.id,
+      subjectId: b1Sub?.id ?? null,
+      subjectCode: b1Sub?.code ?? "",
+      subjectName: b1Sub?.name ?? "",
+      entryType: b1EntryType,
+      hrmsEmployeeId: b1FacultyHrmsId,
+      facultyName: b1Fac?.name ?? "",
+      roomLabel: b1RoomLabel,
+      batchLabel: "Batch 1",
+      customLabel: "",
+      isSplit: true,
+      weeklyRotation,
+      participatingBranchIds,
+      batch1: {
+        subjectId: b1Sub?.id ?? null,
+        subjectCode: b1Sub?.code ?? "",
+        subjectName: b1Sub?.name ?? "",
+        entryType: b1EntryType,
+        hrmsEmployeeId: b1FacultyHrmsId,
+        facultyName: b1Fac?.name ?? "",
+        roomLabel: b1RoomLabel,
+        batchLabel: "Batch 1",
+        studentIds: b1StudentIds,
+        studentCount: b1StudentIds.length,
+      },
+      batch2: {
+        subjectId: b2Sub?.id ?? null,
+        subjectCode: b2Sub?.code ?? "",
+        subjectName: b2Sub?.name ?? "",
+        entryType: b2EntryType,
+        hrmsEmployeeId: b2FacultyHrmsId,
+        facultyName: b2Fac?.name ?? "",
+        roomLabel: b2RoomLabel,
+        batchLabel: "Batch 2",
+        studentIds: b2StudentIds,
+        studentCount: b2StudentIds.length,
+      },
+    });
+  };
+
+  if (!isOpen) return null;
+
   const dayLabel = DAY_CODE_TO_LABEL[dayCode as keyof typeof DAY_CODE_TO_LABEL] ?? dayCode;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-5">
       {/* Backdrop */}
       <button
         type="button"
@@ -1552,23 +2288,34 @@ function PeriodEditModal({
         onClick={onClose}
       />
 
-      {/* Modal Box */}
+      {/* Modal Dialog Container */}
       <div
         role="dialog"
         aria-modal="true"
-        className="relative z-10 flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+        className={cn(
+          "relative z-10 flex w-full flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl animate-in fade-in zoom-in-95 duration-150 transition-all",
+          currentStep === 1 ? (isSplit ? "max-w-3xl" : "max-w-xl") : "max-w-4xl",
+        )}
       >
         {/* Header */}
-        <div className="border-b border-border bg-gradient-to-r from-indigo-50/80 to-white px-5 py-4">
+        <div className="border-b border-border bg-gradient-to-r from-indigo-50/90 via-white to-purple-50/50 px-5 py-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-base font-bold text-navy-950">
-                Assign Period: {slot.label}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-base font-bold text-navy-950">
+                  Assign Period: {slot.label}
+                </h3>
+                {isSplit && (
+                  <span className="rounded-full bg-indigo-100 text-indigo-800 text-[10px] font-bold px-2 py-0.5 border border-indigo-200">
+                    Parallel Split Slot
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                {dayLabel} • {slot.startTime?.slice(0, 5)} - {slot.endTime?.slice(0, 5)} • Applied to {selectedBranchCount} branches
+                {dayLabel} • {slot.startTime?.slice(0, 5)} - {slot.endTime?.slice(0, 5)} • {participatingBranchIds.length} branches selected
               </p>
             </div>
+
             <button
               type="button"
               onClick={onClose}
@@ -1578,206 +2325,1116 @@ function PeriodEditModal({
             </button>
           </div>
 
-          {/* Mode Switcher */}
-          <div className="mt-3 flex rounded-lg bg-slate-200/60 p-1 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setMode("subject")}
-              className={cn(
-                "flex-1 py-1.5 rounded-md transition-all",
-                mode === "subject" ? "bg-white text-indigo-900 shadow-2xs font-bold" : "text-slate-600 hover:text-slate-900",
-              )}
-            >
-              Curriculum Subject / Lab
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("special")}
-              className={cn(
-                "flex-1 py-1.5 rounded-md transition-all",
-                mode === "special" ? "bg-white text-indigo-900 shadow-2xs font-bold" : "text-slate-600 hover:text-slate-900",
-              )}
-            >
-              Special / Activity (CRT, Library)
-            </button>
-          </div>
+          {/* 2-Step Wizard Stepper (shown when split is enabled) */}
+          {isSplit && (
+            <div className="mt-3.5 flex items-center gap-2 pt-2 border-t border-slate-200/60 text-xs">
+              <button
+                type="button"
+                onClick={() => setCurrentStep(1)}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer",
+                  currentStep === 1
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "bg-slate-100 text-slate-700 hover:bg-slate-200",
+                )}
+              >
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
+                  1
+                </span>
+                Step 1: Split & Branches Setup
+              </button>
+
+              <ArrowRight className="h-3.5 w-3.5 text-slate-400" />
+
+              <button
+                type="button"
+                onClick={handleProceedToStep2}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer",
+                  currentStep === 2
+                    ? "bg-indigo-600 text-white shadow-xs"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                )}
+              >
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
+                  2
+                </span>
+                Step 2: Students Selection (Range / Individual)
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* Body */}
-        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-          {mode === "subject" ? (
+        {/* Modal Body */}
+        <div className="p-5 max-h-[72vh] overflow-y-auto space-y-4">
+          {currentStep === 1 ? (
+            /* ================= STEP 1: CONFIGURATION & BRANCHES ================= */
             <>
-              {/* Subject Selection */}
-              <div>
-                <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
-                  Select Subject
-                </label>
-                <select
-                  value={selectedSubjectId ?? ""}
-                  onChange={(e) => {
-                    const id = Number(e.target.value);
-                    setSelectedSubjectId(id);
-                    const sub = subjects.find((s) => s.id === id);
-                    if (sub && sub.type?.toLowerCase().includes("lab")) {
-                      setEntryType("lab");
-                    } else {
-                      setEntryType("theory");
-                    }
-                  }}
-                  className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
-                >
-                  {subjects.map((sub) => (
-                    <option key={sub.id} value={sub.id}>
-                      {sub.code}: {sub.name} {sub.isCommon ? "★ (Common)" : ""}
-                    </option>
-                  ))}
-                </select>
-
-                {currentSubject && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500">
-                    <span className="font-semibold text-navy-900">{currentSubject.name}</span>
-                    <span>•</span>
-                    <span className="capitalize">{currentSubject.type || "Theory"}</span>
-                    {currentSubject.isCommon && (
-                      <span className="rounded bg-purple-100 px-1 py-0.2 text-[9px] font-bold text-purple-900">
-                        Common across branches
-                      </span>
-                    )}
-                  </div>
+              {/* Split Slot Toggle Banner */}
+              <div
+                onClick={() => {
+                  const nextSplit = !isSplit;
+                  setIsSplit(nextSplit);
+                  if (!nextSplit) setCurrentStep(1);
+                }}
+                className={cn(
+                  "flex items-center justify-between p-3.5 rounded-xl border transition-all cursor-pointer",
+                  isSplit
+                    ? "bg-indigo-50/80 border-indigo-300 ring-1 ring-indigo-500/20"
+                    : "bg-slate-50 border-slate-200 hover:bg-slate-100/70",
                 )}
-              </div>
-
-              {/* Entry Type */}
-              <div>
-                <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
-                  Period Type
-                </label>
-                <div className="flex gap-2">
-                  {(["theory", "lab", "other"] as const).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setEntryType(t)}
-                      className={cn(
-                        "flex-1 py-1.5 rounded-lg border text-xs font-semibold capitalize transition-all cursor-pointer",
-                        entryType === t
-                          ? "border-indigo-600 bg-indigo-50 text-indigo-950 ring-1 ring-indigo-600/20 font-bold"
-                          : "border-slate-200 text-slate-600 hover:bg-slate-50",
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={cn(
+                      "flex h-8 w-8 items-center justify-center rounded-lg font-bold text-xs",
+                      isSplit ? "bg-indigo-600 text-white" : "bg-slate-200 text-slate-600",
+                    )}
+                  >
+                    <GitFork className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-navy-950 flex items-center gap-2">
+                      Split Slot Option (Batch 1 & Batch 2 Parallel Labs)
+                      {isSplit && (
+                        <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded">
+                          Active
+                        </span>
                       )}
-                    >
-                      {t}
-                    </button>
-                  ))}
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Divide this period into two parallel batches (e.g. Lab A & Lab B) with student group selection.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none">
+                  <span
+                    className={cn(
+                      "pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out",
+                      isSplit ? "translate-x-5 bg-indigo-600" : "translate-x-0 bg-slate-300",
+                    )}
+                  />
                 </div>
               </div>
+
+              {/* Participating Branches Checklist */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    <Building2 className="h-3.5 w-3.5 text-indigo-600" />
+                    Participating Branches for this Slot ({participatingBranchIds.length}/{availableBranches.length})
+                  </label>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <button
+                      type="button"
+                      onClick={() => setParticipatingBranchIds(availableBranches.map((b) => b.id))}
+                      className="text-indigo-600 hover:text-indigo-800 font-semibold cursor-pointer"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (availableBranches.length > 0) setParticipatingBranchIds([availableBranches[0].id]);
+                      }}
+                      className="text-slate-500 hover:text-slate-700 cursor-pointer"
+                    >
+                      Keep 1st
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {availableBranches.map((branch) => {
+                    const isChecked = participatingBranchIds.includes(branch.id);
+                    return (
+                      <div
+                        key={branch.id}
+                        onClick={() => toggleParticipatingBranch(branch.id)}
+                        className={cn(
+                          "flex items-center gap-2 p-2 rounded-lg border text-xs cursor-pointer transition-all",
+                          isChecked
+                            ? "bg-white border-indigo-300 text-navy-950 font-semibold shadow-2xs"
+                            : "bg-slate-100/60 border-slate-200 text-slate-500 hover:bg-white",
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                            isChecked ? "bg-indigo-600 border-indigo-600 text-white" : "border-slate-300 bg-white",
+                          )}
+                        >
+                          {isChecked && <Check className="h-3 w-3" />}
+                        </div>
+                        <div className="truncate flex-1">
+                          <span className="font-bold text-[11px] text-indigo-900 mr-1.5">
+                            {branch.code || branch.name}
+                          </span>
+                          <span className="text-[11px] text-slate-600 font-normal truncate">
+                            {branch.name}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {!isSplit ? (
+                /* SINGLE PERIOD CONFIGURATION */
+                <div className="space-y-4 pt-1">
+                  {/* Mode Switcher */}
+                  <div className="flex rounded-lg bg-slate-200/70 p-1 text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setMode("subject")}
+                      className={cn(
+                        "flex-1 py-1.5 rounded-md transition-all cursor-pointer",
+                        mode === "subject"
+                          ? "bg-white text-indigo-900 shadow-2xs font-bold"
+                          : "text-slate-600 hover:text-slate-900",
+                      )}
+                    >
+                      Curriculum Subject / Lab
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMode("special")}
+                      className={cn(
+                        "flex-1 py-1.5 rounded-md transition-all cursor-pointer",
+                        mode === "special"
+                          ? "bg-white text-indigo-900 shadow-2xs font-bold"
+                          : "text-slate-600 hover:text-slate-900",
+                      )}
+                    >
+                      Special / Activity (CRT, Library)
+                    </button>
+                  </div>
+
+                  {mode === "subject" ? (
+                    <>
+                      {/* Subject Selection */}
+                      <div>
+                        <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
+                          Select Subject
+                        </label>
+                        <select
+                          value={selectedSubjectId ?? ""}
+                          onChange={(e) => {
+                            const id = Number(e.target.value);
+                            setSelectedSubjectId(id);
+                            const sub = subjects.find((s) => s.id === id);
+                            if (sub && sub.type?.toLowerCase().includes("lab")) {
+                              setEntryType("lab");
+                            } else {
+                              setEntryType("theory");
+                            }
+                          }}
+                          className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                        >
+                          {subjects.map((sub) => (
+                            <option key={sub.id} value={sub.id}>
+                              {sub.code}: {sub.name} {sub.isCommon ? "★ (Common)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Entry Type */}
+                      <div>
+                        <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
+                          Period Type
+                        </label>
+                        <div className="flex gap-2">
+                          {(["theory", "lab", "other"] as const).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => setEntryType(t)}
+                              className={cn(
+                                "flex-1 py-1.5 rounded-lg border text-xs font-semibold capitalize transition-all cursor-pointer",
+                                entryType === t
+                                  ? "border-indigo-600 bg-indigo-50 text-indigo-950 ring-1 ring-indigo-600/20 font-bold"
+                                  : "border-slate-200 text-slate-600 hover:bg-slate-50",
+                              )}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
+                        Activity / Special Period Label
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. CRT, Library, Games, Mentoring..."
+                        value={customLabel}
+                        onChange={(e) => setCustomLabel(e.target.value)}
+                        className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                      />
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {SPECIAL_PERIOD_PRESETS.map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setCustomLabel(preset)}
+                            className={cn(
+                              "rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer",
+                              customLabel === preset
+                                ? "border-purple-600 bg-purple-100 text-purple-950 font-bold"
+                                : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100",
+                            )}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Faculty Selector */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-bold text-slate-700 uppercase">
+                        Assigned Faculty
+                      </label>
+                      <div className="relative w-40">
+                        <input
+                          type="text"
+                          placeholder="Search faculty..."
+                          value={facultySearch}
+                          onChange={(e) => setFacultySearch(e.target.value)}
+                          className="w-full h-7 rounded border border-slate-200 bg-white pl-2 pr-5 text-[11px] focus:outline-none focus:border-indigo-600"
+                        />
+                        <Search className="h-3 w-3 text-slate-400 absolute right-1.5 top-2 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    <select
+                      value={facultyHrmsId}
+                      onChange={(e) => setFacultyHrmsId(e.target.value)}
+                      className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                    >
+                      <option value="">-- No Faculty / Unassigned --</option>
+                      {filteredSingleFaculty.map((f) => (
+                        <option key={f.hrmsEmployeeId} value={f.hrmsEmployeeId}>
+                          {f.name} ({f.designation || f.department || f.hrmsEmployeeId})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Room / Location */}
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
+                      Room / Lab / Location
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Room 301, ECE Lab, Seminar Hall"
+                      value={roomLabel}
+                      onChange={(e) => setRoomLabel(e.target.value)}
+                      className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                    />
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {ROOM_SUGGESTIONS.map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => setRoomLabel(r)}
+                          className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] text-slate-600 hover:bg-slate-100 cursor-pointer"
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* SPLIT PERIOD CONFIGURATION (BATCH 1 & BATCH 2) */
+                <div className="space-y-4 pt-1">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* BATCH 1 CARD */}
+                    <div className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-3.5 space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-indigo-100">
+                        <span className="rounded bg-indigo-600 text-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
+                          Batch 1 (Slot A)
+                        </span>
+                        <span className="text-[11px] font-semibold text-indigo-900">
+                          Parallel Session 1
+                        </span>
+                      </div>
+
+                      {/* Subject */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 uppercase mb-1 block">
+                          Batch 1 Subject
+                        </label>
+                        <select
+                          value={b1SubjectId ?? ""}
+                          onChange={(e) => {
+                            const id = Number(e.target.value);
+                            setB1SubjectId(id);
+                            const sub = subjects.find((s) => s.id === id);
+                            if (sub && sub.type?.toLowerCase().includes("lab")) {
+                              setB1EntryType("lab");
+                            }
+                          }}
+                          className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                        >
+                          {subjects.map((sub) => (
+                            <option key={sub.id} value={sub.id}>
+                              {sub.code}: {sub.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Entry Type */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 uppercase mb-1 block">
+                          Period Type
+                        </label>
+                        <div className="flex gap-1.5">
+                          {(["lab", "theory", "other"] as const).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => setB1EntryType(t)}
+                              className={cn(
+                                "flex-1 py-1 rounded border text-[11px] font-semibold capitalize cursor-pointer",
+                                b1EntryType === t
+                                  ? "border-indigo-600 bg-indigo-600 text-white font-bold"
+                                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                              )}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Faculty */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-bold text-slate-700 uppercase">
+                            Faculty
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Filter..."
+                            value={b1FacultySearch}
+                            onChange={(e) => setB1FacultySearch(e.target.value)}
+                            className="w-24 h-5 rounded border border-slate-200 bg-white px-1.5 text-[10px]"
+                          />
+                        </div>
+                        <select
+                          value={b1FacultyHrmsId}
+                          onChange={(e) => setB1FacultyHrmsId(e.target.value)}
+                          className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                        >
+                          <option value="">-- Unassigned --</option>
+                          {filteredB1Faculty.map((f) => (
+                            <option key={f.hrmsEmployeeId} value={f.hrmsEmployeeId}>
+                              {f.name} ({f.department || f.hrmsEmployeeId})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Room */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 uppercase mb-1 block">
+                          Lab / Room
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. CSE Lab 1"
+                          value={b1RoomLabel}
+                          onChange={(e) => setB1RoomLabel(e.target.value)}
+                          className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {/* BATCH 2 CARD */}
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3.5 space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-emerald-100">
+                        <span className="rounded bg-emerald-600 text-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
+                          Batch 2 (Slot B)
+                        </span>
+                        <span className="text-[11px] font-semibold text-emerald-900">
+                          Parallel Session 2
+                        </span>
+                      </div>
+
+                      {/* Subject */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 uppercase mb-1 block">
+                          Batch 2 Subject
+                        </label>
+                        <select
+                          value={b2SubjectId ?? ""}
+                          onChange={(e) => {
+                            const id = Number(e.target.value);
+                            setB2SubjectId(id);
+                            const sub = subjects.find((s) => s.id === id);
+                            if (sub && sub.type?.toLowerCase().includes("lab")) {
+                              setB2EntryType("lab");
+                            }
+                          }}
+                          className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-navy-950 focus:border-emerald-600 focus:outline-none"
+                        >
+                          {subjects.map((sub) => (
+                            <option key={sub.id} value={sub.id}>
+                              {sub.code}: {sub.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Entry Type */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 uppercase mb-1 block">
+                          Period Type
+                        </label>
+                        <div className="flex gap-1.5">
+                          {(["lab", "theory", "other"] as const).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => setB2EntryType(t)}
+                              className={cn(
+                                "flex-1 py-1 rounded border text-[11px] font-semibold capitalize cursor-pointer",
+                                b2EntryType === t
+                                  ? "border-emerald-600 bg-emerald-600 text-white font-bold"
+                                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50",
+                              )}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Faculty */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="text-[11px] font-bold text-slate-700 uppercase">
+                            Faculty
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Filter..."
+                            value={b2FacultySearch}
+                            onChange={(e) => setB2FacultySearch(e.target.value)}
+                            className="w-24 h-5 rounded border border-slate-200 bg-white px-1.5 text-[10px]"
+                          />
+                        </div>
+                        <select
+                          value={b2FacultyHrmsId}
+                          onChange={(e) => setB2FacultyHrmsId(e.target.value)}
+                          className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-navy-950 focus:border-emerald-600 focus:outline-none"
+                        >
+                          <option value="">-- Unassigned --</option>
+                          {filteredB2Faculty.map((f) => (
+                            <option key={f.hrmsEmployeeId} value={f.hrmsEmployeeId}>
+                              {f.name} ({f.department || f.hrmsEmployeeId})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Room */}
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 uppercase mb-1 block">
+                          Lab / Room
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="e.g. ECE Lab"
+                          value={b2RoomLabel}
+                          onChange={(e) => setB2RoomLabel(e.target.value)}
+                          className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-navy-950 focus:border-emerald-600 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Weekly Rotation Option */}
+                  <label className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50/70 text-xs font-medium text-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={weeklyRotation}
+                      onChange={(e) => setWeeklyRotation(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>
+                      Rotate Batches Weekly (Batch 1 & Batch 2 alternate lab subjects each week)
+                    </span>
+                  </label>
+                </div>
+              )}
             </>
           ) : (
-            <>
-              {/* Special Label Presets */}
-              <div>
-                <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
-                  Activity / Special Period Label
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. CRT, Library, Games, Mentoring..."
-                  value={customLabel}
-                  onChange={(e) => setCustomLabel(e.target.value)}
-                  className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
-                />
+            /* ================= STEP 2: STUDENTS SELECTION (RANGE & INDIVIDUAL) ================= */
+            <div className="space-y-4">
+              {/* Top Status & Allocation Counters */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-slate-100/80 border border-slate-200">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-navy-950">
+                    Student Roster Allocation
+                  </span>
+                </div>
 
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {SPECIAL_PERIOD_PRESETS.map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setCustomLabel(preset)}
-                      className={cn(
-                        "rounded-md border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer",
-                        customLabel === preset
-                          ? "border-purple-600 bg-purple-100 text-purple-950 font-bold"
-                          : "border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100",
-                      )}
-                    >
-                      {preset}
-                    </button>
-                  ))}
+                <div className="flex items-center gap-2 flex-wrap text-xs font-bold">
+                  <span className="rounded-md bg-white border border-slate-200 px-2 py-1 text-slate-700">
+                    Total: {students.length}
+                  </span>
+                  <span className="rounded-md bg-indigo-100 border border-indigo-200 px-2 py-1 text-indigo-900">
+                    Batch 1: {countBatch1}
+                  </span>
+                  <span className="rounded-md bg-emerald-100 border border-emerald-200 px-2 py-1 text-emerald-900">
+                    Batch 2: {countBatch2}
+                  </span>
+                  <span
+                    className={cn(
+                      "rounded-md px-2 py-1 border",
+                      countUnassigned > 0
+                        ? "bg-amber-100 border-amber-300 text-amber-900"
+                        : "bg-slate-200/60 border-slate-200 text-slate-500",
+                    )}
+                  >
+                    Unassigned: {countUnassigned}
+                  </span>
                 </div>
               </div>
-            </>
-          )}
 
-          {/* Faculty Selector */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-bold text-slate-700 uppercase">
-                Assigned Faculty
-              </label>
-              <div className="relative w-40">
-                <input
-                  type="text"
-                  placeholder="Search faculty..."
-                  value={facultySearch}
-                  onChange={(e) => setFacultySearch(e.target.value)}
-                  className="w-full h-7 rounded border border-slate-200 bg-white pl-2 pr-5 text-[11px] focus:outline-none focus:border-indigo-600"
-                />
-                <Search className="h-3 w-3 text-slate-400 absolute right-1.5 top-2 pointer-events-none" />
+              {/* Range & Quick Selection Controls (Multi-Branch Aware) */}
+              <div className="rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50/50 via-white to-slate-50/50 p-4 space-y-3.5 shadow-2xs">
+                {/* Header & Global Quick Actions */}
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-indigo-100/80">
+                  <span className="text-xs font-bold text-navy-950 flex items-center gap-1.5 uppercase tracking-wider">
+                    <Sliders className="h-3.5 w-3.5 text-indigo-600" />
+                    Multi-Branch PIN & Range Tools
+                  </span>
+
+                  {/* Global Quick Action Helpers */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleSplit5050}
+                      className="rounded-lg border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 text-[11px] font-bold text-indigo-900 cursor-pointer shadow-2xs transition-all"
+                      title="Evenly divide all students 50% to Batch 1 and 50% to Batch 2"
+                    >
+                      ⚡ Split All 50/50
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSplitOddEven}
+                      className="rounded-lg border border-purple-200 bg-purple-50 hover:bg-purple-100 px-2.5 py-1 text-[11px] font-bold text-purple-900 cursor-pointer shadow-2xs transition-all"
+                      title="Assign Odd Roll Numbers to Batch 1 and Even to Batch 2"
+                    >
+                      🔢 Odd / Even PIN
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAssignAllToBatch("Batch 1")}
+                      className="rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 hover:border-indigo-300 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 cursor-pointer shadow-2xs transition-all"
+                    >
+                      All → B1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleAssignAllToBatch("Batch 2")}
+                      className="rounded-lg border border-slate-200 bg-white hover:bg-emerald-50 hover:border-emerald-300 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 cursor-pointer shadow-2xs transition-all"
+                    >
+                      All → B2
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleClearAllStudentBatches}
+                      className="rounded-lg border border-slate-200 bg-white hover:bg-red-50 hover:text-red-600 px-2.5 py-1 text-[11px] font-semibold text-slate-600 cursor-pointer shadow-2xs transition-all"
+                    >
+                      Reset All
+                    </button>
+                  </div>
+                </div>
+
+                {/* Individual Batch PIN Range Allocation Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs items-start">
+                  {/* BATCH 1 CARD */}
+                  <div className="rounded-xl border border-indigo-200 bg-white p-3.5 space-y-3 shadow-2xs">
+                    {/* Header */}
+                    <div className="flex items-center justify-between pb-2 border-b border-indigo-100">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded bg-indigo-600 text-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
+                          Batch 1 (Slot A)
+                        </span>
+                        <span className="font-bold text-xs text-navy-950 truncate max-w-[160px]" title={b1Sub?.name || ""}>
+                          {b1Sub?.code ? `${b1Sub.code}: ${b1Sub.name}` : b1Sub?.name || "Batch 1 Subject"}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-indigo-800 bg-indigo-50 border border-indigo-200 rounded px-1.5 py-0.5">
+                        {countBatch1} assigned
+                      </span>
+                    </div>
+
+                    {/* Branches List for Batch 1 */}
+                    <div className="space-y-3 max-h-[460px] overflow-y-auto pr-0.5">
+                      {branchesWithStudents.map(({ branch, students: bStudents }) => {
+                        const b1AssignedCount = bStudents.filter((s) => studentBatchMap[s.id] === "Batch 1").length;
+                        const pinConfig = b1BranchPins[branch.id] || {
+                          fromPin: bStudents[0]?.pin_no || "",
+                          toPin: bStudents[bStudents.length - 1]?.pin_no || "",
+                        };
+
+                        return (
+                          <div
+                            key={branch.id}
+                            className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 space-y-2.5 shadow-2xs hover:border-indigo-200 transition-colors"
+                          >
+                            {/* Branch Title & Quick Actions */}
+                            <div className="flex items-center justify-between gap-1.5 flex-wrap pb-1.5 border-b border-indigo-100/70">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Building2 className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                                <span className="font-bold text-xs text-navy-950 truncate">
+                                  {branch.code ? branch.code : branch.name}
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                                  ({bStudents.length} students)
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] font-bold text-indigo-800 bg-white border border-indigo-200 px-1.5 py-0.5 rounded">
+                                  {b1AssignedCount} in B1
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignBranchToBatch(branch.id, "Batch 1")}
+                                  className="rounded border border-indigo-200 bg-white hover:bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.5 text-[10px] cursor-pointer"
+                                  title={`Assign all ${branch.code || branch.name} students to Batch 1`}
+                                >
+                                  All → B1
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSplitBranch5050(branch.id)}
+                                  className="rounded border border-purple-200 bg-white hover:bg-purple-100 text-purple-800 font-bold px-1.5 py-0.5 text-[10px] cursor-pointer"
+                                  title={`Split ${branch.code || branch.name} students 50/50 between B1 & B2`}
+                                >
+                                  50/50
+                                </button>
+                              </div>
+                            </div>
+
+                            {bStudents.length === 0 ? (
+                              <p className="text-[11px] text-slate-400 italic py-1">No students registered in this branch.</p>
+                            ) : (
+                              <>
+                                {/* From PIN and To PIN dropdowns */}
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[9.5px] font-bold text-slate-500 uppercase block mb-0.5">
+                                      From PIN Dropdown
+                                    </label>
+                                    <select
+                                      value={pinConfig.fromPin}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setB1BranchPins((prev) => ({
+                                          ...prev,
+                                          [branch.id]: {
+                                            fromPin: val,
+                                            toPin: prev[branch.id]?.toPin || bStudents[bStudents.length - 1]?.pin_no || "",
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-mono font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                                    >
+                                      {bStudents.map((st, i) => (
+                                        <option key={st.id} value={st.pin_no || ""}>
+                                          #{i + 1}: {st.pin_no || st.admission_number} {st.student_name ? `- ${st.student_name.slice(0, 14)}` : ""}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label className="text-[9.5px] font-bold text-slate-500 uppercase block mb-0.5">
+                                      To PIN Dropdown
+                                    </label>
+                                    <select
+                                      value={pinConfig.toPin}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setB1BranchPins((prev) => ({
+                                          ...prev,
+                                          [branch.id]: {
+                                            fromPin: prev[branch.id]?.fromPin || bStudents[0]?.pin_no || "",
+                                            toPin: val,
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-mono font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
+                                    >
+                                      {bStudents.map((st, i) => (
+                                        <option key={st.id} value={st.pin_no || ""}>
+                                          #{i + 1}: {st.pin_no || st.admission_number} {st.student_name ? `- ${st.student_name.slice(0, 14)}` : ""}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Action Button */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleApplyB1BranchRange(branch.id)}
+                                  className="w-full h-7 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[11px] cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1"
+                                >
+                                  <span>Assign {branch.code || "Branch"} Range to Batch 1</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* BATCH 2 CARD */}
+                  <div className="rounded-xl border border-emerald-200 bg-white p-3.5 space-y-3 shadow-2xs">
+                    {/* Header */}
+                    <div className="flex items-center justify-between pb-2 border-b border-emerald-100">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded bg-emerald-600 text-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider">
+                          Batch 2 (Slot B)
+                        </span>
+                        <span className="font-bold text-xs text-navy-950 truncate max-w-[160px]" title={b2Sub?.name || ""}>
+                          {b2Sub?.code ? `${b2Sub.code}: ${b2Sub.name}` : b2Sub?.name || "Batch 2 Subject"}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+                        {countBatch2} assigned
+                      </span>
+                    </div>
+
+                    {/* Branches List for Batch 2 */}
+                    <div className="space-y-3 max-h-[460px] overflow-y-auto pr-0.5">
+                      {branchesWithStudents.map(({ branch, students: bStudents }) => {
+                        const b2AssignedCount = bStudents.filter((s) => studentBatchMap[s.id] === "Batch 2").length;
+                        const pinConfig = b2BranchPins[branch.id] || {
+                          fromPin: bStudents[0]?.pin_no || "",
+                          toPin: bStudents[bStudents.length - 1]?.pin_no || "",
+                        };
+
+                        return (
+                          <div
+                            key={branch.id}
+                            className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-3 space-y-2.5 shadow-2xs hover:border-emerald-200 transition-colors"
+                          >
+                            {/* Branch Title & Quick Actions */}
+                            <div className="flex items-center justify-between gap-1.5 flex-wrap pb-1.5 border-b border-emerald-100/70">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Building2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                                <span className="font-bold text-xs text-navy-950 truncate">
+                                  {branch.code ? branch.code : branch.name}
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">
+                                  ({bStudents.length} students)
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <span className="text-[10px] font-bold text-emerald-800 bg-white border border-emerald-200 px-1.5 py-0.5 rounded">
+                                  {b2AssignedCount} in B2
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAssignBranchToBatch(branch.id, "Batch 2")}
+                                  className="rounded border border-emerald-200 bg-white hover:bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 text-[10px] cursor-pointer"
+                                  title={`Assign all ${branch.code || branch.name} students to Batch 2`}
+                                >
+                                  All → B2
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSplitBranch5050(branch.id)}
+                                  className="rounded border border-purple-200 bg-white hover:bg-purple-100 text-purple-800 font-bold px-1.5 py-0.5 text-[10px] cursor-pointer"
+                                  title={`Split ${branch.code || branch.name} students 50/50 between B1 & B2`}
+                                >
+                                  50/50
+                                </button>
+                              </div>
+                            </div>
+
+                            {bStudents.length === 0 ? (
+                              <p className="text-[11px] text-slate-400 italic py-1">No students registered in this branch.</p>
+                            ) : (
+                              <>
+                                {/* From PIN and To PIN dropdowns */}
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-[9.5px] font-bold text-slate-500 uppercase block mb-0.5">
+                                      From PIN Dropdown
+                                    </label>
+                                    <select
+                                      value={pinConfig.fromPin}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setB2BranchPins((prev) => ({
+                                          ...prev,
+                                          [branch.id]: {
+                                            fromPin: val,
+                                            toPin: prev[branch.id]?.toPin || bStudents[bStudents.length - 1]?.pin_no || "",
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-mono font-semibold text-navy-950 focus:border-emerald-600 focus:outline-none"
+                                    >
+                                      {bStudents.map((st, i) => (
+                                        <option key={st.id} value={st.pin_no || ""}>
+                                          #{i + 1}: {st.pin_no || st.admission_number} {st.student_name ? `- ${st.student_name.slice(0, 14)}` : ""}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div>
+                                    <label className="text-[9.5px] font-bold text-slate-500 uppercase block mb-0.5">
+                                      To PIN Dropdown
+                                    </label>
+                                    <select
+                                      value={pinConfig.toPin}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setB2BranchPins((prev) => ({
+                                          ...prev,
+                                          [branch.id]: {
+                                            fromPin: prev[branch.id]?.fromPin || bStudents[0]?.pin_no || "",
+                                            toPin: val,
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-mono font-semibold text-navy-950 focus:border-emerald-600 focus:outline-none"
+                                    >
+                                      {bStudents.map((st, i) => (
+                                        <option key={st.id} value={st.pin_no || ""}>
+                                          #{i + 1}: {st.pin_no || st.admission_number} {st.student_name ? `- ${st.student_name.slice(0, 14)}` : ""}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                </div>
+
+                                {/* Action Button */}
+                                <button
+                                  type="button"
+                                  onClick={() => handleApplyB2BranchRange(branch.id)}
+                                  className="w-full h-7 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] cursor-pointer shadow-2xs transition-colors flex items-center justify-center gap-1"
+                                >
+                                  <span>Assign {branch.code || "Branch"} Range to Batch 2</span>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Individual Student Roster List */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+                {/* Search & Filter Bar */}
+                <div className="p-3 border-b border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                    <div className="relative flex-1 max-w-xs">
+                      <input
+                        type="text"
+                        placeholder="Search student PIN or Name..."
+                        value={studentSearch}
+                        onChange={(e) => setStudentSearch(e.target.value)}
+                        className="w-full h-7 rounded-lg border border-slate-200 bg-white pl-2 pr-6 text-[11px] focus:outline-none focus:border-indigo-600"
+                      />
+                      <Search className="h-3 w-3 text-slate-400 absolute right-2 top-2 pointer-events-none" />
+                    </div>
+
+                    {availableBranches.length > 1 && (
+                      <select
+                        value={studentBranchFilter}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setStudentBranchFilter(val === "all" ? "all" : Number(val));
+                        }}
+                        className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-[11px] font-semibold text-slate-700 focus:outline-none"
+                      >
+                        <option value="all">All Participating Branches</option>
+                        {availableBranches
+                          .filter((b) => participatingBranchIds.includes(b.id))
+                          .map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.code || b.name}
+                            </option>
+                          ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* Filter Tabs */}
+                  <div className="flex rounded-lg bg-slate-200/70 p-0.5 text-[11px] font-bold">
+                    {(["all", "Batch 1", "Batch 2", "unassigned"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setStudentTabFilter(tab)}
+                        className={cn(
+                          "px-2.5 py-1 rounded transition-all capitalize cursor-pointer",
+                          studentTabFilter === tab
+                            ? "bg-white text-navy-950 shadow-2xs"
+                            : "text-slate-600 hover:text-slate-900",
+                        )}
+                      >
+                        {tab === "all"
+                          ? `All (${students.length})`
+                          : tab === "Batch 1"
+                            ? `B1 (${countBatch1})`
+                            : tab === "Batch 2"
+                              ? `B2 (${countBatch2})`
+                              : `Unassigned (${countUnassigned})`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Students Table / List */}
+                <div className="max-h-[300px] overflow-y-auto divide-y divide-slate-100">
+                  {isLoadingStudents ? (
+                    <div className="flex flex-col items-center justify-center p-8 text-slate-500 gap-2">
+                      <Loader2 className="h-6 w-6 animate-spin text-indigo-600" />
+                      <span className="text-xs font-semibold">Loading students roster...</span>
+                    </div>
+                  ) : fetchError ? (
+                    <div className="p-6 text-center text-red-600 space-y-2">
+                      <p className="text-xs font-bold">{fetchError}</p>
+                      <button
+                        type="button"
+                        onClick={loadStudentRoster}
+                        className="text-xs font-semibold text-indigo-600 underline"
+                      >
+                        Retry Loading
+                      </button>
+                    </div>
+                  ) : filteredStudents.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      No students found matching current filters.
+                    </div>
+                  ) : (
+                    filteredStudents.map((st, idx) => {
+                      const assignedBatch = studentBatchMap[st.id];
+                      return (
+                        <div
+                          key={st.id}
+                          className="flex items-center justify-between px-3 py-2 hover:bg-slate-50/70 transition-colors text-xs"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="text-[10px] text-slate-400 font-mono w-6 text-right">
+                              #{idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold font-mono text-[11px] text-navy-950">
+                                  {st.pin_no || st.admission_number}
+                                </span>
+                                {st.branch_code && (
+                                  <span className="rounded bg-slate-100 text-slate-700 px-1 py-0.2 text-[9px] font-bold">
+                                    {st.branch_code}
+                                  </span>
+                                )}
+                                {st.section && (
+                                  <span className="rounded bg-slate-100 text-slate-500 px-1 py-0.2 text-[9px]">
+                                    Sec {st.section}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-600 truncate font-medium">
+                                {st.student_name || "—"}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Individual Toggle Buttons */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStudent(st.id, "Batch 1")}
+                              className={cn(
+                                "px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer",
+                                assignedBatch === "Batch 1"
+                                  ? "bg-indigo-600 text-white shadow-2xs"
+                                  : "border border-slate-200 text-slate-600 hover:border-indigo-400 hover:text-indigo-600 bg-white",
+                              )}
+                            >
+                              Batch 1
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleToggleStudent(st.id, "Batch 2")}
+                              className={cn(
+                                "px-2.5 py-1 rounded text-[11px] font-bold transition-all cursor-pointer",
+                                assignedBatch === "Batch 2"
+                                  ? "bg-emerald-600 text-white shadow-2xs"
+                                  : "border border-slate-200 text-slate-600 hover:border-emerald-400 hover:text-emerald-600 bg-white",
+                              )}
+                            >
+                              Batch 2
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
               </div>
             </div>
-
-            <select
-              value={facultyHrmsId}
-              onChange={(e) => setFacultyHrmsId(e.target.value)}
-              className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
-            >
-              <option value="">-- No Faculty / Unassigned --</option>
-              {filteredFaculty.map((f) => (
-                <option key={f.hrmsEmployeeId} value={f.hrmsEmployeeId}>
-                  {f.name} ({f.designation || f.department || f.hrmsEmployeeId})
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Room / Location */}
-          <div>
-            <label className="text-xs font-bold text-slate-700 uppercase mb-1.5 block">
-              Room / Lab / Location
-            </label>
-            <input
-              type="text"
-              placeholder="e.g. Room 301, ECE Lab, Seminar Hall"
-              value={roomLabel}
-              onChange={(e) => setRoomLabel(e.target.value)}
-              className="w-full h-9 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-navy-950 focus:border-indigo-600 focus:outline-none"
-            />
-            <div className="mt-1.5 flex flex-wrap gap-1">
-              {ROOM_SUGGESTIONS.map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => setRoomLabel(r)}
-                  className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] text-slate-600 hover:bg-slate-100 cursor-pointer"
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Footer */}
+        {/* Modal Footer */}
         <div className="border-t border-border bg-slate-50 px-5 py-3.5 flex items-center justify-between">
           <div>
-            {existing && (
+            {currentStep === 1 ? (
+              existing && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={onClear}
+                  className="text-xs text-red-600 hover:text-red-700 h-8 gap-1"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Remove Period
+                </Button>
+              )
+            ) : (
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={onClear}
-                className="text-xs text-red-600 hover:text-red-700 h-8 gap-1"
+                onClick={() => setCurrentStep(1)}
+                className="text-xs h-8 gap-1"
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                Remove Period
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back to Step 1
               </Button>
             )}
           </div>
@@ -1786,14 +3443,39 @@ function PeriodEditModal({
             <Button variant="secondary" size="sm" onClick={onClose} className="text-xs h-8">
               Cancel
             </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleApply}
-              className="text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white h-8"
-            >
-              Apply to Slot
-            </Button>
+
+            {currentStep === 1 ? (
+              isSplit ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleProceedToStep2}
+                  className="text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white h-8 gap-1"
+                >
+                  Next: Select Students (Step 2)
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </Button>
+              ) : (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleApplySingle}
+                  className="text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white h-8"
+                >
+                  Apply to Slot
+                </Button>
+              )
+            ) : (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleApplySplit}
+                className="text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white h-8 gap-1.5 shadow-xs"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Apply Split Slot ({countBatch1} + {countBatch2} students)
+              </Button>
+            )}
           </div>
         </div>
       </div>
