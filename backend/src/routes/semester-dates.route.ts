@@ -51,7 +51,6 @@ semesterDatesRouter.get(
       scopedFilters(req, { collegeId });
       const courseId = requiredNumber(req.query.courseId, "courseId");
       const batch = typeof req.query.batch === "string" ? req.query.batch.trim() : "";
-      if (!batch) throw Object.assign(new Error("batch is required"), { status: 400 });
       const grid = await getSemesterDatesGrid({ collegeId, courseId, batch });
       res.json(grid);
     } catch (error) {
@@ -88,9 +87,6 @@ semesterDatesRouter.put(
             ? body.endDate.trim()
             : null,
       });
-      if (!String(body.batch ?? "").trim()) {
-        throw Object.assign(new Error("batch is required"), { status: 400 });
-      }
       res.json({ data: result });
     } catch (error) {
       const status = statusFromAuthzError(error);

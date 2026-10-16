@@ -108,7 +108,7 @@ export function SemesterDatesView() {
   }, [collegeId, courseId]);
 
   useEffect(() => {
-    if (collegeId == null || courseId == null || !batch) {
+    if (collegeId == null || courseId == null) {
       setGrid(null);
       setDrafts({});
       return;
@@ -122,8 +122,8 @@ export function SemesterDatesView() {
         const params = new URLSearchParams({
           collegeId: String(collegeId),
           courseId: String(courseId),
-          batch,
         });
+        if (batch) params.set("batch", batch);
         const response = await apiFetch(`/semester-dates?${params}`, {
           cache: "no-store",
         });
@@ -229,7 +229,7 @@ export function SemesterDatesView() {
     }
   }
 
-  const ready = collegeId != null && courseId != null && Boolean(batch);
+  const ready = collegeId != null && courseId != null;
 
   return (
     <div>
@@ -348,7 +348,7 @@ export function SemesterDatesView() {
 
       {!ready ? (
         <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center text-sm text-slate-500">
-          Select college, course, and batch to load semester dates.
+          Select college and course to load semester dates.
         </div>
       ) : loading ? (
         <TableSkeleton columns={6} rows={5} showPagination={false} />
@@ -357,7 +357,7 @@ export function SemesterDatesView() {
           <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-4 py-3">
             <div>
               <h2 className="text-base font-semibold text-navy-900">
-                Semester Dates — Batch {grid.batch} · All Branches
+                Semester Dates{grid.batch ? ` — Batch ${grid.batch}` : ""} · All Branches
               </h2>
               <p className="mt-0.5 text-xs text-slate-500">
                 Years shown as Year-Sem (1-1, 1-2, 2-1, …). Start / end dates come from{" "}

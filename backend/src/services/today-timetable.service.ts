@@ -7,7 +7,7 @@ export type DailyTimetableFilter = {
   collegeId: number;
   courseId?: number;
   branchId: number;
-  batch: string;
+  batch?: string | null;
   semester: number;
   sectionName?: string | null;
   academicYear: string;
@@ -19,7 +19,7 @@ export type RecordPeriodOverrideInput = {
   collegeId: number;
   courseId: number;
   branchId: number;
-  batch: string;
+  batch?: string | null;
   semester: number;
   sectionName?: string | null;
   academicYear: string;
@@ -210,17 +210,20 @@ export async function getDailyTimetableData(filters: DailyTimetableFilter) {
   const conds: string[] = [
     "college_id = ?",
     "branch_id = ?",
-    "batch = ?",
     "semester = ?",
     "academic_year = ?",
   ];
   const params: unknown[] = [
     filters.collegeId,
     filters.branchId,
-    filters.batch,
     filters.semester,
     filters.academicYear,
   ];
+
+  if (filters.batch && filters.batch !== "all") {
+    conds.push("(batch = ? OR batch IS NULL OR batch = '')");
+    params.push(filters.batch);
+  }
 
   if (filters.courseId) {
     conds.push("course_id = ?");
@@ -394,7 +397,7 @@ export async function recordDailyTimetableChange(input: RecordPeriodOverrideInpu
         collegeId: input.collegeId,
         courseId: input.courseId,
         branchId: input.branchId,
-        batch: input.batch,
+        batch: input.batch ?? undefined,
         semester: input.semester,
         section: input.sectionName && input.sectionName !== "all" ? input.sectionName : undefined,
         academicYear: input.academicYear,
