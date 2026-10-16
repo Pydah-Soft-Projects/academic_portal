@@ -67,7 +67,7 @@ facultySubstitutionRouter.post(
       const batch = str(req.body?.batch);
       const sectionName = str(req.body?.sectionName);
       const timingSlotId = num(req.body?.timingSlotId);
-      if (!sessionDate || !collegeId || !courseId || !branchId || !batch || !sectionName || !timingSlotId) {
+      if (!sessionDate || !collegeId || !courseId || !branchId || !sectionName || !timingSlotId) {
         res.status(400).json({ message: "Missing required class resolution fields" });
         return;
       }
@@ -77,7 +77,7 @@ facultySubstitutionRouter.post(
           collegeId,
           courseId,
           branchId,
-          batch,
+          batch: batch ?? "",
           yearOfStudy: num(req.body?.yearOfStudy),
           semesterNumber: num(req.body?.semesterNumber),
           sectionName,
@@ -164,7 +164,7 @@ facultySubstitutionRouter.get(
       const branchId = num(req.query.branchId);
       const batch = str(req.query.batch);
       const sectionName = str(req.query.sectionName);
-      if (!sessionDate || !collegeId || !courseId || !branchId || !batch || !sectionName) {
+      if (!sessionDate || !collegeId || !courseId || !branchId || !sectionName) {
         res.status(400).json({ message: "Missing required period lookup fields" });
         return;
       }
@@ -174,7 +174,7 @@ facultySubstitutionRouter.get(
           collegeId,
           courseId,
           branchId,
-          batch,
+          batch: batch ?? "",
           yearOfStudy: num(req.query.yearOfStudy),
           semesterNumber: num(req.query.semesterNumber),
           sectionName,

@@ -184,7 +184,6 @@ export async function resolveClassAssignment(
     "p.college_id = ?",
     "p.course_id = ?",
     "p.branch_id = ?",
-    "p.batch = ?",
     "p.section_name = ?",
     "e.day_of_week = ?",
     "COALESCE(e.timing_slot_id, e.period_slot_id) = ?",
@@ -195,11 +194,15 @@ export async function resolveClassAssignment(
     input.collegeId,
     input.courseId,
     input.branchId,
-    input.batch,
     input.sectionName,
     dayOfWeek,
     input.timingSlotId,
   ];
+
+  if (input.batch && input.batch !== "all") {
+    where.push("(p.batch = ? OR p.batch IS NULL OR p.batch = '')");
+    params.push(input.batch);
+  }
 
   if (input.yearOfStudy != null) {
     where.push("p.year_of_study = ?");
@@ -534,7 +537,6 @@ export async function listTimingSlotsForSubstitution(
     "p.college_id = ?",
     "p.course_id = ?",
     "p.branch_id = ?",
-    "p.batch = ?",
     "p.section_name = ?",
     "e.day_of_week = ?",
     "e.subject_id IS NOT NULL",
@@ -544,10 +546,13 @@ export async function listTimingSlotsForSubstitution(
     input.collegeId,
     input.courseId,
     input.branchId,
-    input.batch,
     input.sectionName,
     dayOfWeek,
   ];
+  if (input.batch && input.batch !== "all") {
+    where.push("(p.batch = ? OR p.batch IS NULL OR p.batch = '')");
+    params.push(input.batch);
+  }
   if (input.yearOfStudy != null) {
     where.push("p.year_of_study = ?");
     params.push(input.yearOfStudy);

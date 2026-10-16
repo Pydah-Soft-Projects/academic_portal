@@ -50,9 +50,9 @@ catalogRouter.get(
       const courseId = num(req.query.courseId);
       const branchId = num(req.query.branchId);
       const batch = str(req.query.batch);
-      if (collegeId == null || courseId == null || branchId == null || !batch) {
+      if (collegeId == null || courseId == null || branchId == null) {
         res.status(400).json({
-          message: "collegeId, courseId, branchId, and batch are required",
+          message: "collegeId, courseId, and branchId are required",
         });
         return;
       }
@@ -61,7 +61,7 @@ catalogRouter.get(
         collegeId,
         courseId,
         branchId,
-        batch,
+        batch: batch ?? "",
       });
       res.json({ data });
     } catch (error) {
