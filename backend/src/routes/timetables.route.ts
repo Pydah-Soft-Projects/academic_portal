@@ -143,7 +143,7 @@ timetablesRouter.post("/timing", requirePermission("timetable.edit"), async (req
   }
 });
 
-timetablesRouter.get("/combined/overview", requirePermission("timetable.view"), async (req: AuthedRequest, res, next) => {
+timetablesRouter.get("/combined/overview", requirePermission("combined_timetable.view", "timetable.view"), async (req: AuthedRequest, res, next) => {
   try {
     const collegeId = num(req.query.collegeId);
     const courseId = num(req.query.courseId);
@@ -175,7 +175,7 @@ timetablesRouter.get("/combined/overview", requirePermission("timetable.view"), 
   }
 });
 
-timetablesRouter.get("/combined/subjects", requirePermission("timetable.view"), async (req: AuthedRequest, res, next) => {
+timetablesRouter.get("/combined/subjects", requirePermission("combined_timetable.view", "timetable.view"), async (req: AuthedRequest, res, next) => {
   try {
     const collegeId = num(req.query.collegeId);
     const courseId = num(req.query.courseId);
@@ -213,7 +213,7 @@ timetablesRouter.get("/combined/subjects", requirePermission("timetable.view"), 
   }
 });
 
-timetablesRouter.post("/combined/save", requirePermission("timetable.edit"), async (req: AuthedRequest, res, next) => {
+timetablesRouter.post("/combined/save", requirePermission("combined_timetable.edit", "combined_timetable.publish", "timetable.edit", "timetable.publish"), async (req: AuthedRequest, res, next) => {
   try {
     const body = req.body as {
       collegeId: number;
