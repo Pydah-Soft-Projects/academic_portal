@@ -170,7 +170,7 @@ export function LoginForm() {
 
   // Show universal workspace transition loader while verifying SSO token
   if (isVerifyingSso) {
-    return <pydah-sso-loader />;
+    return <pydah-sso-loader portal="academic-portal" />;
   }
 
   // Same markup on server + first client paint; auth UI only after hydrate.
