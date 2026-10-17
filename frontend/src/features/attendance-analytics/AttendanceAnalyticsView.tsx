@@ -21,12 +21,100 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
+  Building2,
+  Layers,
+  BookOpen,
+  ArrowRight,
+  ArrowLeft,
+  BarChart3,
+  Filter,
+  XCircle,
+  Sparkles,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { StatCardSkeleton } from "@/components/ui/CardSkeleton";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
 
 export type AttendanceMark = "present" | "absent" | "od" | "leave";
+
+export type SlotItem = {
+  sessionId: number;
+  slotLabel: string;
+  startTime: string;
+  endTime: string;
+  section: string | null;
+  subjectName: string | null;
+  subjectCode: string | null;
+  facultyName: string | null;
+  status: string;
+  posted: boolean;
+  presentCount: number;
+  absentCount: number;
+  odCount: number;
+  leaveCount: number;
+  attendancePct: number;
+};
+
+export type SectionSlotStats = {
+  sectionName: string;
+  totalStudents: number;
+  totalSessions: number;
+  postedSessions: number;
+  pendingSessions: number;
+  totalPresent: number;
+  totalAbsent: number;
+  slotPresentMarks?: number;
+  slotAbsentMarks?: number;
+  totalOd: number;
+  totalLeave: number;
+  attendancePct: number;
+  slots: SlotItem[];
+};
+
+export type CollegeCourseBranchYearSlotStats = {
+  collegeId: number;
+  collegeName: string;
+  collegeCode: string;
+  courseId: number;
+  courseName: string;
+  courseCode: string;
+  branchId: number;
+  branchName: string;
+  branchCode: string;
+  yearOfStudy: number;
+  yearLabel: string;
+  semesterNumber: number | null;
+  totalStudents: number;
+  totalSessions: number;
+  postedSessions: number;
+  pendingSessions: number;
+  totalPresent: number;
+  totalAbsent: number;
+  slotPresentMarks?: number;
+  slotAbsentMarks?: number;
+  totalOd: number;
+  totalLeave: number;
+  attendancePct: number;
+  sections?: SectionSlotStats[];
+  slots: SlotItem[];
+};
+
+export type SlotsAttendanceSummaryResult = {
+  date: string;
+  summary: {
+    totalColleges: number;
+    totalCourses: number;
+    totalBranches: number;
+    totalStudents: number;
+    totalSessions: number;
+    postedSessions: number;
+    pendingSessions: number;
+    overallPresent: number;
+    overallAbsent: number;
+    overallAttendancePct: number;
+  };
+  groups: CollegeCourseBranchYearSlotStats[];
+};
 
 export type DailySlot = {
   sessionId: number;
@@ -58,6 +146,8 @@ export type DailyStudent = {
   branch: string | null;
   year: number | null;
   semester: number | null;
+  studentStatus?: string | null;
+  studentType?: string | null;
   hasPhoto: boolean;
   slots: Record<
     number,
@@ -132,6 +222,8 @@ export type WeeklyStudent = {
   branch: string | null;
   year: number | null;
   semester: number | null;
+  studentStatus?: string | null;
+  studentType?: string | null;
   hasPhoto: boolean;
   days: Record<
     string,
@@ -193,6 +285,8 @@ export type MonthlyStudent = {
   branch: string | null;
   year: number | null;
   semester: number | null;
+  studentStatus?: string | null;
+  studentType?: string | null;
   hasPhoto: boolean;
   totalSlots: number;
   presentCount: number;
@@ -237,6 +331,8 @@ export type SemesterStudent = {
   branch: string | null;
   year: number | null;
   semester: number | null;
+  studentStatus?: string | null;
+  studentType?: string | null;
   hasPhoto: boolean;
   totalClasses: number;
   presentCount: number;
@@ -309,6 +405,7 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
   const [selectedSection, setSelectedSection] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedStudentType, setSelectedStudentType] = useState<string>("Regular");
 
   // Month & Semester Controls
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
@@ -351,6 +448,82 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
   const [semesterData, setSemesterData] = useState<SemesterAttendanceData | null>(null);
   const [overviewData, setOverviewData] = useState<OverviewAnalytics | null>(null);
 
+  // Slots Summary Data States (All Colleges Stats Format)
+  const [slotsSummaryData, setSlotsSummaryData] = useState<SlotsAttendanceSummaryResult | null>(null);
+  const [viewMode, setViewMode] = useState<"stats" | "sheet">(
+    filters.collegeId === "all" ? "stats" : "sheet",
+  );
+  const [slotsSearchQuery, setSlotsSearchQuery] = useState("");
+  const [slotsStatusFilter, setSlotsStatusFilter] = useState<"all" | "posted" | "pending" | "below65" | "above75">("all");
+  const [slotsTableViewMode, setSlotsTableViewMode] = useState<"bySection" | "byCohort">("bySection");
+  const [expandedCohortKeys, setExpandedCohortKeys] = useState<Set<string>>(new Set());
+  const [previewingSlotsSection, setPreviewingSlotsSection] = useState<{
+    cohortLabel: string;
+    sectionName: string;
+    slots: SlotItem[];
+  } | null>(null);
+  const [selectedCohortDetail, setSelectedCohortDetail] = useState<CollegeCourseBranchYearSlotStats | null>(null);
+
+  const toggleCohortExpand = (key: string) => {
+    setExpandedCohortKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const expandAllCohorts = () => {
+    setExpandedCohortKeys(
+      new Set(
+        filteredSlotsGroups.map(
+          (g) => `${g.collegeId}-${g.courseId}-${g.branchId}-${g.yearOfStudy}`,
+        ),
+      ),
+    );
+  };
+
+  const collapseAllCohorts = () => {
+    setExpandedCohortKeys(new Set());
+  };
+
+  // Sync viewMode when filters.collegeId changes to 'all'
+  useEffect(() => {
+    if (filters.collegeId === "all" && !selectedCohortDetail) {
+      setViewMode("stats");
+    }
+  }, [filters.collegeId, selectedCohortDetail]);
+
+  const handleLoadCohortDetails = (
+    group: CollegeCourseBranchYearSlotStats,
+    sectionName?: string,
+  ) => {
+    setSelectedCohortDetail(group);
+    const targetSection =
+      sectionName ||
+      (group.sections && group.sections.length > 0 ? group.sections[0].sectionName : "") ||
+      (group.slots.length > 0 && group.slots[0].section ? group.slots[0].section : "");
+
+    setFilters({
+      collegeId: group.collegeId,
+      courseId: group.courseId,
+      branchId: group.branchId,
+      year: group.yearOfStudy,
+      ...(group.semesterNumber ? { semester: group.semesterNumber } : {}),
+      ...(targetSection ? { section: targetSection } : {}),
+    });
+    if (targetSection) {
+      setSelectedSection(targetSection);
+    }
+    setViewMode("sheet");
+  };
+
+  const handleBackToStats = () => {
+    setViewMode("stats");
+    setSelectedCohortDetail(null);
+    setFilters({ collegeId: "all", courseId: "all", branchId: "all", year: "all" });
+  };
+
   // Loading & Error States
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -383,6 +556,9 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     }
     const sec = selectedSection || (filters.section !== "all" ? filters.section : "");
     if (sec && sec !== "all") params.set("section", sec);
+    if (selectedStudentType) {
+      params.set("studentStatus", selectedStudentType);
+    }
     return params;
   }, [
     filters.collegeId,
@@ -394,6 +570,7 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     filters.academicYear,
     filters.section,
     selectedSection,
+    selectedStudentType,
   ]);
 
   // Load Data based on activeTab
@@ -409,16 +586,35 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
           if (selectedSemester) {
             params.set("semester", String(selectedSemester));
           }
-          const res = await apiFetch(`/attendance/analytics/daily?${params.toString()}`, {
-            cache: "no-store",
-          });
-          const body = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(body.message || "Failed to load day attendance sheet");
-          if (!cancelled) {
-            const data = body as DailyAttendanceData;
-            setDailyData(data);
-            if (!selectedSection && data.section) {
-              setSelectedSection(data.section);
+
+          // 1. If in stats mode or on all colleges, load slots summary
+          if (viewMode === "stats" || filters.collegeId === "all") {
+            try {
+              const sumRes = await apiFetch(`/attendance/analytics/slots-summary?${params.toString()}`, {
+                cache: "no-store",
+              });
+              const sumBody = await sumRes.json().catch(() => ({}));
+              if (sumRes.ok && !cancelled) {
+                setSlotsSummaryData(sumBody as SlotsAttendanceSummaryResult);
+              }
+            } catch {
+              // Ignore non-fatal
+            }
+          }
+
+          // 2. If in sheet mode or a specific college/cohort is selected, load the daily sheet
+          if (viewMode === "sheet" || filters.collegeId !== "all" || selectedCohortDetail) {
+            const res = await apiFetch(`/attendance/analytics/daily?${params.toString()}`, {
+              cache: "no-store",
+            });
+            const body = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(body.message || "Failed to load day attendance sheet");
+            if (!cancelled) {
+              const data = body as DailyAttendanceData;
+              setDailyData(data);
+              if (!selectedSection && data.section) {
+                setSelectedSection(data.section);
+              }
             }
           }
         } else if (activeTab === "week") {
@@ -497,6 +693,9 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     selectedYear,
     selectedSemester,
     selectedSection,
+    viewMode,
+    filters.collegeId,
+    selectedCohortDetail,
   ]);
 
   // Quick Date Jump Handlers
@@ -540,6 +739,14 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     if (!dailyData?.students) return [];
     let list = dailyData.students;
 
+    if (selectedStudentType && selectedStudentType !== "all") {
+      list = list.filter(
+        (s) =>
+          (s.studentStatus || "Regular").toLowerCase() ===
+          selectedStudentType.toLowerCase(),
+      );
+    }
+
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter(
@@ -561,13 +768,21 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     }
 
     return list;
-  }, [dailyData?.students, searchQuery, statusFilter]);
+  }, [dailyData?.students, searchQuery, statusFilter, selectedStudentType]);
 
   // Filtered Students for Week Tab
   const filteredWeeklyStudents = useMemo(() => {
     if (!weeklyData?.students) return [];
     let list = weeklyData.students;
 
+    if (selectedStudentType && selectedStudentType !== "all") {
+      list = list.filter(
+        (s) =>
+          (s.studentStatus || "Regular").toLowerCase() ===
+          selectedStudentType.toLowerCase(),
+      );
+    }
+
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter(
@@ -589,12 +804,20 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     }
 
     return list;
-  }, [weeklyData?.students, searchQuery, statusFilter]);
+  }, [weeklyData?.students, searchQuery, statusFilter, selectedStudentType]);
 
   // Filtered Students for Month Tab
   const filteredMonthlyStudents = useMemo(() => {
     if (!monthlyData?.students) return [];
     let list = monthlyData.students;
+
+    if (selectedStudentType && selectedStudentType !== "all") {
+      list = list.filter(
+        (s) =>
+          (s.studentStatus || "Regular").toLowerCase() ===
+          selectedStudentType.toLowerCase(),
+      );
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
@@ -615,12 +838,20 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     }
 
     return list;
-  }, [monthlyData?.students, searchQuery, statusFilter]);
+  }, [monthlyData?.students, searchQuery, statusFilter, selectedStudentType]);
 
   // Filtered Students for Semester Tab
   const filteredSemesterStudents = useMemo(() => {
     if (!semesterData?.students) return [];
     let list = semesterData.students;
+
+    if (selectedStudentType && selectedStudentType !== "all") {
+      list = list.filter(
+        (s) =>
+          (s.studentStatus || "Regular").toLowerCase() ===
+          selectedStudentType.toLowerCase(),
+      );
+    }
 
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
@@ -641,14 +872,194 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
     }
 
     return list;
-  }, [semesterData?.students, searchQuery, statusFilter]);
+  }, [semesterData?.students, searchQuery, statusFilter, selectedStudentType]);
+
+  // Filtered Slots Groups for All Colleges Stats Format
+  const filteredSlotsGroups = useMemo(() => {
+    if (!slotsSummaryData?.groups) return [];
+    let list = slotsSummaryData.groups;
+
+    if (slotsSearchQuery.trim()) {
+      const q = slotsSearchQuery.trim().toLowerCase();
+      list = list.filter((g) => {
+        const matchBasic =
+          g.collegeName.toLowerCase().includes(q) ||
+          g.collegeCode.toLowerCase().includes(q) ||
+          g.courseName.toLowerCase().includes(q) ||
+          g.courseCode.toLowerCase().includes(q) ||
+          g.branchName.toLowerCase().includes(q) ||
+          g.branchCode.toLowerCase().includes(q) ||
+          g.yearLabel.toLowerCase().includes(q);
+
+        if (matchBasic) return true;
+
+        return g.slots.some(
+          (s) =>
+            (s.subjectName && s.subjectName.toLowerCase().includes(q)) ||
+            (s.subjectCode && s.subjectCode.toLowerCase().includes(q)) ||
+            (s.facultyName && s.facultyName.toLowerCase().includes(q)) ||
+            s.slotLabel.toLowerCase().includes(q) ||
+            (s.section && s.section.toLowerCase().includes(q)) ||
+            (g.sections && g.sections.some((sec) => sec.sectionName.toLowerCase().includes(q))),
+        );
+      });
+    }
+
+    if (slotsStatusFilter === "posted") {
+      list = list.filter((g) => g.postedSessions > 0);
+    } else if (slotsStatusFilter === "pending") {
+      list = list.filter((g) => g.pendingSessions > 0);
+    } else if (slotsStatusFilter === "below65") {
+      list = list.filter((g) => g.attendancePct < 65 && g.postedSessions > 0);
+    } else if (slotsStatusFilter === "above75") {
+      list = list.filter((g) => g.attendancePct >= 75 && g.postedSessions > 0);
+    }
+
+    return list;
+  }, [slotsSummaryData?.groups, slotsSearchQuery, slotsStatusFilter]);
+
+  // Flattened Section Rows for Section-Wise Dynamic Table
+  type SectionTableRow = {
+    group: CollegeCourseBranchYearSlotStats;
+    section: SectionSlotStats;
+    rowKey: string;
+  };
+
+  const flattenedSectionRows = useMemo<SectionTableRow[]>(() => {
+    const rows: SectionTableRow[] = [];
+    const q = slotsSearchQuery.trim().toLowerCase();
+
+    filteredSlotsGroups.forEach((group) => {
+      const cohortKey = `${group.collegeId}-${group.courseId}-${group.branchId}-${group.yearOfStudy}`;
+      const groupSections: SectionSlotStats[] =
+        group.sections && group.sections.length > 0
+          ? group.sections
+          : [
+              {
+                sectionName: "A",
+                totalStudents: group.totalStudents,
+                totalSessions: group.totalSessions,
+                postedSessions: group.postedSessions,
+                pendingSessions: group.pendingSessions,
+                totalPresent: group.totalPresent,
+                totalAbsent: group.totalAbsent,
+                totalOd: group.totalOd,
+                totalLeave: group.totalLeave,
+                attendancePct: group.attendancePct,
+                slots: group.slots,
+              },
+            ];
+
+      groupSections.forEach((sec) => {
+        // Apply status filter to section if specified
+        if (slotsStatusFilter === "posted" && sec.postedSessions === 0) return;
+        if (slotsStatusFilter === "pending" && sec.pendingSessions === 0) return;
+        if (slotsStatusFilter === "below65" && (sec.attendancePct >= 65 || sec.postedSessions === 0)) return;
+        if (slotsStatusFilter === "above75" && (sec.attendancePct < 75 || sec.postedSessions === 0)) return;
+
+        // Apply search query to section if specific
+        if (q) {
+          const matchCohort =
+            group.collegeName.toLowerCase().includes(q) ||
+            group.collegeCode.toLowerCase().includes(q) ||
+            group.courseName.toLowerCase().includes(q) ||
+            group.courseCode.toLowerCase().includes(q) ||
+            group.branchName.toLowerCase().includes(q) ||
+            group.branchCode.toLowerCase().includes(q) ||
+            group.yearLabel.toLowerCase().includes(q);
+
+          const matchSection =
+            sec.sectionName.toLowerCase().includes(q) ||
+            `sec ${sec.sectionName.toLowerCase()}`.includes(q) ||
+            `section ${sec.sectionName.toLowerCase()}`.includes(q);
+
+          const matchSlots = sec.slots.some(
+            (s) =>
+              (s.subjectName && s.subjectName.toLowerCase().includes(q)) ||
+              (s.subjectCode && s.subjectCode.toLowerCase().includes(q)) ||
+              (s.facultyName && s.facultyName.toLowerCase().includes(q)) ||
+              s.slotLabel.toLowerCase().includes(q),
+          );
+
+          if (!matchCohort && !matchSection && !matchSlots) return;
+        }
+
+        rows.push({
+          group,
+          section: sec,
+          rowKey: `${cohortKey}-${sec.sectionName}`,
+        });
+      });
+    });
+
+    return rows;
+  }, [filteredSlotsGroups, slotsSearchQuery, slotsStatusFilter]);
+
+  const tableSummary = useMemo(() => {
+    let totalSections = flattenedSectionRows.length;
+    let totalStudents = 0;
+    let totalPresent = 0;
+    let totalAbsent = 0;
+    let totalSlots = 0;
+    let conductedSlots = 0;
+
+    flattenedSectionRows.forEach((r) => {
+      totalStudents += r.section.totalStudents;
+      totalPresent += r.section.totalPresent;
+      totalAbsent += r.section.totalAbsent;
+      totalSlots += r.section.totalSessions;
+      conductedSlots += r.section.postedSessions;
+    });
+
+    const totalMarks = totalPresent + totalAbsent;
+    const avgAttendancePct = totalMarks > 0 ? Math.round((totalPresent / totalMarks) * 100) : 0;
+
+    return {
+      totalSections,
+      totalStudents,
+      totalPresent,
+      totalAbsent,
+      totalSlots,
+      conductedSlots,
+      avgAttendancePct,
+    };
+  }, [flattenedSectionRows]);
 
   // Export Table to CSV
   const handleExportCSV = () => {
     let csvContent = "";
     let fileName = `attendance_analytics_${activeTab}.csv`;
 
-    if (activeTab === "today" && dailyData) {
+    if (activeTab === "today" && viewMode === "stats" && slotsSummaryData) {
+      fileName = `attendance_reports_sections_${selectedDate}.csv`;
+      csvContent = `S.No,College,Course,Branch,Year,Semester,Section,Strength,Total Slots,Conducted Slots,Pending Slots,Present,Absent,OD,Leave,Attendance Pct\n`;
+      let sNo = 1;
+      filteredSlotsGroups.forEach((g) => {
+        const sem = g.semesterNumber ? `Sem ${g.semesterNumber}` : "—";
+        const sectionsToExport =
+          g.sections && g.sections.length > 0
+            ? g.sections
+            : [
+                {
+                  sectionName: "A",
+                  totalStudents: g.totalStudents,
+                  totalSessions: g.totalSessions,
+                  postedSessions: g.postedSessions,
+                  pendingSessions: g.pendingSessions,
+                  totalPresent: g.totalPresent,
+                  totalAbsent: g.totalAbsent,
+                  totalOd: g.totalOd,
+                  totalLeave: g.totalLeave,
+                  attendancePct: g.attendancePct,
+                  slots: g.slots,
+                },
+              ];
+
+        sectionsToExport.forEach((sec) => {
+          csvContent += `${sNo++},"${g.collegeName.replace(/"/g, '""')}","${g.courseName.replace(/"/g, '""')}","${g.branchName.replace(/"/g, '""')}","${g.yearLabel}","${sem}","Sec ${sec.sectionName}",${sec.totalStudents},${sec.totalSessions},${sec.postedSessions},${sec.pendingSessions},${sec.totalPresent},${sec.totalAbsent},${sec.totalOd},${sec.totalLeave},"${sec.attendancePct}%"\n`;
+        });
+      });
+    } else if (activeTab === "today" && dailyData) {
       fileName = `daily_attendance_${selectedDate}_${dailyData.section || "section"}.csv`;
       const slotHeaders = dailyData.slots
         .map((s) => `"${s.slotLabel} (${s.time}) - ${s.subjectCode || "Class"}"`)
@@ -779,11 +1190,15 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
             >
               <Clock className="h-3.5 w-3.5" />
               <span>Today (Slots)</span>
-              {dailyData?.slots && dailyData.slots.length > 0 && (
+              {viewMode === "stats" && slotsSummaryData?.summary?.totalSessions ? (
+                <span className="rounded bg-navy-100 px-1.5 py-0.2 text-[10px] text-navy-800 font-bold">
+                  {slotsSummaryData.summary.totalSessions}
+                </span>
+              ) : dailyData?.slots && dailyData.slots.length > 0 ? (
                 <span className="rounded bg-navy-100 px-1.5 py-0.2 text-[10px] text-navy-800 font-bold">
                   {dailyData.slots.length}
                 </span>
-              )}
+              ) : null}
             </button>
 
             <button
@@ -923,7 +1338,50 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
                 Yesterday
               </button>
 
-              {sectionsList.length > 0 && (
+              {/* View Mode Toggle: All Colleges Stats Format vs Section Attendance Sheet */}
+              <div className="flex items-center rounded-md border border-slate-200 bg-slate-100 p-0.5 ml-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setViewMode("stats");
+                    setSelectedCohortDetail(null);
+                  }}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-semibold transition-all",
+                    viewMode === "stats"
+                      ? "bg-white text-navy-900 shadow-2xs font-bold"
+                      : "text-slate-600 hover:text-slate-900",
+                  )}
+                  title="Aggregated College, Course, Branch, Year slots statistics"
+                >
+                  <BarChart3 className="h-3.5 w-3.5 text-navy-700" />
+                  <span>Stats Format</span>
+                  {slotsSummaryData?.groups && (
+                    <span className="rounded-full bg-navy-100 px-1.5 py-0.2 text-[10px] font-bold text-navy-800">
+                      {slotsSummaryData.groups.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("sheet")}
+                  className={cn(
+                    "flex items-center gap-1.5 rounded px-2 py-0.5 text-xs font-semibold transition-all",
+                    viewMode === "sheet"
+                      ? "bg-white text-navy-900 shadow-2xs font-bold"
+                      : "text-slate-600 hover:text-slate-900",
+                  )}
+                  title="Section student-by-student daily attendance roster"
+                >
+                  <Layers className="h-3.5 w-3.5 text-slate-700" />
+                  <span>Section Sheet</span>
+                  {selectedCohortDetail && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  )}
+                </button>
+              </div>
+
+              {viewMode === "sheet" && sectionsList.length > 0 && (
                 <div className="flex items-center gap-1 ml-1 pl-2 border-l border-slate-200">
                   <span className="text-slate-500 font-medium">Sec:</span>
                   <select
@@ -1099,15 +1557,67 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
               </select>
             </div>
           )}
+          {/* Student Type Selection (Defaults to Regular students only) */}
+          <div className="flex items-center gap-1.5 ml-1 pl-2 border-l border-slate-200">
+            <span className="text-slate-500 font-medium">Type:</span>
+            <select
+              value={selectedStudentType}
+              onChange={(e) => setSelectedStudentType(e.target.value)}
+              className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-semibold text-slate-800 outline-none hover:bg-white focus:bg-white cursor-pointer"
+              title="Student Type selection (defaults to Regular students only)"
+            >
+              <option value="Regular">Regular Only</option>
+              <option value="all">All Students</option>
+            </select>
+          </div>
         </div>
 
         {/* Center: Sleek Inline Summary Chips (Replacing the huge stat boxes!) */}
         <div className="flex flex-wrap items-center gap-2">
-          {activeTab === "today" && dailyData && (
+          {activeTab === "today" && viewMode === "stats" && slotsSummaryData && (
+            <>
+              <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                <Building2 className="h-3 w-3 text-slate-500" />
+                <span>{slotsSummaryData.summary.totalColleges} Colleges</span>
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                <Users className="h-3 w-3 text-slate-500" />
+                <span>
+                  {slotsSummaryData.summary.totalStudents.toLocaleString()}{" "}
+                  {selectedStudentType === "Regular" ? "Regular Students" : "Students"}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-md bg-navy-50 px-2 py-0.5 text-xs font-semibold text-navy-800">
+                <Clock className="h-3 w-3 text-navy-600" />
+                <span>{slotsSummaryData.summary.postedSessions}/{slotsSummaryData.summary.totalSessions} Slots</span>
+              </span>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-bold",
+                  slotsSummaryData.summary.overallAttendancePct >= 75
+                    ? "bg-emerald-50 text-emerald-800"
+                    : "bg-amber-50 text-amber-800",
+                )}
+              >
+                <TrendingUp className="h-3 w-3" />
+                <span>{slotsSummaryData.summary.overallAttendancePct}% Avg</span>
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-md bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600 border border-slate-200">
+                <span className="text-emerald-700 font-bold">{slotsSummaryData.summary.overallPresent}P</span>
+                <span>/</span>
+                <span className="text-rose-700 font-bold">{slotsSummaryData.summary.overallAbsent}A</span>
+              </span>
+            </>
+          )}
+
+          {activeTab === "today" && viewMode === "sheet" && dailyData && (
             <>
               <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
                 <Users className="h-3 w-3 text-slate-500" />
-                <span>{dailyData.summary.totalStudents} Students</span>
+                <span>
+                  {dailyData.summary.totalStudents}{" "}
+                  {selectedStudentType === "Regular" ? "Regular Students" : "Students"}
+                </span>
               </span>
               <span className="inline-flex items-center gap-1 rounded-md bg-navy-50 px-2 py-0.5 text-xs font-semibold text-navy-800">
                 <Clock className="h-3 w-3 text-navy-600" />
@@ -1136,7 +1646,10 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
             <>
               <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
                 <Users className="h-3 w-3 text-slate-500" />
-                <span>{weeklyData.summary.totalStudents} Students</span>
+                <span>
+                  {weeklyData.summary.totalStudents}{" "}
+                  {selectedStudentType === "Regular" ? "Regular Students" : "Students"}
+                </span>
               </span>
               <span className="inline-flex items-center gap-1 rounded-md bg-navy-50 px-2 py-0.5 text-xs font-semibold text-navy-800">
                 <Clock className="h-3 w-3 text-navy-600" />
@@ -1165,7 +1678,10 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
             <>
               <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
                 <Users className="h-3 w-3 text-slate-500" />
-                <span>{monthlyData.summary.totalStudents} Students</span>
+                <span>
+                  {monthlyData.summary.totalStudents}{" "}
+                  {selectedStudentType === "Regular" ? "Regular Students" : "Students"}
+                </span>
               </span>
               <span className="inline-flex items-center gap-1 rounded-md bg-navy-50 px-2 py-0.5 text-xs font-semibold text-navy-800">
                 <span>{monthlyData.summary.totalSessionsConducted} Sessions</span>
@@ -1180,7 +1696,10 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
             <>
               <span className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
                 <Users className="h-3 w-3 text-slate-500" />
-                <span>{semesterData.summary.totalStudents} Students</span>
+                <span>
+                  {semesterData.summary.totalStudents}{" "}
+                  {selectedStudentType === "Regular" ? "Regular Students" : "Students"}
+                </span>
               </span>
               <span className="inline-flex items-center gap-1 rounded-md bg-emerald-50 px-2 py-0.5 text-xs font-bold text-emerald-800">
                 <span>{semesterData.summary.eligibleCount} Eligible</span>
@@ -1198,130 +1717,210 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
         {/* Right Side: Search & Quick Status Filters */}
         {activeTab !== "overview" && (
           <div className="flex items-center gap-2 ml-auto">
-            <div className="relative w-40 sm:w-48">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search PIN / Name..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full rounded-md border border-slate-200 bg-slate-50 pl-7 pr-2 py-1 text-xs text-slate-800 placeholder-slate-400 outline-none focus:bg-white focus:border-navy-700"
-              />
-            </div>
+            {activeTab === "today" && viewMode === "stats" ? (
+              <>
+                <div className="relative w-44 sm:w-56">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search College, Branch..."
+                    value={slotsSearchQuery}
+                    onChange={(e) => setSlotsSearchQuery(e.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-slate-50 pl-7 pr-2 py-1 text-xs text-slate-800 placeholder-slate-400 outline-none focus:bg-white focus:border-navy-700"
+                  />
+                </div>
 
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setStatusFilter("all")}
-                className={cn(
-                  "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                  statusFilter === "all"
-                    ? "bg-slate-800 text-white"
-                    : "bg-slate-100 text-slate-600 hover:bg-slate-200",
-                )}
-              >
-                All
-              </button>
-
-              {(activeTab === "today" || activeTab === "week") && (
-                <>
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setStatusFilter("present")}
+                    onClick={() => setSlotsStatusFilter("all")}
                     className={cn(
                       "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "present"
+                      slotsStatusFilter === "all"
+                        ? "bg-slate-800 text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200",
+                    )}
+                  >
+                    All ({slotsSummaryData?.groups?.length || 0})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSlotsStatusFilter("posted")}
+                    className={cn(
+                      "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                      slotsStatusFilter === "posted"
                         ? "bg-emerald-700 text-white"
                         : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
                     )}
                   >
-                    Present
+                    Posted
                   </button>
                   <button
                     type="button"
-                    onClick={() => setStatusFilter("absent")}
+                    onClick={() => setSlotsStatusFilter("pending")}
                     className={cn(
                       "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "absent"
-                        ? "bg-rose-700 text-white"
-                        : "bg-rose-50 text-rose-700 hover:bg-rose-100",
-                    )}
-                  >
-                    Absent
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStatusFilter("below75")}
-                    className={cn(
-                      "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "below75"
+                      slotsStatusFilter === "pending"
                         ? "bg-amber-700 text-white"
                         : "bg-amber-50 text-amber-700 hover:bg-amber-100",
                     )}
                   >
-                    &lt;75%
-                  </button>
-                </>
-              )}
-
-              {activeTab === "month" && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => setStatusFilter("safe")}
-                    className={cn(
-                      "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "safe"
-                        ? "bg-emerald-700 text-white"
-                        : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
-                    )}
-                  >
-                    Safe
+                    Pending
                   </button>
                   <button
                     type="button"
-                    onClick={() => setStatusFilter("critical")}
+                    onClick={() => setSlotsStatusFilter("below65")}
                     className={cn(
                       "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "critical"
+                      slotsStatusFilter === "below65"
                         ? "bg-rose-700 text-white"
                         : "bg-rose-50 text-rose-700 hover:bg-rose-100",
                     )}
                   >
-                    Critical
+                    &lt;65%
                   </button>
-                </>
-              )}
-
-              {activeTab === "semester" && (
-                <>
                   <button
                     type="button"
-                    onClick={() => setStatusFilter("eligible")}
+                    onClick={() => setSlotsStatusFilter("above75")}
                     className={cn(
                       "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "eligible"
+                      slotsStatusFilter === "above75"
                         ? "bg-emerald-700 text-white"
                         : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
                     )}
                   >
-                    Eligible
+                    &ge;75%
                   </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="relative w-40 sm:w-48">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search PIN / Name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full rounded-md border border-slate-200 bg-slate-50 pl-7 pr-2 py-1 text-xs text-slate-800 placeholder-slate-400 outline-none focus:bg-white focus:border-navy-700"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => setStatusFilter("detained")}
+                    onClick={() => setStatusFilter("all")}
                     className={cn(
                       "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
-                      statusFilter === "detained"
-                        ? "bg-rose-700 text-white"
-                        : "bg-rose-50 text-rose-700 hover:bg-rose-100",
+                      statusFilter === "all"
+                        ? "bg-slate-800 text-white"
+                        : "bg-slate-100 text-slate-600 hover:bg-slate-200",
                     )}
                   >
-                    Detained
+                    All
                   </button>
-                </>
-              )}
-            </div>
+
+                  {(activeTab === "today" || activeTab === "week") && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("present")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "present"
+                            ? "bg-emerald-700 text-white"
+                            : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+                        )}
+                      >
+                        Present
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("absent")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "absent"
+                            ? "bg-rose-700 text-white"
+                            : "bg-rose-50 text-rose-700 hover:bg-rose-100",
+                        )}
+                      >
+                        Absent
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("below75")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "below75"
+                            ? "bg-amber-700 text-white"
+                            : "bg-amber-50 text-amber-700 hover:bg-amber-100",
+                        )}
+                      >
+                        &lt;75%
+                      </button>
+                    </>
+                  )}
+
+                  {activeTab === "month" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("safe")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "safe"
+                            ? "bg-emerald-700 text-white"
+                            : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+                        )}
+                      >
+                        Safe
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("critical")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "critical"
+                            ? "bg-rose-700 text-white"
+                            : "bg-rose-50 text-rose-700 hover:bg-rose-100",
+                        )}
+                      >
+                        Critical
+                      </button>
+                    </>
+                  )}
+
+                  {activeTab === "semester" && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("eligible")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "eligible"
+                            ? "bg-emerald-700 text-white"
+                            : "bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+                        )}
+                      >
+                        Eligible
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setStatusFilter("detained")}
+                        className={cn(
+                          "rounded px-2 py-0.5 text-[11px] font-semibold transition-colors",
+                          statusFilter === "detained"
+                            ? "bg-rose-700 text-white"
+                            : "bg-rose-50 text-rose-700 hover:bg-rose-100",
+                        )}
+                      >
+                        Detained
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -1347,18 +1946,881 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
           {/* ======================================================== */}
           {/* TAB 1: TODAY (DAY TIMETABLE SLOTS)                        */}
           {/* ======================================================== */}
-          {activeTab === "today" && dailyData && (
-            <div>
-              {dailyData.slots.length === 0 ? (
-                <Card className="p-8 text-center text-slate-500">
-                  <Clock className="mx-auto h-8 w-8 text-slate-300 mb-2" />
-                  <p className="font-semibold text-slate-700">No timetable slots scheduled for this date.</p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Select a working class day or ensure timetable plans are published for this cohort.
-                  </p>
-                </Card>
-              ) : (
-                <div className="rounded-lg border border-slate-200 bg-white shadow-2xs overflow-hidden">
+          {activeTab === "today" && (
+            viewMode === "stats" || (filters.collegeId === "all" && !selectedCohortDetail) ? (
+              <div className="space-y-4 portal-fade-in">
+                {/* Executive KPI Cards (5 Cards) */}
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 sm:gap-3">
+                  {/* Card 1: Colleges Covered */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs hover:shadow-xs transition-shadow">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider">Colleges Covered</span>
+                      <div className="rounded-lg bg-indigo-50 p-1.5 text-indigo-600">
+                        <Building2 className="h-4 w-4" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-bold text-navy-950">
+                      {slotsSummaryData?.summary.totalColleges || 0}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Institutions reporting today
+                    </div>
+                  </div>
+
+                  {/* Card 2: Programs & Branches */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs hover:shadow-xs transition-shadow">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider">Academic Streams</span>
+                      <div className="rounded-lg bg-sky-50 p-1.5 text-sky-600">
+                        <Layers className="h-4 w-4" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-bold text-navy-950">
+                      {slotsSummaryData?.summary.totalCourses || 0} Courses &bull; {slotsSummaryData?.summary.totalBranches || 0} Branches
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      {slotsSummaryData?.groups.length || 0} active cohort streams
+                    </div>
+                  </div>
+
+                  {/* Card 3: Total Enrolled Students */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs hover:shadow-xs transition-shadow">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider">Enrolled Students</span>
+                      <div className="rounded-lg bg-emerald-50 p-1.5 text-emerald-600">
+                        <Users className="h-4 w-4" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-bold text-emerald-900">
+                      {(slotsSummaryData?.summary.totalStudents || 0).toLocaleString()}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Across all batches &amp; sections
+                    </div>
+                  </div>
+
+                  {/* Card 4: Slots Conducted Today */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs hover:shadow-xs transition-shadow">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider">Timetable Slots</span>
+                      <div className="rounded-lg bg-amber-50 p-1.5 text-amber-600">
+                        <Clock className="h-4 w-4" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-bold text-navy-950">
+                      {slotsSummaryData?.summary.postedSessions || 0} / {slotsSummaryData?.summary.totalSessions || 0}
+                    </div>
+                    <div className="text-[10px] text-amber-700 font-medium mt-0.5">
+                      {slotsSummaryData?.summary.pendingSessions || 0} sessions pending posting
+                    </div>
+                  </div>
+
+                  {/* Card 5: Overall Attendance Rate */}
+                  <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-2xs hover:shadow-xs transition-shadow col-span-2 sm:col-span-1">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider">Campus Attendance</span>
+                      <div className="rounded-lg bg-purple-50 p-1.5 text-purple-600">
+                        <TrendingUp className="h-4 w-4" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-bold text-purple-900">
+                      {slotsSummaryData?.summary.overallAttendancePct || 0}%
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      {slotsSummaryData?.summary.overallPresent || 0} Present &bull; {slotsSummaryData?.summary.overallAbsent || 0} Absent
+                    </div>
+                  </div>
+                </div>
+
+                {/* Dynamic Tabular Attendance Reports Section */}
+                <div className="space-y-3">
+                  {/* Modern Header / Toolbar Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-2.5">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-navy-900 uppercase tracking-wider">
+                          Attendance Reports Overview
+                        </span>
+                        <span className="rounded-full bg-navy-100 px-2 py-0.5 text-[11px] font-bold text-navy-800">
+                          {slotsTableViewMode === "bySection"
+                            ? `${flattenedSectionRows.length} Sections`
+                            : `${filteredSlotsGroups.length} Cohorts`}
+                        </span>
+                        <span className="text-xs text-slate-500 font-medium">
+                          ({selectedDate})
+                        </span>
+                      </div>
+
+                      {/* View Mode Toggle: Section-Wise vs Grouped Cohort */}
+                      <div className="inline-flex items-center rounded-lg bg-slate-100 p-0.5 border border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setSlotsTableViewMode("bySection")}
+                          className={cn(
+                            "px-2.5 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer",
+                            slotsTableViewMode === "bySection"
+                              ? "bg-white text-navy-950 font-bold shadow-2xs"
+                              : "text-slate-600 hover:text-navy-900",
+                          )}
+                        >
+                          Section-wise Table
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSlotsTableViewMode("byCohort")}
+                          className={cn(
+                            "px-2.5 py-1 text-xs font-semibold rounded-md transition-all cursor-pointer",
+                            slotsTableViewMode === "byCohort"
+                              ? "bg-white text-navy-950 font-bold shadow-2xs"
+                              : "text-slate-600 hover:text-navy-900",
+                          )}
+                        >
+                          Grouped by Cohort
+                        </button>
+                      </div>
+
+                      {slotsTableViewMode === "byCohort" && (
+                        <div className="flex items-center gap-1.5 text-[11px]">
+                          <button
+                            type="button"
+                            onClick={expandAllCohorts}
+                            className="text-navy-700 hover:text-navy-950 hover:underline font-semibold cursor-pointer"
+                          >
+                            Expand All
+                          </button>
+                          <span className="text-slate-300">&bull;</span>
+                          <button
+                            type="button"
+                            onClick={collapseAllCohorts}
+                            className="text-slate-500 hover:text-slate-800 hover:underline font-medium cursor-pointer"
+                          >
+                            Collapse All
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2.5 text-xs text-slate-500">
+                      <span className="hidden lg:inline text-slate-500">
+                        Click any row to open the student-by-student attendance matrix.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleExportCSV}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-navy-900 transition-colors cursor-pointer"
+                        title="Export Tabular Attendance Report as CSV"
+                      >
+                        <Download className="h-3.5 w-3.5 text-slate-600" />
+                        <span>Export CSV</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {slotsTableViewMode === "bySection" ? (
+                    /* ================= SECTION-WISE DYNAMIC TABLE ================= */
+                    <div className="rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-200 bg-slate-100/95 text-slate-700 font-bold text-[11px] uppercase tracking-wider select-none">
+                              <th className="px-3 py-2.5 text-center w-12">#</th>
+                              <th className="px-3 py-2.5 min-w-[130px]">Course Name</th>
+                              <th className="px-3 py-2.5 min-w-[170px]">Branch</th>
+                              <th className="px-3 py-2.5 min-w-[110px]">Year &amp; Sem</th>
+                              <th className="px-3 py-2.5 text-center min-w-[90px]">Section</th>
+                              <th className="px-3 py-2.5 text-center min-w-[85px]">Strength</th>
+                              <th className="px-3 py-2.5 text-center min-w-[85px]">Present</th>
+                              <th className="px-3 py-2.5 text-center min-w-[85px]">Absent</th>
+                              <th className="px-3 py-2.5 min-w-[180px]">Slots (Conducted / Total)</th>
+                              <th className="px-3 py-2.5 text-center min-w-[110px]">Attendance %</th>
+                              <th className="px-3 py-2.5 text-right min-w-[120px]">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {flattenedSectionRows.length === 0 ? (
+                              <tr>
+                                <td colSpan={11} className="p-8 text-center text-slate-500">
+                                  <Filter className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                                  <p className="font-semibold text-slate-700">No sections found matching your filters for this date.</p>
+                                  <p className="text-xs text-slate-500 mt-1">Try resetting search filters or selecting another date.</p>
+                                </td>
+                              </tr>
+                            ) : (
+                              flattenedSectionRows.map(({ group, section, rowKey }, idx) => {
+                                const isGood = section.attendancePct >= 75 && section.postedSessions > 0;
+                                const isCritical = section.attendancePct < 65 && section.postedSessions > 0;
+                                const slotsPct =
+                                  section.totalSessions > 0
+                                    ? Math.round((section.postedSessions / section.totalSessions) * 100)
+                                    : 0;
+
+                                return (
+                                  <tr
+                                    key={rowKey}
+                                    onClick={() => handleLoadCohortDetails(group, section.sectionName)}
+                                    className="hover:bg-sky-50/50 transition-colors cursor-pointer group"
+                                  >
+                                    {/* # S.No */}
+                                    <td className="px-3 py-2.5 text-center font-semibold text-slate-400 group-hover:text-navy-900">
+                                      {idx + 1}
+                                    </td>
+
+                                    {/* Course Name */}
+                                    <td className="px-3 py-2.5">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="rounded bg-navy-900 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider shrink-0">
+                                          {group.collegeCode}
+                                        </span>
+                                        <span className="font-bold text-navy-950 text-xs">
+                                          {group.courseName}
+                                        </span>
+                                      </div>
+                                    </td>
+
+                                    {/* Branch */}
+                                    <td className="px-3 py-2.5">
+                                      <div
+                                        className="font-semibold text-slate-800 text-xs line-clamp-1"
+                                        title={`${group.branchName} (${group.branchCode})`}
+                                      >
+                                        {group.branchName}
+                                      </div>
+                                      <div className="text-[10px] text-slate-500 font-medium">
+                                        Code: {group.branchCode}
+                                      </div>
+                                    </td>
+
+                                    {/* Year & Sem */}
+                                    <td className="px-3 py-2.5 whitespace-nowrap">
+                                      <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                        {group.yearLabel} {group.semesterNumber ? `(Sem ${group.semesterNumber})` : ""}
+                                      </span>
+                                    </td>
+
+                                    {/* Section */}
+                                    <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                      <span className="inline-flex items-center rounded-md bg-navy-100 px-2 py-0.5 text-xs font-bold text-navy-900 border border-navy-200">
+                                        Sec {section.sectionName}
+                                      </span>
+                                    </td>
+
+                                    {/* Strength */}
+                                    <td className="px-3 py-2.5 text-center">
+                                      <span className="font-bold text-slate-900 text-xs tabular-nums">
+                                        {section.totalStudents}
+                                      </span>
+                                    </td>
+
+                                    {/* Present */}
+                                    <td className="px-3 py-2.5 text-center">
+                                      <span
+                                        className={cn(
+                                          "inline-flex items-center justify-center min-w-[36px] rounded px-1.5 py-0.5 text-xs font-bold tabular-nums",
+                                          section.totalPresent > 0
+                                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                                            : "text-slate-400 bg-slate-50",
+                                        )}
+                                      >
+                                        {section.totalPresent}
+                                      </span>
+                                    </td>
+
+                                    {/* Absent */}
+                                    <td className="px-3 py-2.5 text-center">
+                                      <span
+                                        className={cn(
+                                          "inline-flex items-center justify-center min-w-[36px] rounded px-1.5 py-0.5 text-xs font-bold tabular-nums",
+                                          section.totalAbsent > 0
+                                            ? "bg-rose-50 text-rose-800 border border-rose-200"
+                                            : "text-slate-400 bg-slate-50",
+                                        )}
+                                      >
+                                        {section.totalAbsent}
+                                      </span>
+                                    </td>
+
+                                    {/* Slots (Conducted / Total) */}
+                                    <td
+                                      className="px-3 py-2.5"
+                                      onClick={(e) => {
+                                        if (section.slots && section.slots.length > 0) {
+                                          e.stopPropagation();
+                                          setPreviewingSlotsSection({
+                                            cohortLabel: `${group.courseName} - ${group.branchName} (${group.yearLabel})`,
+                                            sectionName: section.sectionName,
+                                            slots: section.slots,
+                                          });
+                                        }
+                                      }}
+                                    >
+                                      <div className="flex flex-col gap-1">
+                                        <div className="flex items-center justify-between text-xs">
+                                          <span className="font-bold text-slate-900 tabular-nums">
+                                            {section.postedSessions} / {section.totalSessions} Slots
+                                          </span>
+                                          <span className="text-[10px] font-medium text-slate-500">
+                                            {slotsPct}%
+                                          </span>
+                                        </div>
+                                        {/* Mini progress bar */}
+                                        <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                                          <div
+                                            className={cn(
+                                              "h-full rounded-full transition-all",
+                                              section.postedSessions === 0
+                                                ? "bg-slate-200"
+                                                : slotsPct === 100
+                                                  ? "bg-emerald-500"
+                                                  : "bg-indigo-500",
+                                            )}
+                                            style={{ width: `${Math.min(100, slotsPct)}%` }}
+                                          />
+                                        </div>
+                                        <div className="flex items-center justify-between text-[10px] text-slate-500">
+                                          <span>{section.postedSessions} posted</span>
+                                          {section.pendingSessions > 0 ? (
+                                            <span className="text-amber-700 font-medium">
+                                              {section.pendingSessions} pending
+                                            </span>
+                                          ) : (
+                                            <span className="text-emerald-700 font-medium">Completed</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </td>
+
+                                    {/* Attendance % */}
+                                    <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                      {section.postedSessions === 0 ? (
+                                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200">
+                                          Pending
+                                        </span>
+                                      ) : (
+                                        <span
+                                          className={cn(
+                                            "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold border",
+                                            isGood
+                                              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                              : isCritical
+                                                ? "bg-rose-50 text-rose-800 border-rose-200"
+                                                : "bg-amber-50 text-amber-800 border-amber-200",
+                                          )}
+                                        >
+                                          <TrendingUp className="h-3 w-3" />
+                                          <span>{section.attendancePct}%</span>
+                                        </span>
+                                      )}
+                                    </td>
+
+                                    {/* Action */}
+                                    <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleLoadCohortDetails(group, section.sectionName);
+                                        }}
+                                        className="inline-flex items-center gap-1 rounded-lg border border-navy-800 bg-navy-900 px-2.5 py-1 text-xs font-bold text-white shadow-2xs hover:bg-navy-800 hover:shadow-xs transition-all cursor-pointer group-hover:bg-navy-800"
+                                      >
+                                        <span>View Details</span>
+                                        <ArrowRight className="h-3 w-3" />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })
+                            )}
+                          </tbody>
+                          {/* Pinned Table Summary Footer */}
+                          {flattenedSectionRows.length > 0 && (
+                            <tfoot className="border-t-2 border-slate-200 bg-slate-50/95 font-bold text-xs text-slate-800">
+                              <tr>
+                                <td
+                                  colSpan={4}
+                                  className="px-3 py-2.5 text-left font-bold text-slate-700 uppercase tracking-wider text-[11px]"
+                                >
+                                  Total Across {tableSummary.totalSections} Sections
+                                </td>
+                                <td className="px-3 py-2.5 text-center font-bold text-navy-950">
+                                  {tableSummary.totalSections} Secs
+                                </td>
+                                <td className="px-3 py-2.5 text-center font-bold text-slate-900 tabular-nums">
+                                  {tableSummary.totalStudents.toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2.5 text-center font-bold text-emerald-700 tabular-nums">
+                                  {tableSummary.totalPresent.toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2.5 text-center font-bold text-rose-700 tabular-nums">
+                                  {tableSummary.totalAbsent.toLocaleString()}
+                                </td>
+                                <td className="px-3 py-2.5">
+                                  <span className="font-bold text-indigo-900 tabular-nums">
+                                    {tableSummary.conductedSlots} / {tableSummary.totalSlots} Slots
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2.5 text-center">
+                                  <span className="inline-flex items-center rounded-full bg-navy-100 px-2.5 py-0.5 text-xs font-bold text-navy-900">
+                                    {tableSummary.avgAttendancePct}%
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2.5 text-right text-slate-400 text-[11px] font-normal">
+                                  Click row to view
+                                </td>
+                              </tr>
+                            </tfoot>
+                          )}
+                        </table>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ================= GROUPED BY COHORT DYNAMIC TABLE ================= */
+                    <div className="rounded-xl border border-slate-200 bg-white shadow-2xs overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-200 bg-slate-100/95 text-slate-700 font-bold text-[11px] uppercase tracking-wider select-none">
+                              <th className="px-3 py-2.5 text-center w-12">#</th>
+                              <th className="px-3 py-2.5 min-w-[130px]">Course Name</th>
+                              <th className="px-3 py-2.5 min-w-[170px]">Branch</th>
+                              <th className="px-3 py-2.5 min-w-[110px]">Year &amp; Sem</th>
+                              <th className="px-3 py-2.5 min-w-[180px]">Sections List</th>
+                              <th className="px-3 py-2.5 text-center min-w-[85px]">Strength</th>
+                              <th className="px-3 py-2.5 text-center min-w-[85px]">Present</th>
+                              <th className="px-3 py-2.5 text-center min-w-[85px]">Absent</th>
+                              <th className="px-3 py-2.5 min-w-[170px]">Slots Counts</th>
+                              <th className="px-3 py-2.5 text-center min-w-[110px]">Attendance %</th>
+                              <th className="px-3 py-2.5 text-right min-w-[130px]">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredSlotsGroups.length === 0 ? (
+                              <tr>
+                                <td colSpan={11} className="p-8 text-center text-slate-500">
+                                  <Filter className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                                  <p className="font-semibold text-slate-700">No cohorts found matching your filters for this date.</p>
+                                  <p className="text-xs text-slate-500 mt-1">Try resetting your search query or selecting a different academic date.</p>
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredSlotsGroups.map((group, idx) => {
+                                const cohortKey = `${group.collegeId}-${group.courseId}-${group.branchId}-${group.yearOfStudy}`;
+                                const isExpanded = expandedCohortKeys.has(cohortKey);
+                                const isBelowTarget = group.attendancePct < 65 && group.postedSessions > 0;
+                                const isGood = group.attendancePct >= 75 && group.postedSessions > 0;
+                                const sections = group.sections || [];
+
+                                return (
+                                  <Fragment key={cohortKey}>
+                                    {/* Primary Cohort Row */}
+                                    <tr
+                                      onClick={() => handleLoadCohortDetails(group)}
+                                      className={cn(
+                                        "transition-colors cursor-pointer group",
+                                        isExpanded ? "bg-slate-50/80" : "hover:bg-sky-50/50",
+                                      )}
+                                    >
+                                      {/* # S.No */}
+                                      <td className="px-3 py-2.5 text-center font-semibold text-slate-400 group-hover:text-navy-900">
+                                        {idx + 1}
+                                      </td>
+
+                                      {/* Course Name */}
+                                      <td className="px-3 py-2.5">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="rounded bg-navy-900 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider shrink-0">
+                                            {group.collegeCode}
+                                          </span>
+                                          <span className="font-bold text-navy-950 text-xs">
+                                            {group.courseName}
+                                          </span>
+                                        </div>
+                                      </td>
+
+                                      {/* Branch */}
+                                      <td className="px-3 py-2.5">
+                                        <div className="font-semibold text-slate-800 text-xs line-clamp-1" title={`${group.branchName} (${group.branchCode})`}>
+                                          {group.branchName}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500 font-medium">
+                                          Code: {group.branchCode}
+                                        </div>
+                                      </td>
+
+                                      {/* Year & Sem */}
+                                      <td className="px-3 py-2.5 whitespace-nowrap">
+                                        <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                          {group.yearLabel} {group.semesterNumber ? `(Sem ${group.semesterNumber})` : ""}
+                                        </span>
+                                      </td>
+
+                                      {/* Sections List */}
+                                      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
+                                        <div className="flex flex-wrap items-center gap-1">
+                                          {sections.length > 0 ? (
+                                            sections.map((sec) => (
+                                              <button
+                                                key={sec.sectionName}
+                                                type="button"
+                                                onClick={() => handleLoadCohortDetails(group, sec.sectionName)}
+                                                className="inline-flex items-center gap-1 rounded bg-navy-50 hover:bg-navy-900 hover:text-white text-navy-900 border border-navy-200 px-1.5 py-0.5 text-[10px] font-bold transition-all cursor-pointer"
+                                                title={`Open Section ${sec.sectionName} Sheet (${sec.totalStudents} students, ${sec.postedSessions}/${sec.totalSessions} slots)`}
+                                              >
+                                                <span>Sec {sec.sectionName}</span>
+                                                <span className="text-[9px] opacity-70">({sec.totalStudents})</span>
+                                              </button>
+                                            ))
+                                          ) : (
+                                            <span className="text-slate-400 text-xs italic">Sec A</span>
+                                          )}
+                                        </div>
+                                      </td>
+
+                                      {/* Strength */}
+                                      <td className="px-3 py-2.5 text-center">
+                                        <span className="font-bold text-slate-900 text-xs tabular-nums">
+                                          {group.totalStudents}
+                                        </span>
+                                      </td>
+
+                                      {/* Present */}
+                                      <td className="px-3 py-2.5 text-center">
+                                        <span
+                                          className={cn(
+                                            "inline-flex items-center justify-center min-w-[36px] rounded px-1.5 py-0.5 text-xs font-bold tabular-nums",
+                                            group.totalPresent > 0
+                                              ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                                              : "text-slate-400 bg-slate-50",
+                                          )}
+                                        >
+                                          {group.totalPresent}
+                                        </span>
+                                      </td>
+
+                                      {/* Absent */}
+                                      <td className="px-3 py-2.5 text-center">
+                                        <span
+                                          className={cn(
+                                            "inline-flex items-center justify-center min-w-[36px] rounded px-1.5 py-0.5 text-xs font-bold tabular-nums",
+                                            group.totalAbsent > 0
+                                              ? "bg-rose-50 text-rose-800 border border-rose-200"
+                                              : "text-slate-400 bg-slate-50",
+                                          )}
+                                        >
+                                          {group.totalAbsent}
+                                        </span>
+                                      </td>
+
+                                      {/* Slots Counts */}
+                                      <td className="px-3 py-2.5">
+                                        <div className="font-bold text-slate-900 text-xs tabular-nums">
+                                          {group.postedSessions} / {group.totalSessions} Slots
+                                        </div>
+                                        <div className="text-[10px] text-slate-500">
+                                          {group.pendingSessions > 0
+                                            ? `${group.pendingSessions} slots pending`
+                                            : "All slots submitted"}
+                                        </div>
+                                      </td>
+
+                                      {/* Attendance % */}
+                                      <td className="px-3 py-2.5 text-center whitespace-nowrap">
+                                        {group.postedSessions === 0 ? (
+                                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 border border-slate-200">
+                                            Pending
+                                          </span>
+                                        ) : (
+                                          <span
+                                            className={cn(
+                                              "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-bold border",
+                                              isGood
+                                                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                                : isBelowTarget
+                                                  ? "bg-rose-50 text-rose-800 border-rose-200"
+                                                  : "bg-amber-50 text-amber-800 border-amber-200",
+                                            )}
+                                          >
+                                            <TrendingUp className="h-3 w-3" />
+                                            <span>{group.attendancePct}%</span>
+                                          </span>
+                                        )}
+                                      </td>
+
+                                      {/* Actions */}
+                                      <td className="px-3 py-2.5 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                        <div className="flex items-center justify-end gap-1.5">
+                                          {sections.length > 0 && (
+                                            <button
+                                              type="button"
+                                              onClick={() => toggleCohortExpand(cohortKey)}
+                                              className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
+                                              title="Toggle sections breakdown"
+                                            >
+                                              <span>{sections.length} Secs</span>
+                                              {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                            </button>
+                                          )}
+                                          <button
+                                            type="button"
+                                            onClick={() => handleLoadCohortDetails(group)}
+                                            className="inline-flex items-center gap-1 rounded-lg border border-navy-800 bg-navy-900 px-2.5 py-1 text-xs font-bold text-white shadow-2xs hover:bg-navy-800 hover:shadow-xs transition-all cursor-pointer"
+                                          >
+                                            <span>Details</span>
+                                            <ArrowRight className="h-3 w-3" />
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+
+                                    {/* Expanded Sections Sub-Table Row */}
+                                    {isExpanded && sections.length > 0 && (
+                                      <tr className="bg-slate-50/70 border-b border-slate-200">
+                                        <td colSpan={11} className="p-3 pl-8">
+                                          <div className="rounded-lg border border-slate-200 bg-white shadow-2xs overflow-hidden">
+                                            <div className="px-3 py-1.5 bg-slate-100/80 border-b border-slate-200 flex items-center justify-between text-xs">
+                                              <span className="font-bold text-navy-900 uppercase text-[10px] tracking-wider">
+                                                Section Breakdown for {group.courseName} - {group.branchName} ({group.yearLabel})
+                                              </span>
+                                              <span className="text-[11px] text-slate-500">
+                                                Click any section row to open its attendance sheet
+                                              </span>
+                                            </div>
+                                            <table className="w-full text-left text-xs">
+                                              <thead>
+                                                <tr className="border-b border-slate-100 bg-slate-50 text-slate-600 font-bold text-[10px] uppercase tracking-wider">
+                                                  <th className="px-3 py-2">Section</th>
+                                                  <th className="px-3 py-2 text-center">Enrolled Strength</th>
+                                                  <th className="px-3 py-2 text-center">Present</th>
+                                                  <th className="px-3 py-2 text-center">Absent</th>
+                                                  <th className="px-3 py-2">Slots Conducted</th>
+                                                  <th className="px-3 py-2 text-center">Attendance %</th>
+                                                  <th className="px-3 py-2 text-right">Action</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody className="divide-y divide-slate-100">
+                                                {sections.map((sec) => (
+                                                  <tr
+                                                    key={sec.sectionName}
+                                                    onClick={() => handleLoadCohortDetails(group, sec.sectionName)}
+                                                    className="hover:bg-sky-50/50 cursor-pointer transition-colors"
+                                                  >
+                                                    <td className="px-3 py-2">
+                                                      <span className="inline-flex items-center rounded bg-navy-100 px-2 py-0.5 text-xs font-bold text-navy-900">
+                                                        Section {sec.sectionName}
+                                                      </span>
+                                                    </td>
+                                                    <td className="px-3 py-2 text-center font-bold text-slate-800">
+                                                      {sec.totalStudents}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-center font-bold text-emerald-700">
+                                                      {sec.totalPresent}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-center font-bold text-rose-700">
+                                                      {sec.totalAbsent}
+                                                    </td>
+                                                    <td className="px-3 py-2">
+                                                      <span className="font-bold text-slate-900">
+                                                        {sec.postedSessions} / {sec.totalSessions} Slots
+                                                      </span>
+                                                      {sec.pendingSessions > 0 && (
+                                                        <span className="text-amber-700 text-[10px] ml-1.5">
+                                                          ({sec.pendingSessions} pending)
+                                                        </span>
+                                                      )}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-center">
+                                                      {sec.postedSessions > 0 ? (
+                                                        <span
+                                                          className={cn(
+                                                            "rounded-full px-2 py-0.5 text-[11px] font-bold border",
+                                                            sec.attendancePct >= 75
+                                                              ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                                              : sec.attendancePct < 65
+                                                                ? "bg-rose-50 text-rose-800 border-rose-200"
+                                                                : "bg-amber-50 text-amber-800 border-amber-200",
+                                                          )}
+                                                        >
+                                                          {sec.attendancePct}%
+                                                        </span>
+                                                      ) : (
+                                                        <span className="text-slate-400 text-[11px]">Pending</span>
+                                                      )}
+                                                    </td>
+                                                    <td className="px-3 py-2 text-right">
+                                                      <button
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                          e.stopPropagation();
+                                                          handleLoadCohortDetails(group, sec.sectionName);
+                                                        }}
+                                                        className="inline-flex items-center gap-1 rounded bg-navy-900 px-2 py-1 text-[11px] font-bold text-white hover:bg-navy-800 transition-colors cursor-pointer"
+                                                      >
+                                                        <span>Open Sec {sec.sectionName}</span>
+                                                        <ArrowRight className="h-3 w-3" />
+                                                      </button>
+                                                    </td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                );
+                              })
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Period Slot Breakdown Modal (Opened when clicking Slots cell) */}
+                  {previewingSlotsSection && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+                      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                        <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 flex items-center justify-between">
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="rounded bg-navy-900 px-1.5 py-0.5 text-[10px] font-bold text-white uppercase tracking-wider">
+                                Slot Breakdown
+                              </span>
+                              <h3 className="text-sm font-bold text-navy-950">
+                                Section {previewingSlotsSection.sectionName} &bull; {previewingSlotsSection.slots.length} Periods Today
+                              </h3>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {previewingSlotsSection.cohortLabel} ({selectedDate})
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setPreviewingSlotsSection(null)}
+                            className="rounded-lg p-1 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition-colors cursor-pointer"
+                          >
+                            <XCircle className="h-5 w-5" />
+                          </button>
+                        </div>
+
+                        <div className="max-h-[60vh] overflow-y-auto p-4 space-y-2">
+                          {previewingSlotsSection.slots.map((slot) => (
+                            <div
+                              key={slot.sessionId}
+                              className={cn(
+                                "rounded-xl border p-3 text-xs flex items-center justify-between gap-3",
+                                slot.posted
+                                  ? "border-emerald-200 bg-emerald-50/40"
+                                  : "border-slate-200 bg-slate-50/60",
+                              )}
+                            >
+                              <div>
+                                <div className="flex items-center gap-2 font-bold text-navy-950">
+                                  <span>{slot.slotLabel}</span>
+                                  <span className="text-slate-500 font-normal">
+                                    ({slot.startTime} - {slot.endTime})
+                                  </span>
+                                </div>
+                                <div className="font-semibold text-slate-800 mt-0.5">
+                                  {slot.subjectCode ? `${slot.subjectCode} - ` : ""}
+                                  {slot.subjectName || "Class"}
+                                </div>
+                                <div className="text-[11px] text-slate-500 mt-0.5">
+                                  Faculty: {slot.facultyName || "Unassigned"}
+                                </div>
+                              </div>
+
+                              <div className="text-right shrink-0">
+                                {slot.posted ? (
+                                  <>
+                                    <div className="text-xs font-bold text-emerald-800">
+                                      {slot.presentCount} Present &bull; {slot.absentCount} Absent
+                                    </div>
+                                    <div className="inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-900 mt-1">
+                                      {slot.attendancePct}% Attendance
+                                    </div>
+                                  </>
+                                ) : (
+                                  <span className="rounded bg-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-600">
+                                    Pending Posting
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="border-t border-slate-200 bg-slate-50 px-4 py-2.5 flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewingSlotsSection(null)}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                          >
+                            Close
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              /* viewMode === 'sheet' */
+              <div className="space-y-3">
+                {/* Cohort Context Banner (When loaded via View Details) */}
+                {selectedCohortDetail && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-navy-200 bg-linear-to-r from-navy-50 via-sky-50/40 to-white p-3.5 shadow-2xs">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleBackToStats}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-navy-900 transition-colors cursor-pointer"
+                      >
+                        <ArrowLeft className="h-4 w-4 text-navy-700" />
+                        <span>Back to Attendance Reports</span>
+                      </button>
+                      <div className="h-6 w-px bg-slate-300 hidden sm:block" />
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded bg-navy-800 px-2 py-0.5 text-[10px] font-bold uppercase text-white tracking-wider">
+                            {selectedCohortDetail.collegeCode}
+                          </span>
+                          <h3 className="text-sm font-bold text-navy-950">
+                            {selectedCohortDetail.collegeName} &bull; {selectedCohortDetail.courseName} ({selectedCohortDetail.branchCode})
+                          </h3>
+                          {selectedSection && (
+                            <span className="rounded-md bg-navy-100 border border-navy-200 px-2 py-0.5 text-xs font-bold text-navy-900">
+                              Section {selectedSection}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-slate-600 mt-0.5">
+                          {selectedCohortDetail.yearLabel} &bull; {selectedCohortDetail.totalStudents} enrolled students &bull; {selectedCohortDetail.postedSessions} of {selectedCohortDetail.totalSessions} periods marked ({selectedCohortDetail.attendancePct}% attendance today)
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="rounded-md bg-emerald-100 px-2.5 py-1 font-bold text-emerald-800">
+                        Present: {selectedCohortDetail.totalPresent}
+                      </span>
+                      <span className="rounded-md bg-rose-100 px-2.5 py-1 font-bold text-rose-800">
+                        Absent: {selectedCohortDetail.totalAbsent}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {dailyData ? (
+                  dailyData.slots.length === 0 ? (
+                    <Card className="p-8 text-center text-slate-500">
+                      <Clock className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                      <p className="font-semibold text-slate-700">No timetable slots scheduled for this date.</p>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Select a working class day or ensure timetable plans are published for this cohort.
+                      </p>
+                    </Card>
+                  ) : (
+                    <div className="rounded-lg border border-slate-200 bg-white shadow-2xs overflow-hidden">
                   {/* Table Header Strip with integrated Legend */}
                   <div className="border-b border-slate-200 bg-slate-50/90 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
@@ -1507,6 +2969,9 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
                                         {student.year}-{student.semester}
                                       </span>
                                     )}
+                                    <span className="inline-flex items-center rounded bg-emerald-50 border border-emerald-200 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+                                      {student.studentStatus || "Regular"}
+                                    </span>
                                   </div>
                                 </td>
 
@@ -1582,9 +3047,27 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
                     </table>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+              )
+            ) : (
+              <Card className="p-8 text-center text-slate-500">
+                <Layers className="mx-auto h-8 w-8 text-slate-300 mb-2" />
+                <p className="font-semibold text-slate-700">No Section Attendance Sheet Loaded</p>
+                <p className="text-xs text-slate-500 mt-1 mb-4">
+                  Select a specific college, course, branch, and section to view student attendance, or switch back to the All Colleges Stats format.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleBackToStats}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-navy-800 bg-navy-900 px-3 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-navy-800 transition-colors cursor-pointer"
+                >
+                  <BarChart3 className="h-3.5 w-3.5" />
+                  <span>Switch to All Colleges Stats Format</span>
+                </button>
+              </Card>
+            )}
+          </div>
+        )
+      )}
 
           {/* ======================================================== */}
           {/* TAB 2: WEEK (DAY SLOTS MATRIX)                           */}
@@ -1747,6 +3230,9 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
                                       {student.year}-{student.semester}
                                     </span>
                                   )}
+                                  <span className="inline-flex items-center rounded bg-emerald-50 border border-emerald-200 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+                                    {student.studentStatus || "Regular"}
+                                  </span>
                                 </div>
                               </td>
 
@@ -1939,6 +3425,9 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
                                       {student.year}-{student.semester}
                                     </span>
                                   )}
+                                  <span className="inline-flex items-center rounded bg-emerald-50 border border-emerald-200 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+                                    {student.studentStatus || "Regular"}
+                                  </span>
                                 </div>
                               </td>
 
@@ -2075,6 +3564,9 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
                                         {student.year}-{student.semester}
                                       </span>
                                     )}
+                                    <span className="inline-flex items-center rounded bg-emerald-50 border border-emerald-200 px-1 py-0.2 text-[9px] font-semibold text-emerald-700">
+                                      {student.studentStatus || "Regular"}
+                                    </span>
                                   </div>
                                 </td>
 

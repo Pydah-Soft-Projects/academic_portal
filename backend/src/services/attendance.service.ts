@@ -63,6 +63,7 @@ type StudentRow = RowDataPacket & {
   current_year: number | null;
   current_semester: number | null;
   student_status?: string | null;
+  stud_type?: string | null;
   has_photo?: number;
 };
 
@@ -1119,6 +1120,8 @@ export async function getAttendanceAnalytics(filters: {
   branchId?: number;
   branchIds?: number[];
   section?: string;
+  studentStatus?: string;
+  studentType?: string;
 } = {}) {
   const where = ["cs.session_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)"];
   const params: unknown[] = [];
@@ -1277,14 +1280,22 @@ export async function loadScopeStudents(filters: {
   year?: number;
   semester?: number;
   section?: string;
+  studentStatus?: string;
+  studentType?: string;
 }) {
-  const where = [
-    `(s.student_status IS NULL OR (
+  const statusToFilter = (filters.studentStatus || filters.studentType || "Regular").trim();
+  const where: string[] = [];
+  const params: unknown[] = [];
+
+  if (statusToFilter && statusToFilter.toLowerCase() !== "all") {
+    where.push("TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci");
+    params.push(statusToFilter);
+  } else {
+    where.push(`(s.student_status IS NULL OR (
       LOWER(TRIM(s.student_status)) NOT IN ('relieved', 'discontinued', 'inactive', 'cancelled', 'admission cancelled')
       AND LOWER(s.student_status) NOT LIKE '%cancel%'
-    ))`,
-  ];
-  const params: unknown[] = [];
+    ))`);
+  }
 
   if (filters.branchId) {
     where.push("s.branch_id = ?");
@@ -1331,11 +1342,13 @@ export async function loadScopeStudents(filters: {
   return queryStudent<StudentRow[]>(
     `
     SELECT s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester,
+           s.student_status,
+           s.stud_type,
            CASE WHEN s.student_photo IS NOT NULL AND TRIM(s.student_photo) <> '' THEN 1 ELSE 0 END AS has_photo
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE ${where.join(" AND ")}
-    GROUP BY s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester
+    GROUP BY s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester, s.student_status, s.stud_type
     ORDER BY COALESCE(NULLIF(TRIM(s.pin_no), ''), s.admission_number), s.student_name
     LIMIT 1000
     `,
@@ -1376,6 +1389,8 @@ export type DailyAttendanceAnalyticsResult = {
     branch: string | null;
     year: number | null;
     semester: number | null;
+    studentStatus?: string | null;
+    studentType?: string | null;
     hasPhoto: boolean;
     slots: Record<
       number,
@@ -1416,6 +1431,8 @@ export async function getDailyAttendanceAnalytics(filters: {
   semester?: number;
   section?: string;
   academicYear?: string;
+  studentStatus?: string;
+  studentType?: string;
 }): Promise<DailyAttendanceAnalyticsResult> {
   const date = filters.date && /^\d{4}-\d{2}-\d{2}$/.test(filters.date) ? filters.date : todayIso();
 
@@ -1547,6 +1564,8 @@ export async function getDailyAttendanceAnalytics(filters: {
     year: filters.year,
     semester: filters.semester,
     section: activeSection || undefined,
+    studentStatus: filters.studentStatus,
+    studentType: filters.studentType,
   });
 
   const slots = sectionSessions.map((row) => ({
@@ -1663,6 +1682,8 @@ export async function getDailyAttendanceAnalytics(filters: {
       branch: student.branch || null,
       year: filters.year ?? (student.current_year ? Number(student.current_year) : null),
       semester: filters.semester ?? (student.current_semester ? Number(student.current_semester) : null),
+      studentStatus: student.student_status ?? "Regular",
+      studentType: student.stud_type ?? null,
       hasPhoto: Boolean(student.has_photo),
       slots: studentSlots,
       totalPresent: studentPresent,
@@ -1746,6 +1767,8 @@ export type WeeklyAttendanceAnalyticsResult = {
     branch: string | null;
     year: number | null;
     semester: number | null;
+    studentStatus?: string | null;
+    studentType?: string | null;
     hasPhoto: boolean;
     days: Record<
       string,
@@ -1801,6 +1824,8 @@ export async function getWeeklyAttendanceAnalytics(filters: {
   semester?: number;
   section?: string;
   academicYear?: string;
+  studentStatus?: string;
+  studentType?: string;
 }): Promise<WeeklyAttendanceAnalyticsResult> {
   const refDate =
     filters.startDate && /^\d{4}-\d{2}-\d{2}$/.test(filters.startDate)
@@ -1962,6 +1987,8 @@ export async function getWeeklyAttendanceAnalytics(filters: {
     year: filters.year,
     semester: filters.semester,
     section: activeSection || undefined,
+    studentStatus: filters.studentStatus,
+    studentType: filters.studentType,
   });
 
   // Group sessions by date
@@ -2141,6 +2168,8 @@ export async function getWeeklyAttendanceAnalytics(filters: {
       branch: student.branch || null,
       year: filters.year ?? (student.current_year ? Number(student.current_year) : null),
       semester: filters.semester ?? (student.current_semester ? Number(student.current_semester) : null),
+      studentStatus: student.student_status ?? "Regular",
+      studentType: student.stud_type ?? null,
       hasPhoto: Boolean(student.has_photo),
       days: studentDays,
       totalPresent: studentWeekPresent,
@@ -2194,6 +2223,8 @@ export type MonthlyAttendanceAnalyticsResult = {
     branch: string | null;
     year: number | null;
     semester: number | null;
+    studentStatus?: string | null;
+    studentType?: string | null;
     hasPhoto: boolean;
     totalSlots: number;
     presentCount: number;
@@ -2235,6 +2266,8 @@ export async function getMonthlyAttendanceAnalytics(filters: {
   semester?: number;
   section?: string;
   academicYear?: string;
+  studentStatus?: string;
+  studentType?: string;
 }): Promise<MonthlyAttendanceAnalyticsResult> {
   const now = new Date();
   const year = filters.year && Number.isFinite(filters.year) ? filters.year : now.getFullYear();
@@ -2263,6 +2296,8 @@ export async function getMonthlyAttendanceAnalytics(filters: {
     year: filters.yearOfStudy,
     semester: filters.semester,
     section: filters.section,
+    studentStatus: filters.studentStatus,
+    studentType: filters.studentType,
   });
 
   const where = [
@@ -2410,6 +2445,8 @@ export async function getMonthlyAttendanceAnalytics(filters: {
       branch: s.branch || null,
       year: filters.yearOfStudy ?? (s.current_year ? Number(s.current_year) : null),
       semester: filters.semester ?? (s.current_semester ? Number(s.current_semester) : null),
+      studentStatus: s.student_status ?? "Regular",
+      studentType: s.stud_type ?? null,
       hasPhoto: Boolean(s.has_photo),
       totalSlots,
       presentCount,
@@ -2472,6 +2509,8 @@ export type SemesterAttendanceAnalyticsResult = {
     branch: string | null;
     year: number | null;
     semester: number | null;
+    studentStatus?: string | null;
+    studentType?: string | null;
     hasPhoto: boolean;
     totalClasses: number;
     presentCount: number;
@@ -2510,6 +2549,8 @@ export async function getSemesterAttendanceAnalytics(filters: {
   batch?: string;
   yearOfStudy?: number;
   section?: string;
+  studentStatus?: string;
+  studentType?: string;
 }): Promise<SemesterAttendanceAnalyticsResult> {
   const students = await loadScopeStudents({
     collegeId: filters.collegeId,
@@ -2521,6 +2562,8 @@ export async function getSemesterAttendanceAnalytics(filters: {
     year: filters.yearOfStudy,
     semester: filters.semester,
     section: filters.section,
+    studentStatus: filters.studentStatus,
+    studentType: filters.studentType,
   });
 
   const where = ["cs.status <> 'cancelled'"];
@@ -2696,6 +2739,8 @@ export async function getSemesterAttendanceAnalytics(filters: {
       branch: s.branch || null,
       year: filters.yearOfStudy ?? (s.current_year ? Number(s.current_year) : null),
       semester: filters.semester ?? (s.current_semester ? Number(s.current_semester) : null),
+      studentStatus: s.student_status ?? "Regular",
+      studentType: s.stud_type ?? null,
       hasPhoto: Boolean(s.has_photo),
       totalClasses,
       presentCount,
@@ -2753,6 +2798,545 @@ export async function getSemesterAttendanceAnalytics(filters: {
   };
 }
 
+export type SlotItem = {
+  sessionId: number;
+  slotLabel: string;
+  startTime: string;
+  endTime: string;
+  section: string | null;
+  subjectName: string | null;
+  subjectCode: string | null;
+  facultyName: string | null;
+  status: string;
+  posted: boolean;
+  presentCount: number;
+  absentCount: number;
+  odCount: number;
+  leaveCount: number;
+  attendancePct: number;
+};
+
+export type SectionSlotStats = {
+  sectionName: string;
+  totalStudents: number;
+  totalSessions: number;
+  postedSessions: number;
+  pendingSessions: number;
+  totalPresent: number;
+  totalAbsent: number;
+  slotPresentMarks?: number;
+  slotAbsentMarks?: number;
+  totalOd: number;
+  totalLeave: number;
+  attendancePct: number;
+  slots: SlotItem[];
+};
+
+export type CollegeCourseBranchYearSlotStats = {
+  collegeId: number;
+  collegeName: string;
+  collegeCode: string;
+  courseId: number;
+  courseName: string;
+  courseCode: string;
+  branchId: number;
+  branchName: string;
+  branchCode: string;
+  yearOfStudy: number;
+  yearLabel: string;
+  semesterNumber: number | null;
+  totalStudents: number;
+  totalSessions: number;
+  postedSessions: number;
+  pendingSessions: number;
+  totalPresent: number;
+  totalAbsent: number;
+  slotPresentMarks?: number;
+  slotAbsentMarks?: number;
+  totalOd: number;
+  totalLeave: number;
+  attendancePct: number;
+  sections: SectionSlotStats[];
+  slots: SlotItem[];
+};
+
+export type SlotsAttendanceSummaryResult = {
+  date: string;
+  summary: {
+    totalColleges: number;
+    totalCourses: number;
+    totalBranches: number;
+    totalStudents: number;
+    totalSessions: number;
+    postedSessions: number;
+    pendingSessions: number;
+    overallPresent: number;
+    overallAbsent: number;
+    overallAttendancePct: number;
+  };
+  groups: CollegeCourseBranchYearSlotStats[];
+};
+
+export async function getSlotsAttendanceSummary(filters: {
+  date?: string;
+  collegeId?: number;
+  collegeIds?: number[];
+  courseId?: number;
+  branchId?: number;
+  branchIds?: number[];
+  batch?: string;
+  year?: number;
+  semester?: number;
+  academicYear?: string;
+  studentStatus?: string;
+  studentType?: string;
+}): Promise<SlotsAttendanceSummaryResult> {
+  const date = filters.date && /^\d{4}-\d{2}-\d{2}$/.test(filters.date) ? filters.date : todayIso();
+  const statusToFilter = (filters.studentStatus || filters.studentType || "Regular").trim();
+  const studentWhere: string[] = [];
+  const studentParams: unknown[] = [];
+  if (statusToFilter && statusToFilter.toLowerCase() !== "all") {
+    studentWhere.push("TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci");
+    studentParams.push(statusToFilter);
+  } else {
+    studentWhere.push("(s.student_status IS NULL OR LOWER(TRIM(s.student_status)) NOT IN ('relieved', 'discontinued', 'inactive', 'cancelled'))");
+  }
+
+  // 1. Fetch colleges, courses, branches from student_db
+  const colleges = await queryStudent<(RowDataPacket & { id: number; name: string; code: string })[]>(
+    "SELECT id, name, code FROM colleges WHERE is_active = 1 OR is_active IS NULL",
+  );
+  const collegeMap = new Map(colleges.map((c) => [c.id, c]));
+
+  const courses = await queryStudent<(RowDataPacket & { id: number; college_id: number; name: string; code: string })[]>(
+    "SELECT id, college_id, name, code FROM courses WHERE is_active = 1 OR is_active IS NULL",
+  );
+  const courseMap = new Map(courses.map((c) => [c.id, c]));
+
+  const branches = await queryStudent<(RowDataPacket & { id: number; course_id: number; name: string; code: string })[]>(
+    "SELECT id, course_id, name, code FROM course_branches WHERE is_active = 1 OR is_active IS NULL",
+  );
+  const branchMap = new Map(branches.map((b) => [b.id, b]));
+
+  // 2. Fetch student enrollment counts per (college_id, course_id, branch_id, current_year, section)
+  const studentRows = await queryStudent<(RowDataPacket & { college_id: number; course_id: number; branch_id: number; current_year: number; section_name: string; total_students: number })[]>(`
+    SELECT 
+      s.college_id,
+      s.course_id,
+      s.branch_id,
+      s.current_year,
+      COALESCE(NULLIF(TRIM(ss.section_name), ''), NULLIF(TRIM(s.section), ''), 'A') as section_name,
+      COUNT(DISTINCT s.id) as total_students
+    FROM students s
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE ${studentWhere.join(" AND ")}
+    GROUP BY s.college_id, s.course_id, s.branch_id, s.current_year, section_name
+  `, studentParams);
+
+  const studentCountMap = new Map<string, number>();
+  const sectionStudentCountMap = new Map<string, number>();
+  for (const s of studentRows) {
+    const cohortKey = `${s.college_id}_${s.course_id}_${s.branch_id}_${s.current_year}`;
+    const secKey = `${cohortKey}_${(s.section_name || 'A').toUpperCase()}`;
+    const count = Number(s.total_students || 0);
+    studentCountMap.set(cohortKey, (studentCountMap.get(cohortKey) || 0) + count);
+    sectionStudentCountMap.set(secKey, (sectionStudentCountMap.get(secKey) || 0) + count);
+  }
+
+  // 3. Query class sessions on the date
+  const where = [
+    "cs.session_date = ?",
+    "cs.status <> 'cancelled'",
+    "(p.status = 'published' OR ap.id IS NOT NULL)",
+  ];
+  const params: unknown[] = [date];
+
+  if (filters.collegeId) {
+    where.push("cs.college_id = ?");
+    params.push(filters.collegeId);
+  } else if (filters.collegeIds?.length) {
+    where.push(`cs.college_id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    params.push(...filters.collegeIds);
+  }
+  if (filters.courseId) {
+    where.push("p.course_id = ?");
+    params.push(filters.courseId);
+  }
+  if (filters.branchId) {
+    where.push("cs.branch_id = ?");
+    params.push(filters.branchId);
+  } else if (filters.branchIds?.length) {
+    where.push(`cs.branch_id IN (${filters.branchIds.map(() => "?").join(",")})`);
+    params.push(...filters.branchIds);
+  }
+  if (filters.batch) {
+    where.push("p.batch = ?");
+    params.push(filters.batch);
+  }
+  if (filters.year != null) {
+    where.push("p.year_of_study = ?");
+    params.push(filters.year);
+  }
+  if (filters.semester != null) {
+    where.push("p.semester_number = ?");
+    params.push(filters.semester);
+  }
+  if (filters.academicYear) {
+    where.push("p.academic_year_label = ?");
+    params.push(filters.academicYear);
+  }
+
+  type SessionRow = RowDataPacket & {
+    session_id: number;
+    college_id: number;
+    course_id: number;
+    branch_id: number;
+    year_of_study: number;
+    semester_number: number | null;
+    section_name: string | null;
+    start_time: string | null;
+    end_time: string | null;
+    slot_label: string;
+    subject_code: string | null;
+    subject_name: string | null;
+    faculty_name: string | null;
+    status: string;
+    post_id: number | null;
+    present_count: number | null;
+    absent_count: number | null;
+    od_count: number | null;
+    leave_count: number | null;
+  };
+
+  const sessions = await queryAcademic<SessionRow[]>(`
+    SELECT 
+      cs.id as session_id,
+      cs.college_id,
+      p.course_id,
+      cs.branch_id,
+      p.year_of_study,
+      p.semester_number,
+      cs.section_name,
+      cs.start_time,
+      cs.end_time,
+      COALESCE(ts.label, CONCAT('P', cs.period_slot_id)) as slot_label,
+      cs.subject_code,
+      cs.subject_name,
+      sl.display_name as faculty_name,
+      cs.status,
+      ap.id as post_id,
+      ap.present_count,
+      ap.absent_count,
+      ap.od_count,
+      ap.leave_count
+    FROM ap_class_sessions cs
+    JOIN ap_timetable_plans p ON p.id = cs.plan_id
+    LEFT JOIN ap_timing_template_slots ts ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
+    LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
+    LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+    WHERE ${where.join(" AND ")}
+    ORDER BY cs.college_id, p.course_id, cs.branch_id, p.year_of_study, cs.start_time, cs.id
+  `, params);
+
+  // 4. Query distinct student headcount per section from attendance post students
+  const postedPostIds = sessions
+    .map((s) => s.post_id)
+    .filter((id): id is number => id != null);
+
+  type DistinctAttendanceRow = RowDataPacket & {
+    college_id: number;
+    course_id: number;
+    branch_id: number;
+    year_of_study: number;
+    section_name: string;
+    distinct_present: number;
+    total_roster_students: number;
+  };
+
+  const distinctAttendanceMap = new Map<string, { distinctPresent: number; totalRoster: number }>();
+  if (postedPostIds.length > 0) {
+    const distinctRows = await queryAcademic<DistinctAttendanceRow[]>(`
+      SELECT 
+        cs.college_id,
+        p.course_id,
+        cs.branch_id,
+        p.year_of_study,
+        COALESCE(NULLIF(TRIM(cs.section_name), ''), 'A') as section_name,
+        COUNT(DISTINCT CASE WHEN aps.status IN ('present', 'od') THEN aps.student_db_id END) as distinct_present,
+        COUNT(DISTINCT aps.student_db_id) as total_roster_students
+      FROM ap_attendance_posts ap
+      JOIN ap_class_sessions cs ON cs.id = ap.class_session_id
+      JOIN ap_timetable_plans p ON p.id = cs.plan_id
+      JOIN ap_attendance_post_students aps ON aps.attendance_post_id = ap.id
+      WHERE ap.id IN (${postedPostIds.map(() => "?").join(",")})
+      GROUP BY cs.college_id, p.course_id, cs.branch_id, p.year_of_study, COALESCE(NULLIF(TRIM(cs.section_name), ''), 'A')
+    `, postedPostIds);
+
+    for (const r of distinctRows) {
+      const secKey = `${r.college_id}_${r.course_id}_${r.branch_id}_${r.year_of_study}_${String(r.section_name).trim().toUpperCase()}`;
+      distinctAttendanceMap.set(secKey, {
+        distinctPresent: Number(r.distinct_present || 0),
+        totalRoster: Number(r.total_roster_students || 0),
+      });
+    }
+  }
+
+  // 5. Group by (college_id, course_id, branch_id, year_of_study)
+  const groupMap = new Map<string, CollegeCourseBranchYearSlotStats>();
+
+  for (const sess of sessions) {
+    const key = `${sess.college_id}_${sess.course_id}_${sess.branch_id}_${sess.year_of_study}`;
+    let item = groupMap.get(key);
+    if (!item) {
+      const col = collegeMap.get(sess.college_id);
+      const crs = courseMap.get(sess.course_id);
+      const br = branchMap.get(sess.branch_id);
+      const studentCountKey = `${sess.college_id}_${sess.course_id}_${sess.branch_id}_${sess.year_of_study}`;
+      const totalStudents = studentCountMap.get(studentCountKey) || 0;
+
+      const yearRoman =
+        sess.year_of_study === 1
+          ? "I"
+          : sess.year_of_study === 2
+            ? "II"
+            : sess.year_of_study === 3
+              ? "III"
+              : sess.year_of_study === 4
+                ? "IV"
+                : String(sess.year_of_study);
+
+      item = {
+        collegeId: sess.college_id,
+        collegeName: col?.name || `College ${sess.college_id}`,
+        collegeCode: col?.code || `C${sess.college_id}`,
+        courseId: sess.course_id,
+        courseName: crs?.name || `Course ${sess.course_id}`,
+        courseCode: crs?.code || `CRS${sess.course_id}`,
+        branchId: sess.branch_id,
+        branchName: br?.name || `Branch ${sess.branch_id}`,
+        branchCode: br?.code || `BR${sess.branch_id}`,
+        yearOfStudy: sess.year_of_study,
+        yearLabel: `${yearRoman} Year`,
+        semesterNumber: sess.semester_number,
+        totalStudents,
+        totalSessions: 0,
+        postedSessions: 0,
+        pendingSessions: 0,
+        totalPresent: 0,
+        totalAbsent: 0,
+        slotPresentMarks: 0,
+        slotAbsentMarks: 0,
+        totalOd: 0,
+        totalLeave: 0,
+        attendancePct: 0,
+        sections: [],
+        slots: [],
+      };
+      groupMap.set(key, item);
+    }
+
+    item.totalSessions++;
+    const isPosted = sess.post_id != null;
+    const pCount = Number(sess.present_count || 0);
+    const aCount = Number(sess.absent_count || 0);
+    const odCount = Number(sess.od_count || 0);
+    const lvCount = Number(sess.leave_count || 0);
+
+    if (isPosted) {
+      item.postedSessions++;
+      item.slotPresentMarks = (item.slotPresentMarks || 0) + pCount;
+      item.slotAbsentMarks = (item.slotAbsentMarks || 0) + aCount;
+      item.totalOd += odCount;
+      item.totalLeave += lvCount;
+    } else {
+      item.pendingSessions++;
+    }
+
+    const slotTotal = pCount + aCount;
+    const slotPct = slotTotal > 0 ? Math.round((pCount / slotTotal) * 100) : 0;
+
+    item.slots.push({
+      sessionId: sess.session_id,
+      slotLabel: sess.slot_label,
+      startTime: sess.start_time ? String(sess.start_time).slice(0, 5) : "",
+      endTime: sess.end_time ? String(sess.end_time).slice(0, 5) : "",
+      section: sess.section_name,
+      subjectName: sess.subject_name,
+      subjectCode: sess.subject_code,
+      facultyName: sess.faculty_name,
+      status: sess.status,
+      posted: isPosted,
+      presentCount: pCount,
+      absentCount: aCount,
+      odCount,
+      leaveCount: lvCount,
+      attendancePct: slotPct,
+    });
+  }
+
+  // Calculate headcount numbers and percentages per section and group
+  const groups = Array.from(groupMap.values()).map((g) => {
+    // Group slots by section
+    const sectionMap = new Map<string, SectionSlotStats>();
+    for (const slot of g.slots) {
+      const secName = (slot.section || "A").trim().toUpperCase();
+      let sStats = sectionMap.get(secName);
+      if (!sStats) {
+        const secStudentKey = `${g.collegeId}_${g.courseId}_${g.branchId}_${g.yearOfStudy}_${secName}`;
+        const secStudents = sectionStudentCountMap.get(secStudentKey) || 0;
+        sStats = {
+          sectionName: secName,
+          totalStudents: secStudents,
+          totalSessions: 0,
+          postedSessions: 0,
+          pendingSessions: 0,
+          totalPresent: 0,
+          totalAbsent: 0,
+          slotPresentMarks: 0,
+          slotAbsentMarks: 0,
+          totalOd: 0,
+          totalLeave: 0,
+          attendancePct: 0,
+          slots: [],
+        };
+        sectionMap.set(secName, sStats);
+      }
+      sStats.totalSessions++;
+      if (slot.posted) {
+        sStats.postedSessions++;
+        sStats.slotPresentMarks = (sStats.slotPresentMarks || 0) + slot.presentCount;
+        sStats.slotAbsentMarks = (sStats.slotAbsentMarks || 0) + slot.absentCount;
+        sStats.totalOd += slot.odCount;
+        sStats.totalLeave += slot.leaveCount;
+      } else {
+        sStats.pendingSessions++;
+      }
+      sStats.slots.push(slot);
+    }
+
+    if (sectionMap.size === 0) {
+      sectionMap.set("A", {
+        sectionName: "A",
+        totalStudents: g.totalStudents,
+        totalSessions: 0,
+        postedSessions: 0,
+        pendingSessions: 0,
+        totalPresent: 0,
+        totalAbsent: 0,
+        slotPresentMarks: 0,
+        slotAbsentMarks: 0,
+        totalOd: 0,
+        totalLeave: 0,
+        attendancePct: 0,
+        slots: [],
+      });
+    }
+
+    const sections = Array.from(sectionMap.values()).map((sec) => {
+      const secKey = `${g.collegeId}_${g.courseId}_${g.branchId}_${g.yearOfStudy}_${sec.sectionName}`;
+      const distinctInfo = distinctAttendanceMap.get(secKey);
+
+      let secStudents = sec.totalStudents;
+      if (secStudents === 0 && distinctInfo?.totalRoster) {
+        secStudents = distinctInfo.totalRoster;
+      }
+      if (secStudents === 0 && g.totalStudents > 0) {
+        secStudents = Math.round(g.totalStudents / Math.max(1, sectionMap.size));
+      }
+
+      // Compute actual student headcount present and absent for the day
+      let secPresentStudents = 0;
+      let secAbsentStudents = 0;
+
+      if (sec.postedSessions > 0) {
+        if (distinctInfo) {
+          secPresentStudents = Math.min(secStudents, distinctInfo.distinctPresent);
+          secAbsentStudents = Math.max(0, secStudents - secPresentStudents);
+        } else {
+          const avgPresent = Math.round((sec.slotPresentMarks || 0) / sec.postedSessions);
+          secPresentStudents = Math.min(secStudents, avgPresent);
+          secAbsentStudents = Math.max(0, secStudents - secPresentStudents);
+        }
+      }
+
+      const slotTotalMarks = (sec.slotPresentMarks || 0) + (sec.slotAbsentMarks || 0);
+      const secPct = slotTotalMarks > 0
+        ? Math.round(((sec.slotPresentMarks || 0) / slotTotalMarks) * 100)
+        : secStudents > 0 && sec.postedSessions > 0
+          ? Math.round((secPresentStudents / secStudents) * 100)
+          : 0;
+
+      return {
+        ...sec,
+        totalStudents: secStudents,
+        totalPresent: secPresentStudents,
+        totalAbsent: secAbsentStudents,
+        attendancePct: secPct,
+      };
+    }).sort((a, b) => a.sectionName.localeCompare(b.sectionName));
+
+    const totalCalculatedStudents = sections.reduce((acc, s) => acc + s.totalStudents, 0);
+    const totalGroupPresent = sections.reduce((acc, s) => acc + s.totalPresent, 0);
+    const totalGroupAbsent = sections.reduce((acc, s) => acc + s.totalAbsent, 0);
+    const totalGroupSlotPresent = sections.reduce((acc, s) => acc + (s.slotPresentMarks || 0), 0);
+    const totalGroupSlotAbsent = sections.reduce((acc, s) => acc + (s.slotAbsentMarks || 0), 0);
+    const totalGroupSlotMarks = totalGroupSlotPresent + totalGroupSlotAbsent;
+
+    const groupAttPct = totalGroupSlotMarks > 0
+      ? Math.round((totalGroupSlotPresent / totalGroupSlotMarks) * 100)
+      : totalCalculatedStudents > 0 && g.postedSessions > 0
+        ? Math.round((totalGroupPresent / totalCalculatedStudents) * 100)
+        : 0;
+
+    return {
+      ...g,
+      totalStudents: totalCalculatedStudents > 0 ? totalCalculatedStudents : g.totalStudents,
+      totalPresent: totalGroupPresent,
+      totalAbsent: totalGroupAbsent,
+      slotPresentMarks: totalGroupSlotPresent,
+      slotAbsentMarks: totalGroupSlotAbsent,
+      attendancePct: groupAttPct,
+      sections,
+    };
+  });
+
+  // Calculate overall summary
+  const distinctColleges = new Set(groups.map((g) => g.collegeId));
+  const distinctCourses = new Set(groups.map((g) => g.courseId));
+  const distinctBranches = new Set(groups.map((g) => g.branchId));
+  const totalStudents = groups.reduce((acc, g) => acc + g.totalStudents, 0);
+  const totalSessions = groups.reduce((acc, g) => acc + g.totalSessions, 0);
+  const postedSessions = groups.reduce((acc, g) => acc + g.postedSessions, 0);
+  const pendingSessions = groups.reduce((acc, g) => acc + g.pendingSessions, 0);
+  const overallPresent = groups.reduce((acc, g) => acc + g.totalPresent, 0);
+  const overallAbsent = groups.reduce((acc, g) => acc + g.totalAbsent, 0);
+  const overallSlotPresent = groups.reduce((acc, g) => acc + (g.slotPresentMarks || 0), 0);
+  const overallSlotAbsent = groups.reduce((acc, g) => acc + (g.slotAbsentMarks || 0), 0);
+  const overallSlotTotal = overallSlotPresent + overallSlotAbsent;
+  const overallAttendancePct = overallSlotTotal > 0
+    ? Math.round((overallSlotPresent / overallSlotTotal) * 100)
+    : totalStudents > 0 && postedSessions > 0
+      ? Math.round((overallPresent / totalStudents) * 100)
+      : 0;
+
+  return {
+    date,
+    summary: {
+      totalColleges: distinctColleges.size,
+      totalCourses: distinctCourses.size,
+      totalBranches: distinctBranches.size,
+      totalStudents,
+      totalSessions,
+      postedSessions,
+      pendingSessions,
+      overallPresent,
+      overallAbsent,
+      overallAttendancePct,
+    },
+    groups,
+  };
+}
+
 /** Kept so command center can reuse session stats without Student DB period_slots. */
 export async function getTodaySessionCounts(filters: {
   collegeId?: number;
@@ -2765,4 +3349,5 @@ export async function getTodaySessionCounts(filters: {
 }
 
 export { todayIso };
+
 

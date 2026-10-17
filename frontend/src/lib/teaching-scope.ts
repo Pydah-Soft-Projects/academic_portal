@@ -71,7 +71,19 @@ export function isTeachingStaffOnly(authorization: Authorization | null): boolea
   return !INSTITUTE_WIDE_PERMISSIONS.some((key) => perms.includes(key));
 }
 
-export type DashboardMode = "admin" | "hod" | "class_teacher" | "teacher";
+export type DashboardMode = "admin" | "principal" | "vice_principal" | "hod" | "class_teacher" | "teacher";
+
+/** Principal role check. */
+export function isPrincipalUser(authorization: Authorization | null): boolean {
+  if (!authorization?.roles?.length) return false;
+  return authorization.roles.some((role) => role.roleKey === "principal");
+}
+
+/** Vice Principal role check. */
+export function isVicePrincipalUser(authorization: Authorization | null): boolean {
+  if (!authorization?.roles?.length) return false;
+  return authorization.roles.some((role) => role.roleKey === "vice_principal");
+}
 
 /** Principal or Vice Principal leadership role check. */
 export function isPrincipalOrVpUser(authorization: Authorization | null): boolean {
@@ -91,8 +103,18 @@ export function isStaffUser(authorization: Authorization | null): boolean {
 export function getDefaultDashboardMode(authorization: Authorization | null): DashboardMode {
   if (!authorization) return "teacher";
 
-  // Super Admin, Principal, Vice Principal -> Admin/Command Center
-  if (isSuperAdminUser(authorization) || isPrincipalOrVpUser(authorization)) {
+  // Vice Principal role -> Vice Principal Dashboard
+  if (isVicePrincipalUser(authorization)) {
+    return "vice_principal";
+  }
+
+  // Principal role -> Principal Dashboard
+  if (isPrincipalUser(authorization)) {
+    return "principal";
+  }
+
+  // Super Admin -> Leadership / Principal Dashboard
+  if (isSuperAdminUser(authorization)) {
     return "admin";
   }
 
