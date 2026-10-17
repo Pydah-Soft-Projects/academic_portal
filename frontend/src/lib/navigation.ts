@@ -74,12 +74,6 @@ export const NAV_GROUPS: NavGroup[] = [
         permissions: ["my_timetable.view"],
       },
       {
-        label: "Attendance Calendar",
-        href: "/attendance-calendar",
-        icon: CalendarRange,
-        permissions: ["attendance_calendar.view"],
-      },
-      {
         label: "Master Timetable",
         href: "/timetables",
         icon: CalendarDays,
@@ -247,6 +241,12 @@ export const NAV_GROUPS: NavGroup[] = [
     title: "System",
     icon: Settings,
     items: [
+      {
+        label: "Attendance Calendar",
+        href: "/attendance-calendar",
+        icon: CalendarRange,
+        permissions: ["attendance_calendar.view"],
+      },
       {
         label: "Faculty & Departments",
         href: "/faculty-departments",

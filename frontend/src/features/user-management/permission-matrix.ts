@@ -370,14 +370,6 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
   },
   {
     group: "Academics",
-    label: "Attendance Calendar",
-    href: "/attendance-calendar",
-    iconName: "CalendarRange",
-    sidebarUnlockPermissions: ["attendance_calendar.view"],
-    permissions: [asDef("attendance_calendar.view"), asDef("attendance_calendar.edit")],
-  },
-  {
-    group: "Academics",
     label: "Master Timetable",
     href: "/timetables",
     iconName: "CalendarDays",
@@ -529,6 +521,14 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
   },
 
   // 8. System
+  {
+    group: "System",
+    label: "Attendance Calendar",
+    href: "/attendance-calendar",
+    iconName: "CalendarRange",
+    sidebarUnlockPermissions: ["attendance_calendar.view"],
+    permissions: [asDef("attendance_calendar.view"), asDef("attendance_calendar.edit")],
+  },
   {
     group: "System",
     label: "Faculty & Departments",

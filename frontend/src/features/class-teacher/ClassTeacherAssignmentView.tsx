@@ -646,14 +646,14 @@ export function ClassTeacherAssignmentView() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filteredSections.map((row) => {
+                  {filteredSections.map((row, idx) => {
                     const isPublished = row.timetable.status === "published";
                     const isDraft = row.timetable.status === "draft";
                     const hasTeacher = row.classTeacher !== null;
 
                     return (
                       <tr
-                        key={`${row.collegeId}-${row.branchId}-${row.batch}-${row.semester}-${row.sectionName}`}
+                        key={`${row.collegeId}-${row.courseId}-${row.branchId}-${row.batch}-${row.year}-${row.semester}-${row.sectionName}-${idx}`}
                         className="hover:bg-slate-50/70 transition-colors"
                       >
                         {/* College */}

@@ -27,6 +27,12 @@ const sections: SettingsSection[] = [
     permissions: ["roles.view", "roles.manage"],
   },
   {
+    title: "Attendance Calendar",
+    description: "Configure working days, institutional holidays, events, and monthly attendance calendar schedules.",
+    href: "/attendance-calendar",
+    permissions: ["attendance_calendar.view", "settings.view"],
+  },
+  {
     title: "Semester Dates",
     description: "View and update academic start / end dates from Student Database.",
     href: "/settings/semester-dates",

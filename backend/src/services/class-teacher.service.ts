@@ -913,6 +913,7 @@ export async function getClassTeacherOverview(
     const sec = (p.section_name || "A").trim().toUpperCase();
     const batch = (p.batch || "").trim().toUpperCase();
     const key = `${p.college_id}:${p.branch_id}:${batch}:${p.semester_number}:${sec}`;
+    const keyWithYear = `${p.college_id}:${p.branch_id}:${batch}:${p.year_of_study}:${p.semester_number}:${sec}`;
     const isPub = p.status === "published";
     const mappedStatus: "published" | "draft" = isPub ? "published" : "draft";
 
@@ -926,6 +927,12 @@ export async function getClassTeacherOverview(
     const existing = planMap.get(key);
     if (!existing || (!existing.status.includes("published") && isPub)) {
       planMap.set(key, item);
+    }
+    if (p.year_of_study) {
+      const existingYear = planMap.get(keyWithYear);
+      if (!existingYear || (!existingYear.status.includes("published") && isPub)) {
+        planMap.set(keyWithYear, item);
+      }
     }
   }
 
@@ -971,6 +978,7 @@ export async function getClassTeacherOverview(
           id: number;
           branch_id: number;
           batch: string;
+          current_year: number | null;
           current_semester: number;
           section_name: string;
         })[]
@@ -980,6 +988,7 @@ export async function getClassTeacherOverview(
           s.id,
           s.branch_id,
           TRIM(s.batch) AS batch,
+          s.current_year,
           s.current_semester,
           TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name
         FROM students s
@@ -990,8 +999,16 @@ export async function getClassTeacherOverview(
       );
 
       for (const row of studentSectionRows) {
-        const key = `${row.branch_id}:${(row.batch || "").trim().toUpperCase()}:${row.current_semester}:${(row.section_name || "A").trim().toUpperCase()}`;
-        studentToSectionKeyMap.set(Number(row.id), key);
+        const batch = (row.batch || "").trim().toUpperCase();
+        const sec = (row.section_name || "A").trim().toUpperCase();
+        const yr = row.current_year ? String(row.current_year) : "";
+        const keyWithYear = `${row.branch_id}:${batch}:${yr}:${row.current_semester}:${sec}`;
+        const key = `${row.branch_id}:${batch}:${row.current_semester}:${sec}`;
+        studentToSectionKeyMap.set(Number(row.id), keyWithYear);
+        // Also ensure fallback key is set if not already present
+        if (!studentToSectionKeyMap.has(Number(row.id))) {
+          studentToSectionKeyMap.set(Number(row.id), key);
+        }
       }
     }
   }
@@ -1006,44 +1023,61 @@ export async function getClassTeacherOverview(
   };
   const sectionTeacherMap = new Map<string, Map<number, SectionFacultyTally>>();
 
+  const addFacultyTally = (secKey: string, ma: typeof mentorAssignments[0]) => {
+    let facultyTallies = sectionTeacherMap.get(secKey);
+    if (!facultyTallies) {
+      facultyTallies = new Map();
+      sectionTeacherMap.set(secKey, facultyTallies);
+    }
+    const fid = Number(ma.faculty_staff_link_id);
+    const cur = facultyTallies.get(fid) ?? {
+      facultyStaffLinkId: fid,
+      facultyName: ma.faculty_name || "Staff",
+      hrmsEmployeeId: ma.hrms_employee_id || "",
+      departmentName: ma.department_name || null,
+      count: 0,
+    };
+    cur.count++;
+    facultyTallies.set(fid, cur);
+  };
+
   for (const ma of mentorAssignments) {
     const sid = Number(ma.student_db_id);
-    let secKey: string | null = null;
 
     if (sid > 0) {
-      secKey = studentToSectionKeyMap.get(sid) ?? null;
+      const secKeyWithYear = studentToSectionKeyMap.get(sid);
+      if (secKeyWithYear) {
+        addFacultyTally(secKeyWithYear, ma);
+        // Also register under general key without year
+        const parts = secKeyWithYear.split(":");
+        if (parts.length >= 5) {
+          const generalKey = `${parts[0]}:${parts[1]}:${parts[3]}:${parts[4]}`;
+          addFacultyTally(generalKey, ma);
+        }
+      }
     } else if (ma.notes) {
       try {
         const parsed = JSON.parse(ma.notes) as {
           branchId?: number;
           batch?: string;
+          year?: number;
           semester?: number;
           section?: string;
         };
         if (parsed.branchId && parsed.batch) {
-          secKey = `${parsed.branchId}:${(parsed.batch || "").trim().toUpperCase()}:${parsed.semester || 1}:${(parsed.section || "A").trim().toUpperCase()}`;
+          const bUpper = (parsed.batch || "").trim().toUpperCase();
+          const sUpper = (parsed.section || "A").trim().toUpperCase();
+          const sem = parsed.semester || 1;
+          const fallbackKey = `${parsed.branchId}:${bUpper}:${sem}:${sUpper}`;
+          addFacultyTally(fallbackKey, ma);
+          if (parsed.year) {
+            const yearKey = `${parsed.branchId}:${bUpper}:${parsed.year}:${sem}:${sUpper}`;
+            addFacultyTally(yearKey, ma);
+          }
         }
       } catch {
-        secKey = null;
+        // Ignore JSON parse failure
       }
-    }
-
-    if (secKey) {
-      let facultyTallies = sectionTeacherMap.get(secKey);
-      if (!facultyTallies) {
-        facultyTallies = new Map();
-        sectionTeacherMap.set(secKey, facultyTallies);
-      }
-      const fid = Number(ma.faculty_staff_link_id);
-      const cur = facultyTallies.get(fid) ?? {
-        facultyStaffLinkId: fid,
-        facultyName: ma.faculty_name || "Staff",
-        hrmsEmployeeId: ma.hrms_employee_id || "",
-        departmentName: ma.department_name || null,
-        count: 0,
-      };
-      cur.count++;
-      facultyTallies.set(fid, cur);
     }
   }
 
@@ -1053,10 +1087,12 @@ export async function getClassTeacherOverview(
   for (const r of targetRows) {
     const batchUpper = (r.batch || "").trim().toUpperCase();
     const secUpper = (r.section_name || "A").trim().toUpperCase();
+    const planKeyWithYear = `${r.college_id}:${r.branch_id}:${batchUpper}:${r.year}:${r.semester}:${secUpper}`;
     const planKey = `${r.college_id}:${r.branch_id}:${batchUpper}:${r.semester}:${secUpper}`;
+    const sectionKeyWithYear = `${r.branch_id}:${batchUpper}:${r.year}:${r.semester}:${secUpper}`;
     const sectionKey = `${r.branch_id}:${batchUpper}:${r.semester}:${secUpper}`;
 
-    const timetableMeta = planMap.get(planKey) ?? {
+    const timetableMeta = planMap.get(planKeyWithYear) ?? planMap.get(planKey) ?? {
       status: "pending" as const,
       planId: null,
       versionNo: null,
@@ -1065,7 +1101,8 @@ export async function getClassTeacherOverview(
 
     // Resolve class teacher
     let teacherMeta: ClassTeacherSectionItem["classTeacher"] = null;
-    const facultyTallies = sectionTeacherMap.get(sectionKey);
+    const facultyTallies =
+      sectionTeacherMap.get(sectionKeyWithYear) ?? sectionTeacherMap.get(sectionKey);
     if (facultyTallies && facultyTallies.size > 0) {
       // Pick faculty with highest count
       const sorted = Array.from(facultyTallies.values()).sort((a, b) => b.count - a.count);

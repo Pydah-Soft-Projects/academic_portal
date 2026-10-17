@@ -244,14 +244,14 @@ export function AssignClassTeacherModal({
               No faculty found matching &ldquo;{search}&rdquo;. Try another name or code.
             </div>
           ) : (
-            filteredFaculty.map((faculty) => {
+            filteredFaculty.map((faculty, idx) => {
               const isSelected = faculty.hrmsEmployeeId === selectedHrmsId;
               const isCurrent =
                 sectionInfo.currentTeacher?.hrmsEmployeeId === faculty.hrmsEmployeeId;
 
               return (
                 <div
-                  key={faculty.hrmsEmployeeId}
+                  key={`${faculty.hrmsEmployeeId || faculty.staffLinkId || idx}-${idx}`}
                   onClick={() => setSelectedHrmsId(faculty.hrmsEmployeeId)}
                   className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all duration-150 ${
                     isSelected
