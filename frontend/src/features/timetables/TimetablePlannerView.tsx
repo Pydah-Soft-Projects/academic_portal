@@ -1207,8 +1207,13 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     params.set("collegeId", String(filters.collegeId));
     params.set("courseId", String(filters.courseId));
     params.set("branchId", String(filters.branchId));
-    if (filters.batch && filters.batch !== "all") {
-      params.set("batch", String(filters.batch));
+    const effectiveBatch = filters.batch && filters.batch !== "all"
+      ? filters.batch
+      : filters.year !== "all" && filters.academicYear
+        ? String(parseInt(String(filters.academicYear).slice(0, 4), 10) - (Number(filters.year) - 1))
+        : null;
+    if (effectiveBatch && !isNaN(Number(effectiveBatch))) {
+      params.set("batch", effectiveBatch);
     }
     params.set("semester", String(filters.semester));
     params.set("academicYear", filters.academicYear);
@@ -2307,8 +2312,9 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                 {" • "}
                 {planner.context.course} / {planner.context.branch}
                 {planner.context.hasSections ? ` • Section ${planner.context.section}` : ""}
-                {" • Batch "}
-                {planner.context.batch}
+                {planner.context.batch && planner.context.batch !== "—"
+                  ? ` • Batch ${planner.context.batch}`
+                  : ""}
                 {planner.context.year ? ` • Year ${planner.context.year}` : ""}
                 {" • "}
                 {planner.context.studentCount.toLocaleString()} students

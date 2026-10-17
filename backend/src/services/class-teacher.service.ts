@@ -1221,11 +1221,11 @@ export async function getClassTeacherForSection(scope: {
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE s.branch_id = ?
-      AND TRIM(s.batch) = ?
+      AND TRIM(s.batch) COLLATE utf8mb4_unicode_ci = ?
       ${scope.year ? "AND s.current_year = ?" : ""}
       ${scope.semester ? "AND s.current_semester = ?" : ""}
-      AND TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?
-      AND (s.student_status = 'Regular' OR s.student_status = 'Active' OR s.student_status IS NULL)
+      AND TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section, 'A')) = ?
+      AND (TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci IN ('Regular', 'Active') OR s.student_status IS NULL)
     `,
     [
       scope.branchId,

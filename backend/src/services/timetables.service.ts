@@ -222,6 +222,100 @@ async function resolveContext(filters: TimetablePlannerFilters) {
   };
 }
 
+/**
+ * Calculate standard entry batch based on academic year and study year.
+ * E.g. Academic Year "2026-2027" and Year 2 -> Batch 2025 (entered in 2025).
+ */
+export function deriveBatchFromAcademicYearAndYear(
+  academicYear?: string | null,
+  year?: number | string | null,
+): string | null {
+  if (!academicYear || year == null || year === "all") return null;
+  const startYear = parseInt(String(academicYear).slice(0, 4), 10);
+  const yearNum = typeof year === "number" ? year : parseInt(String(year), 10);
+  if (isNaN(startYear) || isNaN(yearNum) || yearNum < 1) return null;
+  return String(startYear - (yearNum - 1));
+}
+
+/**
+ * Dynamically resolves batch for a given academic context (academicYear, year, branch, college, course).
+ * Uses student database actuals, curriculum mapping actuals, or academic year arithmetic.
+ */
+export async function resolveBatchForContext(input: {
+  academicYear?: string | null;
+  collegeId?: number | null;
+  courseId?: number | null;
+  branchId?: number | null;
+  year?: number | null;
+  batch?: string | null;
+}): Promise<string | null> {
+  const explicit = input.batch?.trim();
+  if (explicit && explicit !== "all") {
+    return explicit;
+  }
+
+  const year = input.year;
+  const academicYear = input.academicYear;
+
+  // 1. If branchId & year are provided, inspect students for dominant batch
+  if (input.branchId && year) {
+    try {
+      const studentBatchRows = await queryStudent<(RowDataPacket & { batch: string })[]>(
+        `
+        SELECT TRIM(s.batch) AS batch, COUNT(*) AS cnt
+        FROM students s
+        WHERE s.branch_id = ?
+          AND s.current_year = ?
+          AND TRIM(COALESCE(s.batch, '')) <> ''
+          AND (TRIM(COALESCE(s.student_status, '')) = 'Regular' OR s.student_status IS NULL)
+        GROUP BY TRIM(s.batch)
+        ORDER BY cnt DESC
+        LIMIT 1
+        `,
+        [input.branchId, year],
+      );
+      if (studentBatchRows[0]?.batch) {
+        return studentBatchRows[0].batch;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 2. Query subject_mapping_entries for this scope and yearOfStudy
+  if (year && (input.branchId || input.courseId || input.collegeId)) {
+    try {
+      const where: string[] = ["sme.yearOfStudy = ?", "TRIM(COALESCE(sme.batch, '')) <> ''"];
+      const params: unknown[] = [year];
+      if (input.collegeId) { where.push("sme.collegeId = ?"); params.push(input.collegeId); }
+      if (input.courseId) { where.push("sme.courseId = ?"); params.push(input.courseId); }
+      if (input.branchId) { where.push("sme.branchId = ?"); params.push(input.branchId); }
+      const smeRows = await queryExam<(RowDataPacket & { batch: string })[]>(
+        `
+        SELECT TRIM(sme.batch) AS batch, COUNT(*) AS cnt
+        FROM subject_mapping_entries sme
+        WHERE ${where.join(" AND ")}
+        GROUP BY TRIM(sme.batch)
+        ORDER BY cnt DESC
+        LIMIT 1
+        `,
+        params,
+      );
+      if (smeRows[0]?.batch) {
+        return smeRows[0].batch;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // 3. Mathematical calculation based on academic year and study year
+  const computed = deriveBatchFromAcademicYearAndYear(academicYear, year);
+  if (computed) return computed;
+
+  return null;
+}
+
 async function countStudentsForScope(filters: TimetablePlannerFilters) {
   if (!filters.branchId) return 0;
   const where = [
@@ -229,9 +323,12 @@ async function countStudentsForScope(filters: TimetablePlannerFilters) {
     "TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci",
   ];
   const params: unknown[] = [filters.branchId];
-  if (filters.batch) {
+  const batch = filters.batch && filters.batch !== "all"
+    ? filters.batch
+    : deriveBatchFromAcademicYearAndYear(filters.academicYear, filters.year);
+  if (batch) {
     where.push("s.batch = ?");
-    params.push(filters.batch);
+    params.push(batch);
   }
   if (filters.year) {
     where.push("s.current_year = ?");
@@ -327,9 +424,19 @@ export async function listSubjectsForPlanner(filters: TimetablePlannerFilters) {
   const collegeId = filters.collegeId;
   const courseId = filters.courseId;
   const branchId = filters.branchId;
-  const batch = filters.batch?.trim();
+  let batch = filters.batch?.trim();
 
-  if (!collegeId || !courseId || !branchId || !batch) {
+  if (!batch || batch === "all") {
+    batch = (await resolveBatchForContext({
+      academicYear: filters.academicYear,
+      collegeId,
+      courseId,
+      branchId,
+      year: filters.year,
+    })) ?? undefined;
+  }
+
+  if (!collegeId || !courseId || !branchId) {
     return [];
   }
 
@@ -337,11 +444,14 @@ export async function listSubjectsForPlanner(filters: TimetablePlannerFilters) {
     "sme.collegeId = ?",
     "sme.courseId = ?",
     "sme.branchId = ?",
-    "sme.batch = ?",
     "(s.status = 'active' OR s.status IS NULL OR s.status = '')",
   ];
-  const params: unknown[] = [collegeId, courseId, branchId, batch];
+  const params: unknown[] = [collegeId, courseId, branchId];
 
+  if (batch && batch !== "all") {
+    where.push("sme.batch = ?");
+    params.push(batch);
+  }
   if (filters.year != null) {
     where.push("sme.yearOfStudy = ?");
     params.push(filters.year);
@@ -633,38 +743,54 @@ async function findPlan(filters: Required<
   >
 > & { batch?: string; section?: string | null; year?: number | null; statuses?: string[] }) {
   const statuses = filters.statuses ?? ["draft", "in_review", "published"];
-  const batchCond = filters.batch && filters.batch !== "all"
-    ? "AND (batch = ? OR batch IS NULL OR batch = '')"
-    : "";
-  const batchParams = filters.batch && filters.batch !== "all" ? [filters.batch] : [];
+
+  const where: string[] = [
+    "academic_year_label = ?",
+    "college_id = ?",
+    "course_id = ?",
+    "branch_id = ?",
+    "semester_number = ?",
+    "((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)",
+    `status IN (${statuses.map(() => "?").join(",")})`,
+  ];
+  const params: unknown[] = [
+    filters.academicYear,
+    filters.collegeId,
+    filters.courseId,
+    filters.branchId,
+    filters.semester,
+    filters.section ?? null,
+    filters.section ?? null,
+    ...statuses,
+  ];
+
+  if (filters.year != null) {
+    where.push("(year_of_study = ? OR year_of_study IS NULL)");
+    params.push(filters.year);
+  }
+
+  if (filters.batch && filters.batch !== "all") {
+    where.push("(batch = ? OR batch IS NULL OR batch = '')");
+    params.push(filters.batch);
+  }
+
   const rows = await queryAcademic<PlanRow[]>(
     `
     SELECT *
     FROM ap_timetable_plans
-    WHERE academic_year_label = ?
-      AND college_id = ?
-      AND course_id = ?
-      AND branch_id = ?
-      ${batchCond}
-      AND semester_number = ?
-      AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
-      AND status IN (${statuses.map(() => "?").join(",")})
+    WHERE ${where.join(" AND ")}
     ORDER BY
+      ${filters.year != null ? "CASE WHEN year_of_study = ? THEN 0 ELSE 1 END," : ""}
+      ${filters.batch && filters.batch !== "all" ? "CASE WHEN batch = ? THEN 0 ELSE 1 END," : ""}
       FIELD(status,'draft','in_review','published'),
       version_no DESC,
       id DESC
     LIMIT 1
     `,
     [
-      filters.academicYear,
-      filters.collegeId,
-      filters.courseId,
-      filters.branchId,
-      ...batchParams,
-      filters.semester,
-      filters.section ?? null,
-      filters.section ?? null,
-      ...statuses,
+      ...params,
+      ...(filters.year != null ? [filters.year] : []),
+      ...(filters.batch && filters.batch !== "all" ? [filters.batch] : []),
     ],
   );
   return rows[0] ?? null;
@@ -694,6 +820,7 @@ type PlanScope = {
   course_id: number;
   branch_id: number;
   batch: string;
+  year?: number | null;
   semester_number: number | null;
   section_name: string | null;
 };
@@ -705,6 +832,7 @@ function planScopeFromRow(plan: PlanRow): PlanScope {
     course_id: plan.course_id,
     branch_id: plan.branch_id,
     batch: plan.batch,
+    year: plan.year_of_study != null ? Number(plan.year_of_study) : null,
     semester_number: plan.semester_number,
     section_name: plan.section_name,
   };
@@ -716,6 +844,7 @@ function planScopeFromDraftInput(input: {
   courseId: number;
   branchId: number;
   batch?: string | null;
+  year?: number | null;
   semester: number;
   section?: string | null;
 }): PlanScope {
@@ -725,40 +854,58 @@ function planScopeFromDraftInput(input: {
     course_id: input.courseId,
     branch_id: input.branchId,
     batch: input.batch ?? "",
+    year: input.year ?? null,
     semester_number: input.semester,
     section_name: input.section ?? null,
   };
 }
 
 async function findPublishedPlanForScope(scope: PlanScope): Promise<PlanRow | null> {
-  const batchCond = scope.batch && scope.batch !== "all"
-    ? "AND (batch = ? OR batch IS NULL OR batch = '')"
-    : "";
-  const batchParams = scope.batch && scope.batch !== "all" ? [scope.batch] : [];
+  const where: string[] = [
+    "academic_year_label = ?",
+    "college_id = ?",
+    "course_id = ?",
+    "branch_id = ?",
+    "semester_number = ?",
+    "((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)",
+    "status = 'published'",
+  ];
+  const params: unknown[] = [
+    scope.academic_year_label,
+    scope.college_id,
+    scope.course_id,
+    scope.branch_id,
+    scope.semester_number,
+    scope.section_name,
+    scope.section_name,
+  ];
+
+  if (scope.year != null) {
+    where.push("(year_of_study = ? OR year_of_study IS NULL)");
+    params.push(scope.year);
+  }
+
+  if (scope.batch && scope.batch !== "all") {
+    where.push("(batch = ? OR batch IS NULL OR batch = '')");
+    params.push(scope.batch);
+  }
+
   const rows = await queryAcademic<PlanRow[]>(
     `
     SELECT *
     FROM ap_timetable_plans
-    WHERE academic_year_label = ?
-      AND college_id = ?
-      AND course_id = ?
-      AND branch_id = ?
-      ${batchCond}
-      AND semester_number = ?
-      AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
-      AND status = 'published'
-    ORDER BY version_no DESC, id DESC
+    WHERE ${where.join(" AND ")}
+    ORDER BY
+      ${scope.year != null ? "CASE WHEN year_of_study = ? THEN 0 ELSE 1 END," : ""}
+      ${scope.batch && scope.batch !== "all" ? "CASE WHEN batch = ? THEN 0 ELSE 1 END," : ""}
+      version_no DESC,
+      id DESC
     LIMIT 1
     `,
     [
-      scope.academic_year_label,
-      scope.college_id,
-      scope.course_id,
-      scope.branch_id,
-      ...batchParams,
-      scope.semester_number,
-      scope.section_name,
-      scope.section_name,
+      ...params,
+      ...(scope.year != null ? [scope.year] : []),
+      ...(scope.batch && scope.batch !== "all" ? [scope.batch] : []),
     ],
   );
   return rows[0] ?? null;
@@ -975,8 +1122,19 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
   const context = await resolveContext(filters);
   const academicYear = filters.academicYear ?? "";
   const semester = filters.semester;
-  const batch = filters.batch;
-  const year = filters.year ?? null;
+  const year = filters.year ?? undefined;
+  let batch = filters.batch && filters.batch !== "all" ? filters.batch : undefined;
+
+  // Dynamically resolve batch for context if missing
+  if (!batch && year) {
+    batch = (await resolveBatchForContext({
+      academicYear,
+      collegeId: filters.collegeId,
+      courseId: filters.courseId,
+      branchId: filters.branchId,
+      year,
+    })) ?? undefined;
+  }
 
   const sectionLabel =
     filters.section && filters.section !== "all"
@@ -1000,6 +1158,12 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
     Boolean(academicYear) &&
     Boolean(semester) &&
     (!context?.hasSections || Boolean(sectionLabel));
+
+  const resolvedFilters: TimetablePlannerFilters = {
+    ...filters,
+    batch,
+    year,
+  };
 
   if (!contextComplete || !context || !semester || !filters.collegeId) {
     return {
@@ -1052,12 +1216,12 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
         course: context.courseName,
         branch: context.branchName,
         branchId: context.branchId,
-        batch,
+        batch: batch ?? "—",
         year,
         semester,
         section: sectionLabel ?? "—",
         hasSections: context.hasSections,
-        studentCount: await countStudentsForScope(filters),
+        studentCount: await countStudentsForScope(resolvedFilters),
         status: null,
         timingTemplateName: null,
         planId: null,
@@ -1068,7 +1232,7 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
       slotsByDay: {},
       grid: {},
       entries: [],
-      subjects: await listSubjectsForPlanner(filters),
+      subjects: await listSubjectsForPlanner(resolvedFilters),
       faculty: await listFacultyOptions(),
       classTeacher: null,
       review: null,
@@ -1092,8 +1256,8 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
   const entries = await hydrateEntriesForDisplay(entriesRaw, plan?.status);
   const { days, slotsByDay, grid } = buildGrid(timing.slots, entries);
   const [studentCount, subjects, faculty, classTeacher] = await Promise.all([
-    countStudentsForScope(filters),
-    listSubjectsForPlanner(filters),
+    countStudentsForScope(resolvedFilters),
+    listSubjectsForPlanner(resolvedFilters),
     listFacultyOptions(),
     getClassTeacherForSection({
       branchId: context.branchId,
@@ -1117,8 +1281,8 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
       courseId: context.courseId,
       branch: context.branchName,
       branchId: context.branchId,
-      batch,
-      year,
+      batch: batch ?? plan?.batch ?? "—",
+      year: year ?? plan?.year_of_study ?? null,
       semester,
       section: sectionLabel ?? "—",
       hasSections: context.hasSections,
@@ -1554,7 +1718,16 @@ export async function saveTimetableDraft(input: {
     });
   }
 
-  const effectiveBatch = input.batch && input.batch !== "all" ? input.batch : "";
+  let effectiveBatch = input.batch && input.batch !== "all" ? input.batch : "";
+  if (!effectiveBatch && input.year) {
+    effectiveBatch = (await resolveBatchForContext({
+      academicYear: input.academicYear,
+      collegeId: input.collegeId,
+      courseId: input.courseId,
+      branchId: input.branchId,
+      year: input.year,
+    })) ?? "";
+  }
   const existingDraft = await queryAcademic<PlanRow[]>(
     `
     SELECT * FROM ap_timetable_plans
@@ -1563,6 +1736,7 @@ export async function saveTimetableDraft(input: {
       AND course_id = ?
       AND branch_id = ?
       AND (? = '' OR batch = ? OR batch IS NULL OR batch = '')
+      AND (year_of_study = ? OR (? IS NULL AND year_of_study IS NULL))
       AND semester_number = ?
       AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
       AND status IN ('draft','in_review')
@@ -1576,6 +1750,8 @@ export async function saveTimetableDraft(input: {
       input.branchId,
       effectiveBatch,
       effectiveBatch,
+      input.year ?? null,
+      input.year ?? null,
       input.semester,
       input.section ?? null,
       input.section ?? null,
@@ -1609,6 +1785,7 @@ export async function saveTimetableDraft(input: {
         AND course_id = ?
         AND branch_id = ?
         AND (? = '' OR batch = ? OR batch IS NULL OR batch = '')
+        AND (year_of_study = ? OR (? IS NULL AND year_of_study IS NULL))
         AND semester_number = ?
         AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
         AND status IN ('draft','in_review')
@@ -1622,6 +1799,8 @@ export async function saveTimetableDraft(input: {
         input.branchId,
         effectiveBatch,
         effectiveBatch,
+        input.year ?? null,
+        input.year ?? null,
         input.semester,
         input.section ?? null,
         input.section ?? null,
@@ -1640,6 +1819,7 @@ export async function saveTimetableDraft(input: {
           AND course_id = ?
           AND branch_id = ?
           AND (? = '' OR batch = ? OR batch IS NULL OR batch = '')
+          AND (year_of_study = ? OR (? IS NULL AND year_of_study IS NULL))
           AND semester_number = ?
           AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
           AND status = 'published'
@@ -1653,6 +1833,8 @@ export async function saveTimetableDraft(input: {
           input.branchId,
           effectiveBatch,
           effectiveBatch,
+          input.year ?? null,
+          input.year ?? null,
           input.semester,
           input.section ?? null,
           input.section ?? null,
@@ -1905,7 +2087,8 @@ export async function publishTimetablePlan(
         AND p.college_id = ?
         AND p.course_id = ?
         AND p.branch_id = ?
-        AND p.batch = ?
+        AND (p.batch = ? OR p.batch IS NULL OR p.batch = '')
+        AND (p.year_of_study = ? OR (? IS NULL AND p.year_of_study IS NULL))
         AND p.semester_number = ?
         AND ((? IS NULL AND (p.section_name IS NULL OR p.section_name = '')) OR p.section_name = ?)
         AND p.status = 'published'
@@ -1918,6 +2101,8 @@ export async function publishTimetablePlan(
         plan.course_id,
         plan.branch_id,
         plan.batch,
+        plan.year_of_study,
+        plan.year_of_study,
         plan.semester_number,
         plan.section_name,
         plan.section_name,
@@ -1936,7 +2121,8 @@ export async function publishTimetablePlan(
         AND college_id = ?
         AND course_id = ?
         AND branch_id = ?
-        AND batch = ?
+        AND (batch = ? OR batch IS NULL OR batch = '')
+        AND (year_of_study = ? OR (? IS NULL AND year_of_study IS NULL))
         AND semester_number = ?
         AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
         AND status = 'published'
@@ -1948,6 +2134,8 @@ export async function publishTimetablePlan(
         plan.course_id,
         plan.branch_id,
         plan.batch,
+        plan.year_of_study,
+        plan.year_of_study,
         plan.semester_number,
         plan.section_name,
         plan.section_name,
@@ -2181,7 +2369,16 @@ export async function combineTimetableSections(input: CombineSectionsInput) {
     throw new Error(`Please select at least one target section to combine with Section ${mainSection}.`);
   }
 
-  const combineBatch = input.batch && input.batch !== "all" ? input.batch : "";
+  let combineBatch = input.batch && input.batch !== "all" ? input.batch : "";
+  if (!combineBatch && input.year) {
+    combineBatch = (await resolveBatchForContext({
+      academicYear: input.academicYear,
+      collegeId: input.collegeId,
+      courseId: input.courseId,
+      branchId: input.branchId,
+      year: input.year,
+    })) ?? "";
+  }
   // 1. Find the current active plan for mainSection
   const sourcePlans = await queryAcademic<PlanRow[]>(
     `
@@ -2191,6 +2388,7 @@ export async function combineTimetableSections(input: CombineSectionsInput) {
       AND course_id = ?
       AND branch_id = ?
       AND (? = '' OR batch = ? OR batch IS NULL OR batch = '')
+      AND (year_of_study = ? OR (? IS NULL AND year_of_study IS NULL))
       AND semester_number = ?
       AND section_name = ?
       AND status IN ('published', 'in_review', 'draft')
@@ -2204,6 +2402,8 @@ export async function combineTimetableSections(input: CombineSectionsInput) {
       input.branchId,
       combineBatch,
       combineBatch,
+      input.year ?? null,
+      input.year ?? null,
       input.semester,
       mainSection,
     ],
@@ -3106,8 +3306,11 @@ export async function getTimetableRoster(
     where.push("s.current_year = ?");
     params.push(filters.year);
   }
-  if (filters.batch) {
-    const rawBatch = String(filters.batch).trim();
+  const rosterBatch = filters.batch && filters.batch !== "all"
+    ? filters.batch
+    : deriveBatchFromAcademicYearAndYear(filters.academicYear, filters.year);
+  if (rosterBatch) {
+    const rawBatch = String(rosterBatch).trim();
     const fourDigit = rawBatch.slice(0, 4);
     where.push("(TRIM(s.batch) = ? OR TRIM(s.batch) = ? OR s.batch LIKE ?)");
     params.push(rawBatch, fourDigit, `${fourDigit}%`);

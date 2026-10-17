@@ -172,29 +172,37 @@ export function AcademicFilterBar({
     return Array.from(values).sort((a, b) => b.localeCompare(a));
   }, [masters, selectedBranch]);
 
+  const effectiveCourse = useMemo(() => {
+    if (selectedCourse) return selectedCourse;
+    if (selectedBranch && masters) {
+      return masters.courses.find((c) => c.id === selectedBranch.courseId) ?? null;
+    }
+    return null;
+  }, [selectedCourse, selectedBranch, masters]);
+
   const yearOptionsForCourse = useMemo(() => {
-    if (selectedCourse?.yearOptions?.length) return selectedCourse.yearOptions;
-    if (selectedCourse?.totalYears) {
-      return Array.from({ length: selectedCourse.totalYears }, (_, i) => i + 1);
+    if (effectiveCourse?.yearOptions?.length) return effectiveCourse.yearOptions;
+    if (effectiveCourse?.totalYears) {
+      return Array.from({ length: effectiveCourse.totalYears }, (_, i) => i + 1);
     }
     return masters?.yearOptions ?? [1, 2, 3, 4];
-  }, [selectedCourse, masters?.yearOptions]);
+  }, [effectiveCourse, masters?.yearOptions]);
 
   const semesterOptionsForCourse = useMemo(() => {
     if (
-      selectedCourse?.yearSemesterConfig?.length &&
+      effectiveCourse?.yearSemesterConfig?.length &&
       filters.year !== "all"
     ) {
-      const match = selectedCourse.yearSemesterConfig.find(
+      const match = effectiveCourse.yearSemesterConfig.find(
         (item) => item.year === filters.year,
       );
       if (match) {
         return Array.from({ length: match.semesters }, (_, i) => i + 1);
       }
     }
-    const perYear = selectedCourse?.semestersPerYear ?? 2;
+    const perYear = effectiveCourse?.semestersPerYear ?? 2;
     return Array.from({ length: perYear }, (_, i) => i + 1);
-  }, [selectedCourse, filters.year]);
+  }, [effectiveCourse, filters.year]);
 
   const sectionsForBranch = useMemo(() => {
     if (!masters || !selectedBranch) return [];
@@ -400,13 +408,25 @@ export function AcademicFilterBar({
                   className={selectClassName}
                   value={filters.courseId === "all" ? "all" : String(filters.courseId)}
                   disabled={loading || !masters}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const cId = e.target.value === "all" ? "all" : Number(e.target.value);
+                    const newCourse = cId !== "all" ? coursesForCollege.find((c) => c.id === cId) : null;
+                    const maxYears = newCourse?.totalYears ?? 4;
+                    const currentYearNum = typeof filters.year === "number" ? filters.year : 1;
+                    const validYear = isTimetablesPage
+                      ? (currentYearNum <= maxYears ? currentYearNum : 1)
+                      : "all";
+                    const startYear = parseInt(String(filters.academicYear || "2026-2027").slice(0, 4), 10);
+                    const validBatch = isTimetablesPage && typeof validYear === "number" && !isNaN(startYear)
+                      ? String(startYear - (validYear - 1))
+                      : "all";
                     setFilters({
-                      courseId: e.target.value === "all" ? "all" : Number(e.target.value),
-                      year: "all",
-                      semester: "all",
-                    })
-                  }
+                      courseId: cId,
+                      year: validYear,
+                      semester: isTimetablesPage ? (filters.semester === "all" ? 1 : filters.semester) : "all",
+                      batch: validBatch,
+                    });
+                  }}
                 >
                   <option value="all">All Courses</option>
                   {coursesForCollege.map((course) => (
@@ -477,12 +497,18 @@ export function AcademicFilterBar({
                       className={selectClassName}
                       value={filters.year === "all" ? "all" : String(filters.year)}
                       disabled={loading || !masters}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        const nextYear = e.target.value === "all" ? "all" : Number(e.target.value);
+                        const startYear = parseInt(String(filters.academicYear || "2026-2027").slice(0, 4), 10);
+                        const nextBatch = typeof nextYear === "number" && !isNaN(startYear)
+                          ? String(startYear - (nextYear - 1))
+                          : "all";
                         setFilters({
-                          year: e.target.value === "all" ? "all" : Number(e.target.value),
-                          semester: "all",
-                        })
-                      }
+                          year: nextYear,
+                          semester: isTimetablesPage ? (filters.semester === "all" ? 1 : filters.semester) : "all",
+                          ...(nextBatch !== "all" ? { batch: nextBatch } : {}),
+                        });
+                      }}
                     >
                       <option value="all">All Years</option>
                       {yearOptionsForCourse.map((year) => (
@@ -648,13 +674,25 @@ export function AcademicFilterBar({
             className={selectClassName}
             value={filters.courseId === "all" ? "all" : String(filters.courseId)}
             disabled={loading || !masters}
-            onChange={(e) =>
+            onChange={(e) => {
+              const cId = e.target.value === "all" ? "all" : Number(e.target.value);
+              const newCourse = cId !== "all" ? coursesForCollege.find((c) => c.id === cId) : null;
+              const maxYears = newCourse?.totalYears ?? 4;
+              const currentYearNum = typeof filters.year === "number" ? filters.year : 1;
+              const validYear = isTimetablesPage
+                ? (currentYearNum <= maxYears ? currentYearNum : 1)
+                : "all";
+              const startYear = parseInt(String(filters.academicYear || "2026-2027").slice(0, 4), 10);
+              const validBatch = isTimetablesPage && typeof validYear === "number" && !isNaN(startYear)
+                ? String(startYear - (validYear - 1))
+                : "all";
               setFilters({
-                courseId: e.target.value === "all" ? "all" : Number(e.target.value),
-                year: "all",
-                semester: "all",
-              })
-            }
+                courseId: cId,
+                year: validYear,
+                semester: isTimetablesPage ? (filters.semester === "all" ? 1 : filters.semester) : "all",
+                batch: validBatch,
+              });
+            }}
           >
             <option value="all">All Courses</option>
             {coursesForCollege.map((course) => (
@@ -686,13 +724,22 @@ export function AcademicFilterBar({
                   : sectionsForThisBranch[0] ?? "all"
                 : "all";
 
+              const nextYear = isTimetablesPage && filters.year === "all" ? 1 : filters.year;
+              const startYear = parseInt(String(filters.academicYear || "2026-2027").slice(0, 4), 10);
+              const nextBatch = typeof nextYear === "number" && !isNaN(startYear)
+                ? String(startYear - (nextYear - 1))
+                : "all";
+
               setFilters({
                 branchId: bId,
                 courseId: matchingCourseId,
-                batch: "all",
+                batch: nextBatch,
                 section: defaultSection,
-                ...(isTimetablesPage && (filters.year === "all" || filters.semester === "all")
-                  ? { year: 1, semester: 1 }
+                ...(isTimetablesPage
+                  ? {
+                      year: nextYear,
+                      semester: filters.semester === "all" ? 1 : filters.semester,
+                    }
                   : {}),
               });
             }}
@@ -745,12 +792,18 @@ export function AcademicFilterBar({
                 className={selectClassName}
                 value={filters.year === "all" ? "all" : String(filters.year)}
                 disabled={loading || !masters}
-                onChange={(e) =>
+                onChange={(e) => {
+                  const nextYear = e.target.value === "all" ? "all" : Number(e.target.value);
+                  const startYear = parseInt(String(filters.academicYear || "2026-2027").slice(0, 4), 10);
+                  const nextBatch = typeof nextYear === "number" && !isNaN(startYear)
+                    ? String(startYear - (nextYear - 1))
+                    : "all";
                   setFilters({
-                    year: e.target.value === "all" ? "all" : Number(e.target.value),
-                    semester: "all",
-                  })
-                }
+                    year: nextYear,
+                    semester: isTimetablesPage ? (filters.semester === "all" ? 1 : filters.semester) : "all",
+                    ...(nextBatch !== "all" ? { batch: nextBatch } : {}),
+                  });
+                }}
               >
                 <option value="all">All Years</option>
                 {yearOptionsForCourse.map((year) => (
