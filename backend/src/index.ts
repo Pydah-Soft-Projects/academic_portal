@@ -35,6 +35,7 @@ import { todayTimetableRouter } from "./routes/today-timetable.route.js";
 import { internalMarksRouter } from "./routes/internal-marks.route.js";
 import { classTeacherRouter } from "./routes/class-teacher.route.js";
 import { principalDashboardRouter } from "./routes/principal-dashboard.route.js";
+import { hodRouter } from "./routes/hod.route.js";
 
 const app = express();
 
@@ -93,6 +94,7 @@ app.use("/api/permissions", permissionsRouter);
 app.use("/api/internal-marks", internalMarksRouter);
 app.use("/api/class-teacher", classTeacherRouter);
 app.use("/api/principal-dashboard", principalDashboardRouter);
+app.use("/api/hod", hodRouter);
 
 app.use(
   (

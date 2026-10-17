@@ -388,9 +388,11 @@ export function DashboardView() {
   if (dashboardMode === "hod") {
     return (
       <HodDashboard
-        userName={user?.name || "Dr. R. Kumar"}
-        departmentName={(user as { department?: string })?.department || "Computer Science & Engineering"}
-        roleLabel={authorization?.roles?.[0]?.label || "HOD - CSE"}
+        userName={user?.name}
+        departmentName={(user as { department?: string })?.department}
+        roleLabel={authorization?.roles?.[0]?.label}
+        academicYear={filters.academicYear}
+        date={filters.date}
       />
     );
   }

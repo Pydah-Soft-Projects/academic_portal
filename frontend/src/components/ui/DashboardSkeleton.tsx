@@ -366,3 +366,5 @@ export function DashboardSkeleton({ className }: DashboardSkeletonProps) {
     </div>
   );
 }
+
+export { HodDashboardSkeleton } from "@/features/dashboard/HodDashboardSkeleton";
