@@ -1,6 +1,9 @@
 import type { RowDataPacket } from "mysql2";
-import { queryAcademic, queryStudent } from "../db/pools.js";
+import { executeAcademic, queryAcademic, queryStudent } from "../db/pools.js";
 import type { AuthzContext } from "../authz/authorization.service.js";
+import { getCurrentAcademicYearLabel } from "./masters.service.js";
+import { ensureStaffLink, listFacultyOptions } from "./timetables.service.js";
+import { writeAuditLog } from "./audit.service.js";
 
 type StudentScopeRow = RowDataPacket & {
   id: number;
@@ -670,4 +673,893 @@ export async function getClassTeacherDashboardData(
     continuousAbsentees,
     upcomingNotices,
   };
+}
+
+export type ClassTeacherOverviewFilters = {
+  academicYear?: string;
+  collegeId?: number;
+  collegeIds?: number[];
+  courseId?: number;
+  branchId?: number;
+  branchIds?: number[];
+  batch?: string;
+  year?: number;
+  semester?: number;
+  section?: string;
+  status?: "all" | "assigned" | "unassigned" | "timetable_published" | "timetable_draft" | "timetable_pending";
+  searchQuery?: string;
+};
+
+export type ClassTeacherSectionItem = {
+  collegeId: number;
+  collegeName: string;
+  collegeCode: string;
+  courseId: number;
+  courseName: string;
+  branchId: number;
+  branchName: string;
+  batch: string;
+  year: number;
+  semester: number;
+  sectionName: string;
+  studentCount: number;
+  timetable: {
+    status: "published" | "draft" | "pending";
+    planId: number | null;
+    versionNo: number | null;
+    updatedAt: string | null;
+  };
+  classTeacher: {
+    facultyStaffLinkId: number;
+    facultyName: string;
+    hrmsEmployeeId: string;
+    departmentName: string | null;
+    designation: string | null;
+    assignedStudentsCount: number;
+  } | null;
+};
+
+export async function getClassTeacherOverview(
+  authz: AuthzContext,
+  filters: ClassTeacherOverviewFilters = {},
+) {
+  const academicYear =
+    filters.academicYear && filters.academicYear !== "all"
+      ? filters.academicYear
+      : getCurrentAcademicYearLabel();
+
+  // 1. Fetch colleges
+  const collegeWhere: string[] = ["(is_active = 1 OR is_active IS NULL)"];
+  const collegeParams: unknown[] = [];
+  if (filters.collegeId) {
+    collegeWhere.push("id = ?");
+    collegeParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    collegeWhere.push(`id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    collegeParams.push(...filters.collegeIds);
+  } else if (authz.scope.collegeIds && authz.scope.collegeIds.length > 0) {
+    collegeWhere.push(`id IN (${authz.scope.collegeIds.map(() => "?").join(",")})`);
+    collegeParams.push(...authz.scope.collegeIds);
+  }
+
+  const colleges = await queryStudent<
+    (RowDataPacket & { id: number; name: string; code: string | null })[]
+  >(
+    `
+    SELECT id, name, code
+    FROM colleges
+    WHERE ${collegeWhere.join(" AND ")}
+    ORDER BY name
+    `,
+    collegeParams,
+  );
+
+  // 2. Fetch target classes from student database
+  const targetWhere: string[] = [
+    "(s.student_status = 'Regular' OR s.student_status = 'Active' OR s.student_status IS NULL)",
+    "s.current_year IS NOT NULL",
+    "s.current_semester IS NOT NULL",
+    "TRIM(s.batch) <> ''",
+  ];
+  const targetParams: unknown[] = [];
+
+  if (filters.collegeId) {
+    targetWhere.push("c.id = ?");
+    targetParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    targetWhere.push(`c.id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    targetParams.push(...filters.collegeIds);
+  } else if (authz.scope.collegeIds && authz.scope.collegeIds.length > 0) {
+    targetWhere.push(`c.id IN (${authz.scope.collegeIds.map(() => "?").join(",")})`);
+    targetParams.push(...authz.scope.collegeIds);
+  }
+
+  if (filters.courseId) {
+    targetWhere.push("cr.id = ?");
+    targetParams.push(filters.courseId);
+  }
+  if (filters.branchId) {
+    targetWhere.push("cb.id = ?");
+    targetParams.push(filters.branchId);
+  } else if (filters.branchIds && filters.branchIds.length > 0) {
+    targetWhere.push(`cb.id IN (${filters.branchIds.map(() => "?").join(",")})`);
+    targetParams.push(...filters.branchIds);
+  } else if (authz.scope.branchIds && authz.scope.branchIds.length > 0) {
+    targetWhere.push(`cb.id IN (${authz.scope.branchIds.map(() => "?").join(",")})`);
+    targetParams.push(...authz.scope.branchIds);
+  }
+
+  if (filters.batch && filters.batch !== "all") {
+    targetWhere.push("TRIM(s.batch) = ?");
+    targetParams.push(filters.batch.trim());
+  }
+  if (filters.year && filters.year > 0) {
+    targetWhere.push("s.current_year = ?");
+    targetParams.push(filters.year);
+  }
+  if (filters.semester && filters.semester > 0) {
+    targetWhere.push("s.current_semester = ?");
+    targetParams.push(filters.semester);
+  }
+  if (filters.section && filters.section !== "all") {
+    targetWhere.push("TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?");
+    targetParams.push(filters.section.trim());
+  }
+
+  const targetRows = await queryStudent<
+    (RowDataPacket & {
+      college_id: number;
+      college_name: string;
+      college_code: string | null;
+      course_id: number;
+      course_name: string;
+      branch_id: number;
+      branch_name: string;
+      batch: string;
+      year: number;
+      semester: number;
+      section_name: string;
+      student_count: number;
+    })[]
+  >(
+    `
+    SELECT
+      c.id AS college_id,
+      c.name AS college_name,
+      c.code AS college_code,
+      cr.id AS course_id,
+      cr.name AS course_name,
+      cb.id AS branch_id,
+      cb.name AS branch_name,
+      TRIM(s.batch) AS batch,
+      s.current_year AS year,
+      s.current_semester AS semester,
+      TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name,
+      COUNT(DISTINCT s.id) AS student_count
+    FROM students s
+    JOIN course_branches cb ON cb.id = s.branch_id
+    JOIN courses cr ON cr.id = cb.course_id
+    JOIN colleges c ON c.id = cr.college_id
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE ${targetWhere.join(" AND ")}
+    GROUP BY
+      c.id, c.name, c.code, cr.id, cr.name, cb.id, cb.name,
+      TRIM(s.batch), s.current_year, s.current_semester,
+      TRIM(COALESCE(ss.section_name, s.section, 'A'))
+    HAVING COUNT(DISTINCT s.id) > 0
+    ORDER BY c.name, cr.name, cb.name, s.current_year, s.current_semester, section_name
+    `,
+    targetParams,
+  );
+
+  // 3. Fetch timetable plans from academic database
+  const planWhere: string[] = ["status IN ('published', 'draft', 'in_review')"];
+  const planParams: unknown[] = [];
+  if (academicYear) {
+    planWhere.push("(academic_year_label = ? OR academic_year_label IS NULL)");
+    planParams.push(academicYear);
+  }
+  if (filters.collegeId) {
+    planWhere.push("college_id = ?");
+    planParams.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    planWhere.push(`college_id IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    planParams.push(...filters.collegeIds);
+  }
+
+  const plans = await queryAcademic<
+    (RowDataPacket & {
+      id: number;
+      college_id: number;
+      academic_year_label: string;
+      course_id: number;
+      branch_id: number;
+      batch: string;
+      year_of_study: number | null;
+      semester_number: number | null;
+      section_name: string | null;
+      status: string;
+      version_no: number;
+      updated_at: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      id,
+      college_id,
+      academic_year_label,
+      course_id,
+      branch_id,
+      batch,
+      year_of_study,
+      semester_number,
+      section_name,
+      status,
+      version_no,
+      updated_at
+    FROM ap_timetable_plans
+    WHERE ${planWhere.join(" AND ")}
+    ORDER BY id DESC
+    `,
+    planParams,
+  );
+
+  const planMap = new Map<
+    string,
+    { status: "published" | "draft"; planId: number; versionNo: number; updatedAt: string | null }
+  >();
+
+  for (const p of plans) {
+    const sec = (p.section_name || "A").trim().toUpperCase();
+    const batch = (p.batch || "").trim().toUpperCase();
+    const key = `${p.college_id}:${p.branch_id}:${batch}:${p.semester_number}:${sec}`;
+    const isPub = p.status === "published";
+    const mappedStatus: "published" | "draft" = isPub ? "published" : "draft";
+
+    const item = {
+      status: mappedStatus,
+      planId: Number(p.id),
+      versionNo: Number(p.version_no) || 1,
+      updatedAt: p.updated_at ? String(p.updated_at) : null,
+    };
+
+    const existing = planMap.get(key);
+    if (!existing || (!existing.status.includes("published") && isPub)) {
+      planMap.set(key, item);
+    }
+  }
+
+  // 4. Fetch active mentor/class teacher assignments
+  const mentorAssignments = await queryAcademic<
+    (RowDataPacket & {
+      student_db_id: number;
+      faculty_staff_link_id: number;
+      academic_year_label: string | null;
+      notes: string | null;
+      faculty_name: string | null;
+      hrms_employee_id: string;
+      department_name: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      ma.student_db_id,
+      ma.faculty_staff_link_id,
+      ma.academic_year_label,
+      ma.notes,
+      sl.display_name AS faculty_name,
+      sl.hrms_employee_id,
+      sl.department_name
+    FROM ap_mentor_assignments ma
+    JOIN ap_staff_link sl ON sl.id = ma.faculty_staff_link_id
+    WHERE ma.is_active = 1
+    `,
+  );
+
+  // Group active student IDs to section keys
+  const studentIdsWithAssignments = mentorAssignments
+    .filter((ma) => Number(ma.student_db_id) > 0)
+    .map((ma) => Number(ma.student_db_id));
+
+  const studentToSectionKeyMap = new Map<number, string>();
+  if (studentIdsWithAssignments.length > 0) {
+    const chunkLimit = 1000;
+    for (let i = 0; i < studentIdsWithAssignments.length; i += chunkLimit) {
+      const slice = studentIdsWithAssignments.slice(i, i + chunkLimit);
+      const studentSectionRows = await queryStudent<
+        (RowDataPacket & {
+          id: number;
+          branch_id: number;
+          batch: string;
+          current_semester: number;
+          section_name: string;
+        })[]
+      >(
+        `
+        SELECT
+          s.id,
+          s.branch_id,
+          TRIM(s.batch) AS batch,
+          s.current_semester,
+          TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name
+        FROM students s
+        LEFT JOIN student_sections ss ON ss.student_id = s.id
+        WHERE s.id IN (${slice.map(() => "?").join(",")})
+        `,
+        slice,
+      );
+
+      for (const row of studentSectionRows) {
+        const key = `${row.branch_id}:${(row.batch || "").trim().toUpperCase()}:${row.current_semester}:${(row.section_name || "A").trim().toUpperCase()}`;
+        studentToSectionKeyMap.set(Number(row.id), key);
+      }
+    }
+  }
+
+  // Section Key -> Map of facultyStaffLinkId -> count & faculty info
+  type SectionFacultyTally = {
+    facultyStaffLinkId: number;
+    facultyName: string;
+    hrmsEmployeeId: string;
+    departmentName: string | null;
+    count: number;
+  };
+  const sectionTeacherMap = new Map<string, Map<number, SectionFacultyTally>>();
+
+  for (const ma of mentorAssignments) {
+    const sid = Number(ma.student_db_id);
+    let secKey: string | null = null;
+
+    if (sid > 0) {
+      secKey = studentToSectionKeyMap.get(sid) ?? null;
+    } else if (ma.notes) {
+      try {
+        const parsed = JSON.parse(ma.notes) as {
+          branchId?: number;
+          batch?: string;
+          semester?: number;
+          section?: string;
+        };
+        if (parsed.branchId && parsed.batch) {
+          secKey = `${parsed.branchId}:${(parsed.batch || "").trim().toUpperCase()}:${parsed.semester || 1}:${(parsed.section || "A").trim().toUpperCase()}`;
+        }
+      } catch {
+        secKey = null;
+      }
+    }
+
+    if (secKey) {
+      let facultyTallies = sectionTeacherMap.get(secKey);
+      if (!facultyTallies) {
+        facultyTallies = new Map();
+        sectionTeacherMap.set(secKey, facultyTallies);
+      }
+      const fid = Number(ma.faculty_staff_link_id);
+      const cur = facultyTallies.get(fid) ?? {
+        facultyStaffLinkId: fid,
+        facultyName: ma.faculty_name || "Staff",
+        hrmsEmployeeId: ma.hrms_employee_id || "",
+        departmentName: ma.department_name || null,
+        count: 0,
+      };
+      cur.count++;
+      facultyTallies.set(fid, cur);
+    }
+  }
+
+  // 5. Construct Section Items
+  const items: ClassTeacherSectionItem[] = [];
+
+  for (const r of targetRows) {
+    const batchUpper = (r.batch || "").trim().toUpperCase();
+    const secUpper = (r.section_name || "A").trim().toUpperCase();
+    const planKey = `${r.college_id}:${r.branch_id}:${batchUpper}:${r.semester}:${secUpper}`;
+    const sectionKey = `${r.branch_id}:${batchUpper}:${r.semester}:${secUpper}`;
+
+    const timetableMeta = planMap.get(planKey) ?? {
+      status: "pending" as const,
+      planId: null,
+      versionNo: null,
+      updatedAt: null,
+    };
+
+    // Resolve class teacher
+    let teacherMeta: ClassTeacherSectionItem["classTeacher"] = null;
+    const facultyTallies = sectionTeacherMap.get(sectionKey);
+    if (facultyTallies && facultyTallies.size > 0) {
+      // Pick faculty with highest count
+      const sorted = Array.from(facultyTallies.values()).sort((a, b) => b.count - a.count);
+      const best = sorted[0];
+      if (best) {
+        teacherMeta = {
+          facultyStaffLinkId: best.facultyStaffLinkId,
+          facultyName: best.facultyName,
+          hrmsEmployeeId: best.hrmsEmployeeId,
+          departmentName: best.departmentName,
+          designation: null,
+          assignedStudentsCount: best.count,
+        };
+      }
+    }
+
+    items.push({
+      collegeId: Number(r.college_id),
+      collegeName: r.college_name,
+      collegeCode: r.college_code || "",
+      courseId: Number(r.course_id),
+      courseName: r.course_name,
+      branchId: Number(r.branch_id),
+      branchName: r.branch_name,
+      batch: r.batch,
+      year: Number(r.year),
+      semester: Number(r.semester),
+      sectionName: r.section_name,
+      studentCount: Number(r.student_count),
+      timetable: timetableMeta,
+      classTeacher: teacherMeta,
+    });
+  }
+
+  // 6. Summary metrics
+  const totalSections = items.length;
+  const timetablesPublished = items.filter((i) => i.timetable.status === "published").length;
+  const timetablesDraft = items.filter((i) => i.timetable.status === "draft").length;
+  const timetablesPending = items.filter((i) => i.timetable.status === "pending").length;
+  const teachersAssigned = items.filter((i) => i.classTeacher !== null).length;
+  const teachersPending = items.filter((i) => i.classTeacher === null).length;
+
+  // College-level breakdown
+  const collegeBreakdownMap = new Map<
+    number,
+    {
+      collegeId: number;
+      collegeName: string;
+      collegeCode: string;
+      totalSections: number;
+      publishedCount: number;
+      draftCount: number;
+      pendingCount: number;
+      teachersAssignedCount: number;
+    }
+  >();
+
+  for (const c of colleges) {
+    collegeBreakdownMap.set(c.id, {
+      collegeId: c.id,
+      collegeName: c.name,
+      collegeCode: c.code || "",
+      totalSections: 0,
+      publishedCount: 0,
+      draftCount: 0,
+      pendingCount: 0,
+      teachersAssignedCount: 0,
+    });
+  }
+
+  for (const item of items) {
+    const col = collegeBreakdownMap.get(item.collegeId);
+    if (col) {
+      col.totalSections++;
+      if (item.timetable.status === "published") col.publishedCount++;
+      else if (item.timetable.status === "draft") col.draftCount++;
+      else col.pendingCount++;
+
+      if (item.classTeacher !== null) col.teachersAssignedCount++;
+    }
+  }
+
+  return {
+    academicYear,
+    summary: {
+      totalColleges: colleges.length,
+      totalSections,
+      timetablesPublished,
+      timetablesDraft,
+      timetablesConfigured: timetablesPublished + timetablesDraft,
+      timetablesPending,
+      teachersAssigned,
+      teachersPending,
+    },
+    colleges: Array.from(collegeBreakdownMap.values()),
+    sections: items,
+  };
+}
+
+export async function getClassTeacherForSection(scope: {
+  branchId?: number | null;
+  batch?: string | null;
+  year?: number | null;
+  semester?: number | null;
+  section?: string | null;
+  academicYear?: string | null;
+}) {
+  if (!scope.branchId || !scope.batch) return null;
+  const batch = scope.batch.trim();
+  const secName = (scope.section || "A").trim();
+
+  // 1. Check students in section
+  const studentRows = await queryStudent<{ id: number }[]>(
+    `
+    SELECT s.id
+    FROM students s
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE s.branch_id = ?
+      AND TRIM(s.batch) = ?
+      ${scope.year ? "AND s.current_year = ?" : ""}
+      ${scope.semester ? "AND s.current_semester = ?" : ""}
+      AND TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?
+      AND (s.student_status = 'Regular' OR s.student_status = 'Active' OR s.student_status IS NULL)
+    `,
+    [
+      scope.branchId,
+      batch,
+      ...(scope.year ? [scope.year] : []),
+      ...(scope.semester ? [scope.semester] : []),
+      secName,
+    ],
+  );
+
+  const totalStudents = studentRows.length;
+  const studentIds = studentRows.map((s) => s.id);
+
+  if (studentIds.length > 0) {
+    const placeholders = studentIds.map(() => "?").join(",");
+    const rows = await queryAcademic<
+      (RowDataPacket & {
+        faculty_staff_link_id: number;
+        faculty_name: string;
+        hrms_employee_id: string;
+        department_name: string | null;
+        assigned_count: number;
+      })[]
+    >(
+      `
+      SELECT
+        ma.faculty_staff_link_id,
+        sl.display_name AS faculty_name,
+        sl.hrms_employee_id,
+        sl.department_name,
+        COUNT(ma.id) AS assigned_count
+      FROM ap_mentor_assignments ma
+      JOIN ap_staff_link sl ON sl.id = ma.faculty_staff_link_id
+      WHERE ma.student_db_id IN (${placeholders})
+        AND ma.is_active = 1
+      GROUP BY ma.faculty_staff_link_id, sl.display_name, sl.hrms_employee_id, sl.department_name
+      ORDER BY assigned_count DESC
+      LIMIT 1
+      `,
+      studentIds,
+    );
+
+    if (rows[0]) {
+      return {
+        facultyStaffLinkId: Number(rows[0].faculty_staff_link_id),
+        facultyName: rows[0].faculty_name || "Staff",
+        hrmsEmployeeId: rows[0].hrms_employee_id || "",
+        departmentName: rows[0].department_name || null,
+        designation: null,
+        assignedCount: Number(rows[0].assigned_count),
+        totalStudents,
+      };
+    }
+  }
+
+  // 2. Check placeholder with student_db_id = 0
+  const placeholderRows = await queryAcademic<
+    (RowDataPacket & {
+      faculty_staff_link_id: number;
+      faculty_name: string;
+      hrms_employee_id: string;
+      department_name: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      ma.faculty_staff_link_id,
+      sl.display_name AS faculty_name,
+      sl.hrms_employee_id,
+      sl.department_name
+    FROM ap_mentor_assignments ma
+    JOIN ap_staff_link sl ON sl.id = ma.faculty_staff_link_id
+    WHERE ma.student_db_id = 0
+      AND ma.is_active = 1
+      AND ma.notes LIKE ?
+    ORDER BY ma.id DESC
+    LIMIT 1
+    `,
+    [`%"branchId":${scope.branchId},"batch":"${batch}"%"section":"${secName}"%`],
+  );
+
+  if (placeholderRows[0]) {
+    return {
+      facultyStaffLinkId: Number(placeholderRows[0].faculty_staff_link_id),
+      facultyName: placeholderRows[0].faculty_name || "Staff",
+      hrmsEmployeeId: placeholderRows[0].hrms_employee_id || "",
+      departmentName: placeholderRows[0].department_name || null,
+      designation: null,
+      assignedCount: 0,
+      totalStudents,
+    };
+  }
+
+  return null;
+}
+
+export async function assignClassTeacherToSection(
+  authz: AuthzContext,
+  input: {
+    facultyStaffLinkId?: number;
+    hrmsEmployeeId?: string;
+    facultyName?: string;
+    departmentName?: string;
+    collegeId: number;
+    courseId?: number;
+    branchId: number;
+    batch: string;
+    year?: number | null;
+    semester?: number | null;
+    sectionName: string;
+    academicYearLabel?: string;
+    notes?: string;
+    ipAddress?: string | null;
+  },
+) {
+  // 1. Resolve facultyStaffLinkId
+  let staffLinkId = input.facultyStaffLinkId;
+  if (!staffLinkId && input.hrmsEmployeeId) {
+    staffLinkId = await ensureStaffLink({
+      hrmsEmployeeId: input.hrmsEmployeeId,
+      displayName: input.facultyName ?? null,
+      departmentName: input.departmentName ?? null,
+    });
+  }
+  if (!staffLinkId) {
+    throw Object.assign(new Error("Faculty staff record is required"), { status: 400 });
+  }
+
+  const academicYear = input.academicYearLabel?.trim() || getCurrentAcademicYearLabel();
+  const secName = (input.sectionName || "A").trim();
+  const batch = (input.batch || "").trim();
+
+  // 2. Fetch students in this section from student database
+  const studentRows = await queryStudent<{ id: number }[]>(
+    `
+    SELECT s.id
+    FROM students s
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE s.branch_id = ?
+      AND TRIM(s.batch) = ?
+      ${input.year ? "AND s.current_year = ?" : ""}
+      ${input.semester ? "AND s.current_semester = ?" : ""}
+      AND TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?
+      AND (s.student_status = 'Regular' OR s.student_status = 'Active' OR s.student_status IS NULL)
+    `,
+    [
+      input.branchId,
+      batch,
+      ...(input.year ? [input.year] : []),
+      ...(input.semester ? [input.semester] : []),
+      secName,
+    ],
+  );
+
+  const studentIds = studentRows.map((s) => s.id);
+  const scopeNotes = JSON.stringify({
+    type: "class_teacher",
+    collegeId: input.collegeId,
+    courseId: input.courseId ?? null,
+    branchId: input.branchId,
+    batch,
+    year: input.year ?? null,
+    semester: input.semester ?? null,
+    section: secName,
+  });
+
+  // 3. Deactivate previous active mentor/class teacher assignments for this section
+  if (studentIds.length > 0) {
+    const placeholders = studentIds.map(() => "?").join(",");
+    await executeAcademic(
+      `
+      UPDATE ap_mentor_assignments
+      SET is_active = 0, deactivated_at = NOW()
+      WHERE student_db_id IN (${placeholders})
+        AND is_active = 1
+      `,
+      studentIds,
+    );
+  }
+
+  // Also deactivate any placeholder assignment matching this section scope
+  await executeAcademic(
+    `
+    UPDATE ap_mentor_assignments
+    SET is_active = 0, deactivated_at = NOW()
+    WHERE student_db_id = 0
+      AND is_active = 1
+      AND notes LIKE ?
+    `,
+    [`%"branchId":${input.branchId},"batch":"${batch}"%"section":"${secName}"%`],
+  );
+
+  // 4. Insert new assignments
+  let assignedCount = 0;
+  if (studentIds.length > 0) {
+    const insertValues: unknown[] = [];
+    const valPlaceholders: string[] = [];
+    for (const sid of studentIds) {
+      valPlaceholders.push("(?, ?, ?, ?, 1, ?)");
+      insertValues.push(sid, staffLinkId, authz.userId, academicYear, scopeNotes);
+    }
+    await executeAcademic(
+      `
+      INSERT INTO ap_mentor_assignments
+        (student_db_id, faculty_staff_link_id, assigned_by, academic_year_label, is_active, notes)
+      VALUES ${valPlaceholders.join(", ")}
+      ON DUPLICATE KEY UPDATE
+        faculty_staff_link_id = VALUES(faculty_staff_link_id),
+        assigned_by = VALUES(assigned_by),
+        is_active = 1,
+        deactivated_at = NULL,
+        notes = VALUES(notes)
+      `,
+      insertValues,
+    );
+    assignedCount = studentIds.length;
+  } else {
+    // Section has 0 students currently: insert placeholder so section teacher is persisted
+    await executeAcademic(
+      `
+      INSERT INTO ap_mentor_assignments
+        (student_db_id, faculty_staff_link_id, assigned_by, academic_year_label, is_active, notes)
+      VALUES (0, ?, ?, ?, 1, ?)
+      `,
+      [staffLinkId, authz.userId, academicYear, scopeNotes],
+    );
+    assignedCount = 0;
+  }
+
+  // 5. Audit log
+  await writeAuditLog({
+    actorUserId: authz.userId,
+    action: "class_teacher.assigned",
+    entityType: "ap_mentor_assignments",
+    entityId: staffLinkId,
+    newValue: {
+      facultyStaffLinkId: staffLinkId,
+      collegeId: input.collegeId,
+      branchId: input.branchId,
+      batch,
+      year: input.year,
+      semester: input.semester,
+      section: secName,
+      assignedStudentsCount: assignedCount,
+    },
+    ipAddress: input.ipAddress,
+  });
+
+  return { ok: true, assignedCount };
+}
+
+export async function unassignClassTeacherFromSection(
+  authz: AuthzContext,
+  input: {
+    collegeId?: number;
+    branchId: number;
+    batch: string;
+    year?: number | null;
+    semester?: number | null;
+    sectionName: string;
+    academicYearLabel?: string;
+    ipAddress?: string | null;
+  },
+) {
+  const batch = (input.batch || "").trim();
+  const secName = (input.sectionName || "A").trim();
+
+  // 1. Find students in this section
+  const studentRows = await queryStudent<{ id: number }[]>(
+    `
+    SELECT s.id
+    FROM students s
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE s.branch_id = ?
+      AND TRIM(s.batch) = ?
+      ${input.year ? "AND s.current_year = ?" : ""}
+      ${input.semester ? "AND s.current_semester = ?" : ""}
+      AND TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?
+    `,
+    [
+      input.branchId,
+      batch,
+      ...(input.year ? [input.year] : []),
+      ...(input.semester ? [input.semester] : []),
+      secName,
+    ],
+  );
+
+  const studentIds = studentRows.map((s) => s.id);
+  if (studentIds.length > 0) {
+    const placeholders = studentIds.map(() => "?").join(",");
+    await executeAcademic(
+      `
+      UPDATE ap_mentor_assignments
+      SET is_active = 0, deactivated_at = NOW()
+      WHERE student_db_id IN (${placeholders})
+        AND is_active = 1
+      `,
+      studentIds,
+    );
+  }
+
+  // Deactivate placeholder if any
+  await executeAcademic(
+    `
+    UPDATE ap_mentor_assignments
+    SET is_active = 0, deactivated_at = NOW()
+    WHERE student_db_id = 0
+      AND is_active = 1
+      AND notes LIKE ?
+    `,
+    [`%"branchId":${input.branchId},"batch":"${batch}"%"section":"${secName}"%`],
+  );
+
+  await writeAuditLog({
+    actorUserId: authz.userId,
+    action: "class_teacher.unassigned",
+    entityType: "ap_mentor_assignments",
+    newValue: {
+      branchId: input.branchId,
+      batch,
+      section: secName,
+    },
+    ipAddress: input.ipAddress,
+  });
+
+  return { ok: true };
+}
+
+export async function listClassTeacherFacultyOptions() {
+  const faculty = await listFacultyOptions(500);
+
+  // Count active section assignments for each faculty
+  const counts = await queryAcademic<
+    (RowDataPacket & { faculty_staff_link_id: number; section_count: number })[]
+  >(
+    `
+    SELECT
+      ma.faculty_staff_link_id,
+      COUNT(DISTINCT ma.notes) AS section_count
+    FROM ap_mentor_assignments ma
+    WHERE ma.is_active = 1
+    GROUP BY ma.faculty_staff_link_id
+    `,
+  );
+
+  const countMap = new Map<number, number>();
+  for (const c of counts) {
+    countMap.set(Number(c.faculty_staff_link_id), Number(c.section_count));
+  }
+
+  // Ensure staff link IDs for these faculty
+  const staffLinkRows = await queryAcademic<
+    (RowDataPacket & { id: number; hrms_employee_id: string })[]
+  >(
+    `
+    SELECT id, hrms_employee_id
+    FROM ap_staff_link
+    `,
+  );
+  const hrmsToStaffLinkId = new Map<string, number>();
+  for (const sl of staffLinkRows) {
+    hrmsToStaffLinkId.set(sl.hrms_employee_id, Number(sl.id));
+  }
+
+  return faculty.map((f) => {
+    const staffLinkId = hrmsToStaffLinkId.get(f.hrmsEmployeeId) ?? null;
+    return {
+      ...f,
+      staffLinkId,
+      assignedSectionsCount: staffLinkId ? (countMap.get(staffLinkId) ?? 0) : 0,
+    };
+  });
 }

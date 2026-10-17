@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
-import { ArrowUpDown, Building2, Check, FlaskConical, Layers, Plus, Printer, Search, Users } from "lucide-react";
+import { ArrowUpDown, Building2, Check, FlaskConical, Layers, Plus, Printer, Search, UserCheck, Users } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/cn";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
@@ -16,6 +16,7 @@ import { apiFetch } from "@/lib/api";
 import { TimingEditorDrawer } from "@/features/timetables/TimingEditorDrawer";
 import { CombineSectionsModal } from "@/features/timetables/CombineSectionsModal";
 import { CollegeTimetablesOverview } from "@/features/timetables/CollegeTimetablesOverview";
+import { AssignClassTeacherModal } from "@/features/class-teacher/AssignClassTeacherModal";
 import {
   LabPeriodSelectionModal,
   AssignableSlot,
@@ -107,6 +108,15 @@ type PlannerResponse = {
     designation: string;
     employeeGroup: string;
   }>;
+  classTeacher?: {
+    facultyStaffLinkId: number;
+    facultyName: string;
+    hrmsEmployeeId: string;
+    departmentName: string | null;
+    designation: string | null;
+    assignedCount?: number;
+    totalStudents?: number;
+  } | null;
 };
 
 type LocalAssignment = {
@@ -1133,6 +1143,39 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   const [combineOpen, setCombineOpen] = useState(false);
   const [labModalOpen, setLabModalOpen] = useState(false);
   const [selectedPeriodSlotIds, setSelectedPeriodSlotIds] = useState<number[]>([]);
+  const [assignTeacherOpen, setAssignTeacherOpen] = useState(false);
+  const [classTeacher, setClassTeacher] = useState<PlannerResponse["classTeacher"]>(null);
+
+  useEffect(() => {
+    if (planner?.classTeacher !== undefined) {
+      setClassTeacher(planner.classTeacher);
+    }
+  }, [planner]);
+
+  const handleUnassignTeacher = async () => {
+    if (!planner?.context) return;
+    try {
+      const res = await apiFetch("/class-teacher/unassign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          collegeId: planner.context.collegeId,
+          branchId: planner.context.branchId,
+          batch: planner.context.batch,
+          year: planner.context.year,
+          semester: planner.context.semester,
+          sectionName: planner.context.section,
+          academicYearLabel: planner.context.academicYear,
+        }),
+      });
+      if (res.ok) {
+        setClassTeacher(null);
+        setInfo("Class teacher unassigned successfully.");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to unassign class teacher");
+    }
+  };
 
   const selectedBranch =
     filters.branchId === "all" || !masters
@@ -2270,6 +2313,58 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                 {" • "}
                 {planner.context.studentCount.toLocaleString()} students
               </p>
+              {/* Class Teacher Display in Print & Screen */}
+              <p className="hidden print:block mt-0.5 text-xs font-bold text-navy-900 print:text-[11px]">
+                Class Teacher:{" "}
+                <span className="font-semibold text-slate-800">
+                  {classTeacher
+                    ? `${classTeacher.facultyName} (${classTeacher.departmentName || classTeacher.hrmsEmployeeId})`
+                    : "Not Assigned"}
+                </span>
+              </p>
+              <div className="mt-2.5 pt-2 border-t border-slate-200 flex flex-wrap items-center gap-2 print:hidden">
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  Class Teacher:
+                </span>
+                {classTeacher ? (
+                  <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 font-medium">
+                    <UserCheck className="h-3.5 w-3.5 text-emerald-600" />
+                    <span className="font-semibold text-navy-900">{classTeacher.facultyName}</span>
+                    <span className="text-slate-500">
+                      ({classTeacher.departmentName ? `${classTeacher.departmentName} · ` : ""}Emp #{classTeacher.hrmsEmployeeId})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setAssignTeacherOpen(true)}
+                      className="text-brand-600 hover:text-brand-800 underline font-medium cursor-pointer ml-1 text-xs"
+                    >
+                      Change
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleUnassignTeacher}
+                      className="text-rose-600 hover:text-rose-800 hover:underline cursor-pointer text-xs ml-1"
+                      title="Remove class teacher assignment"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ) : (
+                  <div className="inline-flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200">
+                      Not Assigned
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setAssignTeacherOpen(true)}
+                      className="text-xs h-7 px-2.5"
+                    >
+                      + Assign Class Teacher
+                    </Button>
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex flex-col items-end gap-2 print:hidden">
               <Button size="sm" variant="secondary" onClick={() => setTimingsOpen(true)}>
@@ -3031,6 +3126,36 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           }}
         />
       ) : null}
+
+      <AssignClassTeacherModal
+        open={assignTeacherOpen}
+        onClose={() => setAssignTeacherOpen(false)}
+        sectionInfo={
+          planner
+            ? {
+                collegeId: planner.context.collegeId ?? 0,
+                collegeName: planner.context.college,
+                courseId: planner.context.courseId ?? 0,
+                courseName: planner.context.course,
+                branchId: planner.context.branchId ?? 0,
+                branchName: planner.context.branch,
+                batch: planner.context.batch,
+                year: planner.context.year,
+                semester: planner.context.semester,
+                sectionName: planner.context.section,
+                studentCount: planner.context.studentCount,
+                academicYearLabel: planner.context.academicYear,
+                currentTeacher: classTeacher,
+              }
+            : null
+        }
+        onAssigned={(teacher) => {
+          setClassTeacher(teacher);
+          setInfo(
+            `Assigned ${teacher.facultyName} as Class Teacher for Section ${planner?.context.section}.`
+          );
+        }}
+      />
     </div>
   );
 }

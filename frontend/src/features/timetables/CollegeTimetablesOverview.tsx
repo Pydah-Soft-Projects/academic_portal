@@ -21,7 +21,13 @@ import {
   ArrowRight,
   BookOpen,
   Users,
+  UserCheck,
+  UserPlus,
 } from "lucide-react";
+import {
+  AssignClassTeacherModal,
+  type TargetSectionScope,
+} from "@/features/class-teacher/AssignClassTeacherModal";
 
 export type TimetableOverviewClass = {
   courseId: number;
@@ -37,6 +43,12 @@ export type TimetableOverviewClass = {
   planId: number | null;
   versionNo: number | null;
   updatedAt: string | null;
+  classTeacher?: {
+    facultyStaffLinkId: number;
+    facultyName: string;
+    hrmsEmployeeId: string;
+    departmentName: string | null;
+  } | null;
 };
 
 export type TimetableOverviewYearSem = {
@@ -100,6 +112,8 @@ export function CollegeTimetablesOverview({
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "published" | "drafted" | "pending">("all");
   const [expandedYearSems, setExpandedYearSems] = useState<Set<string>>(new Set());
+  const [assignModalOpen, setAssignModalOpen] = useState(false);
+  const [assignSection, setAssignSection] = useState<TargetSectionScope | null>(null);
 
   const loadOverview = async () => {
     setLoading(true);
@@ -825,13 +839,13 @@ export function CollegeTimetablesOverview({
                     </p>
                   ) : (
                     <div className="overflow-x-auto rounded-lg border border-slate-200">
-                      <table className="w-full min-w-[700px] border-collapse text-left text-xs">
+                      <table className="w-full min-w-[700px] table-fixed border-collapse text-left text-xs">
                         <thead>
                           <tr className="border-b border-slate-200 bg-slate-100/70 font-semibold text-slate-700">
-                            <th className="py-2.5 px-3">Year & Semester</th>
-                            <th className="py-2.5 px-3 text-center">Total Classes</th>
+                            <th className="py-2.5 px-3 w-[26%]">Year &amp; Semester</th>
+                            <th className="py-2.5 px-3 w-[11%] text-center">Total Classes</th>
                             <th
-                              className={`py-2.5 px-3 text-center transition-colors ${
+                              className={`py-2.5 px-3 w-[12%] text-center transition-colors ${
                                 statusFilter === "published"
                                   ? "bg-emerald-100/80 text-emerald-900 font-bold border-x border-emerald-300"
                                   : ""
@@ -840,7 +854,7 @@ export function CollegeTimetablesOverview({
                               Published {statusFilter === "published" ? "●" : ""}
                             </th>
                             <th
-                              className={`py-2.5 px-3 text-center transition-colors ${
+                              className={`py-2.5 px-3 w-[12%] text-center transition-colors ${
                                 statusFilter === "drafted"
                                   ? "bg-amber-100/80 text-amber-900 font-bold border-x border-amber-300"
                                   : ""
@@ -849,7 +863,7 @@ export function CollegeTimetablesOverview({
                               Drafted {statusFilter === "drafted" ? "●" : ""}
                             </th>
                             <th
-                              className={`py-2.5 px-3 text-center transition-colors ${
+                              className={`py-2.5 px-3 w-[15%] text-center transition-colors ${
                                 statusFilter === "pending"
                                   ? "bg-rose-100/80 text-rose-900 font-bold border-x border-rose-300"
                                   : ""
@@ -857,8 +871,8 @@ export function CollegeTimetablesOverview({
                             >
                               Needed to Configure {statusFilter === "pending" ? "●" : ""}
                             </th>
-                            <th className="py-2.5 px-3">Status Progress</th>
-                            <th className="py-2.5 px-3 text-right">Actions</th>
+                            <th className="py-2.5 px-3 w-[14%]">Status Progress</th>
+                            <th className="py-2.5 px-3 w-[10%] text-right">Classes</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-100 text-slate-800">
@@ -875,7 +889,15 @@ export function CollegeTimetablesOverview({
 
                             return (
                               <React.Fragment key={`${ys.year}-${ys.semester}`}>
-                                <tr className="hover:bg-slate-50/80 transition">
+                                <tr
+                                  onClick={() =>
+                                    toggleYearSemExpand(col.collegeId, ys.year, ys.semester)
+                                  }
+                                  className={`cursor-pointer transition-colors duration-150 select-none ${
+                                    isExpanded ? "bg-slate-100/75" : "hover:bg-slate-50/80"
+                                  }`}
+                                  title="Click to view classes"
+                                >
                                   <td className="py-2.5 px-3 font-bold text-navy-900 flex items-center gap-2">
                                     <span className="inline-flex h-6 w-6 items-center justify-center rounded bg-navy-50 text-[11px] font-bold text-navy-800 border border-navy-200/50">
                                       {ys.year}-{ys.semester}
@@ -960,28 +982,18 @@ export function CollegeTimetablesOverview({
                                     </div>
                                   </td>
                                   <td className="py-2.5 px-3 text-right">
-                                    <Button
-                                      variant="secondary"
-                                      size="sm"
-                                      onClick={() =>
-                                        toggleYearSemExpand(col.collegeId, ys.year, ys.semester)
-                                      }
-                                      className={`text-xs h-7 px-2.5 font-medium cursor-pointer ${
-                                        isExpanded ? "bg-navy-50 text-navy-900 border-navy-200" : ""
-                                      }`}
-                                    >
-                                      {isExpanded ? (
-                                        <>
-                                          Hide ({ys.matchingClasses.length}){" "}
-                                          <ChevronUp className="ml-1 h-3.5 w-3.5" />
-                                        </>
-                                      ) : (
-                                        <>
-                                          View Classes ({ys.matchingClasses.length}){" "}
-                                          <ChevronDown className="ml-1 h-3.5 w-3.5" />
-                                        </>
-                                      )}
-                                    </Button>
+                                    <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600">
+                                      <span className="text-[11px] font-medium text-slate-500">
+                                        {ys.matchingClasses.length} {ys.matchingClasses.length === 1 ? "class" : "classes"}
+                                      </span>
+                                      <span
+                                        className={`inline-flex h-6 w-6 items-center justify-center rounded-full transition-transform duration-200 ${
+                                          isExpanded ? "rotate-180 bg-navy-100 text-navy-900" : "bg-slate-100 text-slate-500"
+                                        }`}
+                                      >
+                                        <ChevronDown className="h-3.5 w-3.5" />
+                                      </span>
+                                    </div>
                                   </td>
                                 </tr>
 
@@ -1010,16 +1022,16 @@ export function CollegeTimetablesOverview({
                                           </span>
                                         </div>
                                         <div className="overflow-x-auto">
-                                          <table className="w-full min-w-[760px] border-collapse text-xs">
+                                          <table className="w-full min-w-[860px] table-fixed border-collapse text-xs">
                                             <thead>
-                                              <tr className="border-b border-slate-200 bg-slate-50/90 font-semibold text-slate-700">
-                                                <th className="py-2.5 px-3 w-20 text-center">Section</th>
-                                                <th className="py-2.5 px-3">Course &amp; Branch</th>
-                                                <th className="py-2.5 px-3 w-28">Batch</th>
-                                                <th className="py-2.5 px-3 w-36 text-center">Enrolled Students</th>
-                                                <th className="py-2.5 px-3 w-36">Timetable Plan</th>
-                                                <th className="py-2.5 px-3 w-32 text-center">Status</th>
-                                                <th className="py-2.5 px-3 w-40 text-right">Action</th>
+                                              <tr className="border-b border-slate-200 bg-slate-100/80 font-semibold text-slate-700">
+                                                <th className="py-2.5 px-3 w-[26%] text-left">Course &amp; Branch</th>
+                                                <th className="py-2.5 px-3 w-[11%] text-center">Section</th>
+                                                <th className="py-2.5 px-3 w-[11%] text-center">Batch</th>
+                                                <th className="py-2.5 px-3 w-[14%] text-center">Enrolled Students</th>
+                                                <th className="py-2.5 px-3 w-[20%] text-left">Class Teacher</th>
+                                                <th className="py-2.5 px-3 w-[12%] text-center">Timetable Status</th>
+                                                <th className="py-2.5 px-3 w-[16%] text-right">Action</th>
                                               </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100 bg-white">
@@ -1035,34 +1047,133 @@ export function CollegeTimetablesOverview({
                                               ) : (
                                                 ys.matchingClasses.map((cls, idx) => (
                                                   <tr key={idx} className="hover:bg-slate-50/80 transition">
-                                                    <td className="py-2.5 px-3 text-center">
-                                                      <span className="inline-flex h-6.5 w-6.5 items-center justify-center rounded bg-indigo-50 border border-indigo-200/70 text-[11px] font-bold text-indigo-900 shadow-2xs">
-                                                        {cls.section || "A"}
-                                                      </span>
-                                                    </td>
                                                     <td className="py-2.5 px-3">
-                                                      <span className="font-bold text-navy-900">
-                                                        {cls.courseName} - {cls.branchName}
-                                                      </span>
+                                                      <div className="flex items-center gap-2 min-w-0">
+                                                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-700 border border-slate-200/80 shrink-0">
+                                                          {cls.courseName}
+                                                        </span>
+                                                        <span className="font-bold text-navy-900 text-xs truncate" title={cls.branchName}>
+                                                          {cls.branchName}
+                                                        </span>
+                                                      </div>
                                                     </td>
-                                                    <td className="py-2.5 px-3 text-slate-600 font-medium">
-                                                      <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700 font-medium">
+                                                    <td className="py-2.5 px-3 text-center">
+                                                      <div className="inline-flex flex-col items-center gap-0.5">
+                                                        <span className="inline-flex h-6 px-2.5 items-center justify-center rounded bg-indigo-50 border border-indigo-200/80 text-[11px] font-bold text-indigo-900 shadow-2xs">
+                                                          Sec {cls.section || "A"}
+                                                        </span>
+                                                        {cls.studentCount <= 0 ? (
+                                                          <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-rose-600">
+                                                            <AlertCircle className="h-2.5 w-2.5" /> No students
+                                                          </span>
+                                                        ) : cls.classTeacher && cls.status === "published" ? (
+                                                          <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-emerald-600">
+                                                            <CheckCircle2 className="h-2.5 w-2.5" /> Ready
+                                                          </span>
+                                                        ) : !cls.classTeacher && cls.status === "pending" ? (
+                                                          <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-amber-600">
+                                                            <AlertCircle className="h-2.5 w-2.5" /> Incomplete
+                                                          </span>
+                                                        ) : null}
+                                                      </div>
+                                                    </td>
+                                                    <td className="py-2.5 px-3 text-center">
+                                                      <span className="inline-flex items-center rounded bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700 font-medium">
                                                         Batch {cls.batch}
                                                       </span>
                                                     </td>
                                                     <td className="py-2.5 px-3 text-center">
-                                                      <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-700">
+                                                      <span
+                                                        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium ${
+                                                          cls.studentCount > 0
+                                                            ? "bg-slate-100 text-slate-700"
+                                                            : "bg-rose-50 text-rose-700 border border-rose-200"
+                                                        }`}
+                                                      >
                                                         <Users className="h-3 w-3 text-slate-500" />
-                                                        {cls.studentCount} students
+                                                        {cls.studentCount} {cls.studentCount === 1 ? "student" : "students"}
                                                       </span>
                                                     </td>
-                                                    <td className="py-2.5 px-3 text-slate-600">
-                                                      {cls.planId ? (
-                                                        <span className="font-mono text-[11px] text-slate-700 font-medium">
-                                                          Plan #{cls.planId} {cls.versionNo ? `(v${cls.versionNo})` : ""}
-                                                        </span>
+                                                    <td className="py-2.5 px-3">
+                                                      {cls.classTeacher ? (
+                                                        <div className="flex items-center justify-between gap-1.5 min-w-0">
+                                                          <div className="min-w-0 flex-1">
+                                                            <div className="flex items-center gap-1 font-semibold text-slate-900 truncate">
+                                                              <UserCheck className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                                                              <span className="truncate" title={cls.classTeacher.facultyName}>
+                                                                {cls.classTeacher.facultyName}
+                                                              </span>
+                                                            </div>
+                                                            <div className="text-[10px] text-slate-500 font-normal truncate">
+                                                              {cls.classTeacher.hrmsEmployeeId}
+                                                              {cls.classTeacher.departmentName ? ` • ${cls.classTeacher.departmentName}` : ""}
+                                                            </div>
+                                                          </div>
+                                                          <Button
+                                                            type="button"
+                                                            size="sm"
+                                                            variant="ghost"
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              setAssignSection({
+                                                                collegeId: col.collegeId,
+                                                                collegeName: col.collegeName,
+                                                                courseId: cls.courseId,
+                                                                courseName: cls.courseName,
+                                                                branchId: cls.branchId,
+                                                                branchName: cls.branchName,
+                                                                batch: cls.batch,
+                                                                year: cls.year,
+                                                                semester: cls.semester,
+                                                                sectionName: cls.section || "A",
+                                                                studentCount: cls.studentCount,
+                                                                academicYearLabel: data?.academicYear,
+                                                                currentTeacher: cls.classTeacher,
+                                                              });
+                                                              setAssignModalOpen(true);
+                                                            }}
+                                                            className="h-6 px-1.5 text-[11px] font-semibold text-navy-700 hover:text-navy-900 hover:bg-slate-100 shrink-0 cursor-pointer"
+                                                            title="Change class teacher"
+                                                          >
+                                                            Change
+                                                          </Button>
+                                                        </div>
                                                       ) : (
-                                                        <span className="text-slate-400 italic text-[11px]">Not created</span>
+                                                        <div className="flex items-center gap-2">
+                                                          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-200/80 px-2.5 py-0.5 text-[11px] font-semibold text-amber-800 shrink-0">
+                                                            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                                                            Not Assigned
+                                                          </span>
+                                                          <Button
+                                                            type="button"
+                                                            size="sm"
+                                                            variant="secondary"
+                                                            onClick={(e) => {
+                                                              e.stopPropagation();
+                                                              setAssignSection({
+                                                                collegeId: col.collegeId,
+                                                                collegeName: col.collegeName,
+                                                                courseId: cls.courseId,
+                                                                courseName: cls.courseName,
+                                                                branchId: cls.branchId,
+                                                                branchName: cls.branchName,
+                                                                batch: cls.batch,
+                                                                year: cls.year,
+                                                                semester: cls.semester,
+                                                                sectionName: cls.section || "A",
+                                                                studentCount: cls.studentCount,
+                                                                academicYearLabel: data?.academicYear,
+                                                                currentTeacher: null,
+                                                              });
+                                                              setAssignModalOpen(true);
+                                                            }}
+                                                            className="h-6 px-2 text-[11px] font-semibold text-navy-800 hover:bg-navy-50 border-slate-300 shadow-2xs shrink-0 cursor-pointer"
+                                                            title="Assign class teacher"
+                                                          >
+                                                            <UserPlus className="h-3 w-3 mr-1 text-navy-600" />
+                                                            Assign
+                                                          </Button>
+                                                        </div>
                                                       )}
                                                     </td>
                                                     <td className="py-2.5 px-3 text-center">
@@ -1084,7 +1195,7 @@ export function CollegeTimetablesOverview({
                                                       {onSelectClass ? (
                                                         <Button
                                                           size="sm"
-                                                          variant={cls.status === "pending" ? "primary" : "secondary"}
+                                                          variant="secondary"
                                                           onClick={() =>
                                                             onSelectClass({
                                                               collegeId: col.collegeId,
@@ -1096,23 +1207,25 @@ export function CollegeTimetablesOverview({
                                                               section: cls.section,
                                                             })
                                                           }
-                                                          className={`text-xs h-7.5 px-3 font-semibold cursor-pointer ${
-                                                            cls.status === "pending"
-                                                              ? "bg-navy-900 text-white hover:bg-navy-800"
-                                                              : ""
+                                                          className={`text-xs h-7.5 px-3 font-semibold cursor-pointer shadow-2xs transition-all ${
+                                                            cls.status === "published"
+                                                              ? "bg-emerald-50/70 border-emerald-300 text-emerald-800 hover:bg-emerald-100 hover:border-emerald-400"
+                                                              : cls.status === "drafted"
+                                                              ? "bg-amber-50/70 border-amber-300 text-amber-900 hover:bg-amber-100 hover:border-amber-400"
+                                                              : "bg-indigo-50/70 border-indigo-300 text-indigo-900 hover:bg-indigo-100 hover:border-indigo-400"
                                                           }`}
                                                         >
                                                           {cls.status === "published" ? (
                                                             <>
-                                                              Open Timetable <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                                                              Open Timetable <ArrowRight className="ml-1 h-3.5 w-3.5 text-emerald-600" />
                                                             </>
                                                           ) : cls.status === "drafted" ? (
                                                             <>
-                                                              Edit Draft <ArrowRight className="ml-1 h-3.5 w-3.5" />
+                                                              Edit Draft <ArrowRight className="ml-1 h-3.5 w-3.5 text-amber-600" />
                                                             </>
                                                           ) : (
                                                             <>
-                                                              <PlusCircle className="mr-1 h-3.5 w-3.5" /> Configure Timetable
+                                                              <PlusCircle className="mr-1 h-3.5 w-3.5 text-indigo-600" /> Configure Timetable
                                                             </>
                                                           )}
                                                         </Button>
@@ -1140,6 +1253,20 @@ export function CollegeTimetablesOverview({
             );
           })}
         </div>
+      )}
+
+      {assignModalOpen && (
+        <AssignClassTeacherModal
+          open={assignModalOpen}
+          onClose={() => {
+            setAssignModalOpen(false);
+            setAssignSection(null);
+          }}
+          sectionInfo={assignSection}
+          onAssigned={() => {
+            void loadOverview();
+          }}
+        />
       )}
     </div>
   );

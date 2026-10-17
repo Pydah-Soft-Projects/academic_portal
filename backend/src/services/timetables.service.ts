@@ -31,6 +31,7 @@ import {
 } from "./user-management.service.js";
 import { ensureSessionsForDate } from "./class-sessions.service.js";
 import { getCurrentAcademicYearLabel } from "./masters.service.js";
+import { getClassTeacherForSection } from "./class-teacher.service.js";
 import type { PoolConnection } from "mysql2/promise";
 
 export type TimetablePlannerFilters = {
@@ -1029,6 +1030,7 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
       entries: [],
       subjects: [],
       faculty: [],
+      classTeacher: null,
       review: null,
     };
   }
@@ -1068,6 +1070,7 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
       entries: [],
       subjects: await listSubjectsForPlanner(filters),
       faculty: await listFacultyOptions(),
+      classTeacher: null,
       review: null,
       message:
         "No academic timing configuration found. Please configure the timing schedule for this college, academic year and semester before creating the timetable.",
@@ -1088,10 +1091,18 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
   const entriesRaw = plan ? await loadEntries(plan.id) : [];
   const entries = await hydrateEntriesForDisplay(entriesRaw, plan?.status);
   const { days, slotsByDay, grid } = buildGrid(timing.slots, entries);
-  const [studentCount, subjects, faculty] = await Promise.all([
+  const [studentCount, subjects, faculty, classTeacher] = await Promise.all([
     countStudentsForScope(filters),
     listSubjectsForPlanner(filters),
     listFacultyOptions(),
+    getClassTeacherForSection({
+      branchId: context.branchId,
+      batch,
+      year,
+      semester,
+      section: sectionLabel,
+      academicYear,
+    }),
   ]);
 
   return {
@@ -1145,6 +1156,7 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
     })),
     subjects,
     faculty,
+    classTeacher,
     review: null,
   };
 }
@@ -3207,6 +3219,12 @@ export type TimetableOverviewClass = {
   planId: number | null;
   versionNo: number | null;
   updatedAt: string | null;
+  classTeacher?: {
+    facultyStaffLinkId: number;
+    facultyName: string;
+    hrmsEmployeeId: string;
+    departmentName: string | null;
+  } | null;
 };
 
 export type TimetableOverviewYearSem = {
@@ -3458,6 +3476,117 @@ export async function getTimetableOverview(
     collegeBreakdowns.set(c.id, new Map());
   }
 
+  // 4. Fetch active mentor/class teacher assignments to populate classTeacher
+  const mentorAssignments = await queryAcademic<
+    (RowDataPacket & {
+      student_db_id: number;
+      faculty_staff_link_id: number;
+      notes: string | null;
+      faculty_name: string | null;
+      hrms_employee_id: string;
+      department_name: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      ma.student_db_id,
+      ma.faculty_staff_link_id,
+      ma.notes,
+      sl.display_name AS faculty_name,
+      sl.hrms_employee_id,
+      sl.department_name
+    FROM ap_mentor_assignments ma
+    JOIN ap_staff_link sl ON sl.id = ma.faculty_staff_link_id
+    WHERE ma.is_active = 1
+    `,
+  );
+
+  const studentIdsWithAssignments = mentorAssignments
+    .filter((ma) => Number(ma.student_db_id) > 0)
+    .map((ma) => Number(ma.student_db_id));
+
+  const studentToSectionKeyMap = new Map<number, string>();
+  if (studentIdsWithAssignments.length > 0) {
+    const chunkLimit = 1000;
+    for (let i = 0; i < studentIdsWithAssignments.length; i += chunkLimit) {
+      const slice = studentIdsWithAssignments.slice(i, i + chunkLimit);
+      const studentSectionRows = await queryStudent<
+        (RowDataPacket & {
+          id: number;
+          branch_id: number;
+          batch: string;
+          current_semester: number;
+          section_name: string;
+        })[]
+      >(
+        `
+        SELECT
+          s.id,
+          s.branch_id,
+          TRIM(s.batch) AS batch,
+          s.current_semester,
+          TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name
+        FROM students s
+        LEFT JOIN student_sections ss ON ss.student_id = s.id
+        WHERE s.id IN (${slice.map(() => "?").join(",")})
+        `,
+        slice,
+      );
+
+      for (const r of studentSectionRows) {
+        const key = `${r.branch_id}:${(r.batch || "").trim().toUpperCase()}:${r.current_semester}:${(r.section_name || "A").trim().toUpperCase()}`;
+        studentToSectionKeyMap.set(Number(r.id), key);
+      }
+    }
+  }
+
+  type SectionFacultyTally = {
+    facultyStaffLinkId: number;
+    facultyName: string;
+    hrmsEmployeeId: string;
+    departmentName: string | null;
+    count: number;
+  };
+  const sectionTeacherMap = new Map<string, SectionFacultyTally>();
+
+  for (const ma of mentorAssignments) {
+    const sid = Number(ma.student_db_id);
+    let secKey: string | null = null;
+
+    if (sid > 0) {
+      secKey = studentToSectionKeyMap.get(sid) ?? null;
+    } else if (ma.notes) {
+      try {
+        const parsed = JSON.parse(ma.notes) as {
+          branchId?: number;
+          batch?: string;
+          semester?: number;
+          section?: string;
+        };
+        if (parsed.branchId && parsed.batch) {
+          secKey = `${parsed.branchId}:${(parsed.batch || "").trim().toUpperCase()}:${parsed.semester || 1}:${(parsed.section || "A").trim().toUpperCase()}`;
+        }
+      } catch {
+        secKey = null;
+      }
+    }
+
+    if (secKey) {
+      const existing = sectionTeacherMap.get(secKey);
+      if (!existing) {
+        sectionTeacherMap.set(secKey, {
+          facultyStaffLinkId: Number(ma.faculty_staff_link_id),
+          facultyName: ma.faculty_name || "Staff",
+          hrmsEmployeeId: ma.hrms_employee_id || "",
+          departmentName: ma.department_name || null,
+          count: 1,
+        });
+      } else if (existing.facultyStaffLinkId === Number(ma.faculty_staff_link_id)) {
+        existing.count++;
+      }
+    }
+  }
+
   for (const row of targetRows) {
     const studentCount = Number(row.student_count) || 0;
     if (studentCount <= 0) continue;
@@ -3494,6 +3623,10 @@ export async function getTimetableOverview(
       });
     }
 
+    const teacherTally = sectionTeacherMap.get(
+      `${row.branch_id}:${batch}:${row.semester}:${sec}`,
+    );
+
     colBreakdown.get(ysKey)!.classes.push({
       courseId: Number(row.course_id),
       courseName: row.course_name,
@@ -3508,6 +3641,14 @@ export async function getTimetableOverview(
       planId,
       versionNo,
       updatedAt,
+      classTeacher: teacherTally
+        ? {
+            facultyStaffLinkId: teacherTally.facultyStaffLinkId,
+            facultyName: teacherTally.facultyName,
+            hrmsEmployeeId: teacherTally.hrmsEmployeeId,
+            departmentName: teacherTally.departmentName,
+          }
+        : null,
     });
   }
 

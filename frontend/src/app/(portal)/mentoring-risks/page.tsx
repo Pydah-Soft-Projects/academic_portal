@@ -1,5 +1,5 @@
-﻿import { MentoringRisksView } from "@/features/mentoring/MentoringRisksView";
+import { redirect } from "next/navigation";
 
 export default function MentoringRisksPage() {
-  return <MentoringRisksView />;
+  redirect("/class-teacher-assignment");
 }

@@ -44,8 +44,11 @@ export function isStaffOnlyRequester(authorization: Authorization | null): boole
 
 /** Global super admin — hide personal teaching/request routes from sidebar. */
 export function isSuperAdminUser(authorization: Authorization | null): boolean {
-  if (!authorization?.scope?.isGlobal) return false;
-  return authorization.roles?.some((role) => role.roleKey === "super_admin") ?? false;
+  if (!authorization?.roles?.length) return false;
+  return (
+    authorization.roles.some((role) => role.roleKey === "super_admin" || role.roleKey === "superadmin") ||
+    Boolean(authorization.scope?.isGlobal && authorization.roles.some((r) => r.roleKey.includes("admin")))
+  );
 }
 
 /** Faculty / teaching staff without institute-wide admin permissions. */
@@ -103,6 +106,11 @@ export function isStaffUser(authorization: Authorization | null): boolean {
 export function getDefaultDashboardMode(authorization: Authorization | null): DashboardMode {
   if (!authorization) return "teacher";
 
+  // Super Admin -> Institutional Admin Dashboard (Command Center)
+  if (isSuperAdminUser(authorization) || authorization.scope?.isGlobal) {
+    return "admin";
+  }
+
   // Vice Principal role -> Vice Principal Dashboard
   if (isVicePrincipalUser(authorization)) {
     return "vice_principal";
@@ -111,11 +119,6 @@ export function getDefaultDashboardMode(authorization: Authorization | null): Da
   // Principal role -> Principal Dashboard
   if (isPrincipalUser(authorization)) {
     return "principal";
-  }
-
-  // Super Admin -> Leadership / Principal Dashboard
-  if (isSuperAdminUser(authorization)) {
-    return "admin";
   }
 
   // HOD -> Department Dashboard

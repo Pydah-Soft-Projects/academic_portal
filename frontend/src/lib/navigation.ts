@@ -21,6 +21,7 @@ import {
   Clock3,
   ArrowLeftRight,
   GitMerge,
+  UserCheck,
 } from "lucide-react";
 
 export type NavItem = {
@@ -214,13 +215,13 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "Student Support",
-    icon: ShieldAlert,
+    icon: UserCheck,
     items: [
       {
-        label: "Class Teacher & Mentoring",
-        href: "/mentoring-risks",
-        icon: ShieldAlert,
-        permissions: ["mentoring.view", "students.view"],
+        label: "Class Teacher Assignment",
+        href: "/class-teacher-assignment",
+        icon: UserCheck,
+        permissions: ["timetable.view", "mentoring.view", "students.view"],
       },
     ],
   },
@@ -282,6 +283,7 @@ export const TEACHING_STAFF_NAV_HREFS = new Set([
   "/attendance-posting",
   "/internal-marks",
   "/requests",
+  "/class-teacher-assignment",
   "/mentoring-risks",
   "/user-management",
 ]);

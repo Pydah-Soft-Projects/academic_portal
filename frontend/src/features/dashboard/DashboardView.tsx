@@ -416,11 +416,10 @@ export function DashboardView() {
     );
   }
 
-  // Principal / Vice Principal / Admin Executive Dashboard
+  // Principal / Vice Principal Dashboard
   if (
     dashboardMode === "principal" ||
-    dashboardMode === "vice_principal" ||
-    dashboardMode === "admin"
+    dashboardMode === "vice_principal"
   ) {
     return (
       <PrincipalDashboard
