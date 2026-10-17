@@ -53,9 +53,14 @@ export function PortalSwitcher() {
       } catch {
         /* ignore */
       }
-      const existingScript = document.getElementById(SWITCHER_SCRIPT_ID);
-      if (existingScript) {
-        existingScript.remove();
+      const hasSsoToken =
+        typeof window !== "undefined" &&
+        Boolean(new URLSearchParams(window.location.search).get("token"));
+      if (!hasSsoToken) {
+        const existingScript = document.getElementById(SWITCHER_SCRIPT_ID);
+        if (existingScript) {
+          existingScript.remove();
+        }
       }
       const elements = document.querySelectorAll(
         "pydah-portal-switcher, #pydah-portal-switcher, [data-pydah-switcher], .pydah-portal-switcher"

@@ -56,6 +56,20 @@ export function LoginForm() {
     router.replace("/dashboard");
   }, [hydrated, loading, user, ssoToken, router]);
 
+  // Ensure portal-switcher.js CDN is loaded to register <pydah-sso-loader />
+  useEffect(() => {
+    if (!ssoToken || typeof document === "undefined") return;
+    const scriptId = "pydah-portal-switcher-script";
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement("script");
+      script.id = scriptId;
+      script.src = `${crmFrontendUrl}/portal-switcher.js`;
+      script.async = true;
+      script.setAttribute("data-current-portal", "academic-portal");
+      document.body.appendChild(script);
+    }
+  }, [ssoToken, crmFrontendUrl]);
+
   useEffect(() => {
     if (!ssoToken || !hydrated || hasAttemptedSso.current) return;
     hasAttemptedSso.current = true;
@@ -154,23 +168,22 @@ export function LoginForm() {
     }
   }
 
+  // Show universal workspace transition loader while verifying SSO token
+  if (isVerifyingSso) {
+    return <pydah-sso-loader />;
+  }
+
   // Same markup on server + first client paint; auth UI only after hydrate.
-  if (!hydrated || loading || user || isVerifyingSso) {
+  if (!hydrated || loading || user) {
     return (
       <div className="flex h-full min-h-dvh items-center justify-center bg-[#F3F7FB] text-sm text-slate-500">
         <LoadingAnimation
           label={
-            isVerifyingSso
-              ? "Verifying Single Sign-On…"
-              : hydrated && user
-                ? "Redirecting to Academic Portal…"
-                : "Loading Academic Portal…"
+            hydrated && user
+              ? "Redirecting to Academic Portal…"
+              : "Loading Academic Portal…"
           }
-          subtitle={
-            isVerifyingSso
-              ? "Connecting with CRM Gateway. Please wait…"
-              : "Please wait while we verify your session."
-          }
+          subtitle="Please wait while we verify your session."
         />
       </div>
     );
