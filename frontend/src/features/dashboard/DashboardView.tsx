@@ -54,6 +54,7 @@ import { getTodayDayCode } from "@/features/my-timetable/utils";
 import { SubjectTeacherDashboard } from "./SubjectTeacherDashboard";
 import { HodDashboard } from "./HodDashboard";
 import { ClassTeacherDashboard } from "./ClassTeacherDashboard";
+import { PrincipalDashboard } from "./PrincipalDashboard";
 
 function todayIso() {
   const now = new Date();
@@ -411,6 +412,20 @@ export function DashboardView() {
         roleLabel={authorization?.roles?.[0]?.label || "Subject Teacher"}
         academicYear={filters.academicYear}
         date={filters.date}
+      />
+    );
+  }
+
+  // Principal / Vice Principal / Admin Executive Dashboard
+  if (
+    dashboardMode === "principal" ||
+    dashboardMode === "vice_principal" ||
+    dashboardMode === "admin"
+  ) {
+    return (
+      <PrincipalDashboard
+        roleType={dashboardMode === "vice_principal" ? "vice_principal" : "principal"}
+        customUserName={user?.name}
       />
     );
   }

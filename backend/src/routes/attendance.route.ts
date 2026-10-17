@@ -19,6 +19,7 @@ import {
   getWeeklyAttendanceAnalytics,
   getMonthlyAttendanceAnalytics,
   getSemesterAttendanceAnalytics,
+  getSlotsAttendanceSummary,
   listAttendanceSessions,
   postAttendance,
   type AttendanceMark,
@@ -149,6 +150,7 @@ attendanceRouter.get(
   async (req: AuthedRequest, res, next) => {
     try {
       const scoped = scopedQuery(req);
+      const studentStatus = str(req.query.studentStatus) || str(req.query.studentType) || "Regular";
       res.json(
         await getAttendanceAnalytics({
           collegeId: scoped.collegeId,
@@ -157,6 +159,7 @@ attendanceRouter.get(
           branchId: scoped.branchId,
           branchIds: scoped.branchIds,
           section: str(req.query.section),
+          studentStatus,
         }),
       );
     } catch (error) {
@@ -176,6 +179,7 @@ attendanceRouter.get(
   async (req: AuthedRequest, res, next) => {
     try {
       const scoped = scopedQuery(req);
+      const studentStatus = str(req.query.studentStatus) || str(req.query.studentType) || "Regular";
       res.json(
         await getDailyAttendanceAnalytics({
           date: str(req.query.date),
@@ -189,6 +193,40 @@ attendanceRouter.get(
           semester: num(req.query.semester),
           section: str(req.query.section),
           academicYear: str(req.query.academicYear),
+          studentStatus,
+        }),
+      );
+    } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+attendanceRouter.get(
+  "/analytics/slots-summary",
+  requirePermission("attendance_analytics.view", "attendance.view"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const scoped = scopedQuery(req);
+      const studentStatus = str(req.query.studentStatus) || str(req.query.studentType) || "Regular";
+      res.json(
+        await getSlotsAttendanceSummary({
+          date: str(req.query.date),
+          collegeId: scoped.collegeId,
+          collegeIds: scoped.collegeIds,
+          courseId: num(req.query.courseId),
+          branchId: scoped.branchId,
+          branchIds: scoped.branchIds,
+          batch: str(req.query.batch),
+          year: num(req.query.year),
+          semester: num(req.query.semester),
+          academicYear: str(req.query.academicYear),
+          studentStatus,
         }),
       );
     } catch (error) {
@@ -208,6 +246,7 @@ attendanceRouter.get(
   async (req: AuthedRequest, res, next) => {
     try {
       const scoped = scopedQuery(req);
+      const studentStatus = str(req.query.studentStatus) || str(req.query.studentType) || "Regular";
       res.json(
         await getWeeklyAttendanceAnalytics({
           date: str(req.query.date),
@@ -222,6 +261,7 @@ attendanceRouter.get(
           semester: num(req.query.semester),
           section: str(req.query.section),
           academicYear: str(req.query.academicYear),
+          studentStatus,
         }),
       );
     } catch (error) {
@@ -241,6 +281,7 @@ attendanceRouter.get(
   async (req: AuthedRequest, res, next) => {
     try {
       const scoped = scopedQuery(req);
+      const studentStatus = str(req.query.studentStatus) || str(req.query.studentType) || "Regular";
       res.json(
         await getMonthlyAttendanceAnalytics({
           month: num(req.query.month),
@@ -255,6 +296,7 @@ attendanceRouter.get(
           semester: num(req.query.semester),
           section: str(req.query.section),
           academicYear: str(req.query.academicYear),
+          studentStatus,
         }),
       );
     } catch (error) {
@@ -274,6 +316,7 @@ attendanceRouter.get(
   async (req: AuthedRequest, res, next) => {
     try {
       const scoped = scopedQuery(req);
+      const studentStatus = str(req.query.studentStatus) || str(req.query.studentType) || "Regular";
       res.json(
         await getSemesterAttendanceAnalytics({
           semester: num(req.query.semester),
@@ -286,6 +329,7 @@ attendanceRouter.get(
           batch: str(req.query.batch),
           yearOfStudy: num(req.query.year),
           section: str(req.query.section),
+          studentStatus,
         }),
       );
     } catch (error) {
