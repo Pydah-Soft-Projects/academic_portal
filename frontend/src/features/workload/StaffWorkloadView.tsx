@@ -1,7 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { StatCard } from "@/components/ui/StatCard";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -10,115 +9,33 @@ import { StatCardSkeleton } from "@/components/ui/CardSkeleton";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import { apiFetch } from "@/lib/api";
 import { FacultyAvatar } from "@/components/ui/FacultyAvatar";
-import {
-  ChevronDown,
-  ChevronUp,
-  BookOpen,
-  Calendar,
-  Users,
-  CheckCircle2,
-  Clock,
-  Filter,
-} from "lucide-react";
-import type { AttendanceSessionCard } from "@/features/attendance-posting/AttendanceTodayView";
-
-function todayIso() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
+import { Calendar, Search } from "lucide-react";
+import { FacultyTimetableModal } from "@/features/workload/FacultyTimetableModal";
 
 const selectClassName =
-  "h-9 w-full sm:w-auto rounded-md border border-border bg-white px-2.5 text-xs text-navy-900 outline-none focus:border-brand-600 sm:min-w-[140px]";
+  "h-9 w-full sm:w-auto rounded-md border border-border bg-white px-2.5 text-xs text-navy-900 outline-none focus:border-brand-600 sm:min-w-[150px]";
 
 const searchClassName =
-  "h-9 w-full sm:w-auto rounded-md border border-border bg-white px-2.5 text-xs text-navy-900 outline-none focus:border-brand-600 sm:min-w-[200px]";
+  "h-9 w-full sm:w-auto rounded-md border border-border bg-white px-2.5 text-xs text-navy-900 outline-none focus:border-brand-600 sm:min-w-[240px]";
 
-export type FacultyLoad = {
-  id: string;
-  staffLinkId: number;
-  hrmsEmployeeId: string;
-  code: string;
-  name: string;
-  department: string;
-  division: string;
-  profilePhoto?: string | null;
-  periodsPerWeek: number;
-  hoursPerWeek: number;
-  hoursByDay: {
-    MON: number;
-    TUE: number;
-    WED: number;
-    THUR: number;
-    FRI: number;
-    SAT: number;
-    SUN: number;
-  };
-  periodsByDay: {
-    MON: number;
-    TUE: number;
-    WED: number;
-    THUR: number;
-    FRI: number;
-    SAT: number;
-    SUN: number;
-  };
-  status: string;
-};
+import {
+  type FacultyLoad,
+  type WorkloadSummary,
+  DAY_COLUMNS,
+} from "./types";
 
-export type WorkloadSummary = {
-  kpis: {
-    totalFaculty: number;
-    averageLoad: number;
-    averageHours?: number;
-    overloaded: number;
-    underloaded: number;
-    balanced: number;
-  };
-  thresholds?: {
-    minPeriodsPerWeek: number;
-    maxPeriodsPerWeek: number;
-    maxPeriodsPerDay: number;
-    minHoursPerWeek: number | null;
-    maxHoursPerWeek: number | null;
-  };
-  faculty: FacultyLoad[];
-  filterOptions?: {
-    divisions: string[];
-    departments: string[];
-  };
-  source?: string;
-};
-
-const DAY_COLUMNS = [
-  { key: "MON", label: "Mon" },
-  { key: "TUE", label: "Tue" },
-  { key: "WED", label: "Wed" },
-  { key: "THUR", label: "Thu" },
-  { key: "FRI", label: "Fri" },
-  { key: "SAT", label: "Sat" },
-] as const;
-
-function formatDayLoad(row: FacultyLoad, day: (typeof DAY_COLUMNS)[number]["key"]) {
-  const periods = row.periodsByDay[day];
-  const hours = row.hoursByDay[day];
-  if (!periods) return "—";
-  return hours > 0 ? `${periods}p · ${hours}h` : `${periods}p`;
-}
+export type { FacultyLoad, WorkloadSummary };
+export { DAY_COLUMNS };
 
 export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) {
   const [summary, setSummary] = useState<WorkloadSummary | null>(null);
-  const [sessions, setSessions] = useState<AttendanceSessionCard[]>([]);
-  const [selectedDate, setSelectedDate] = useState<string>(todayIso());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [divisionFilter, setDivisionFilter] = useState("all");
   const [deptFilter, setDeptFilter] = useState("all");
-  const [expandedFacultyId, setExpandedFacultyId] = useState<string | null>(null);
+  const [selectedFaculty, setSelectedFaculty] = useState<FacultyLoad | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setSearch(searchDraft.trim()), 300);
@@ -139,29 +56,22 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
       setLoading(true);
       setError(null);
       try {
-        const [wRes, sRes] = await Promise.all([
-          apiFetch(`/workload/summary${query ? `?${query}` : ""}`, { cache: "no-store" }),
-          apiFetch(`/attendance/sessions?date=${selectedDate}`, { cache: "no-store" }),
-        ]);
+        const res = await apiFetch(`/workload/summary${query ? `?${query}` : ""}`, {
+          cache: "no-store",
+        });
 
-        const wBody = await wRes.json().catch(() => ({}));
-        const sBody = await sRes.json().catch(() => ({}));
+        const body = await res.json().catch(() => ({}));
 
-        if (!wRes.ok) {
+        if (!res.ok) {
           throw new Error(
-            typeof wBody === "object" && wBody && "message" in wBody
-              ? String((wBody as { message: string }).message)
+            typeof body === "object" && body && "message" in body
+              ? String((body as { message: string }).message)
               : "Failed to load workload",
           );
         }
 
         if (!cancelled) {
-          setSummary(wBody as WorkloadSummary);
-          if (sRes.ok && sBody?.data) {
-            setSessions(sBody.data as AttendanceSessionCard[]);
-          } else {
-            setSessions([]);
-          }
+          setSummary(body as WorkloadSummary);
         }
       } catch (err) {
         if (!cancelled) {
@@ -176,11 +86,10 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
     return () => {
       cancelled = true;
     };
-  }, [query, selectedDate]);
+  }, [query]);
 
   const divisionOptions = summary?.filterOptions?.divisions ?? [];
   const deptOptions = summary?.filterOptions?.departments ?? [];
-
   const faculty = summary?.faculty ?? [];
 
   const kpis = summary?.kpis ?? {
@@ -192,49 +101,30 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
     balanced: 0,
   };
 
-  const sessionStats = useMemo(() => {
-    const totalScheduled = sessions.length;
-    const totalPosted = sessions.filter((s) => s.posted).length;
-    const totalPresent = sessions.reduce((sum, s) => sum + (s.presentCount ?? 0), 0);
-    const totalAbsent = sessions.reduce((sum, s) => sum + (s.absentCount ?? 0), 0);
-    const totalEnrolled = totalPresent + totalAbsent;
-    const overallStudentPct = totalEnrolled > 0 ? Math.round((totalPresent / totalEnrolled) * 100) : 0;
-    return { totalScheduled, totalPosted, totalPresent, totalAbsent, totalEnrolled, overallStudentPct };
-  }, [sessions]);
-
   return (
     <div className="space-y-4">
       {!embedded ? (
         <PageHeader
-          title="Staff Timetable & Attendance Reports"
+          title="Staff Workload"
           description={
             summary?.source ||
-            "Teaching hours and live class attendance from published timetables across all branches."
+            "Weekly teaching workload, day-wise slot distribution, and published timetable schedules across faculty."
           }
         />
       ) : null}
 
-      {/* FILTER & DATE CONTROLS BAR (SINGLE ROW) */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border bg-card p-3">
+      {/* FILTER CONTROLS BAR (Search, Divisions, Departments) */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border bg-card p-3 shadow-2xs">
         <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
-          <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 shrink-0">
-            <Calendar className="h-4 w-4 text-brand-600" />
-            Date:
+          <div className="relative flex-1 sm:flex-initial">
             <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              className="h-9 rounded-md border border-border bg-white px-2.5 text-xs text-navy-900 outline-none focus:border-brand-600"
+              type="search"
+              placeholder="Search faculty name, ID, role, or department…"
+              className={searchClassName}
+              value={searchDraft}
+              onChange={(e) => setSearchDraft(e.target.value)}
             />
-          </label>
-
-          <input
-            type="search"
-            placeholder="Search faculty name, code, or department…"
-            className={searchClassName}
-            value={searchDraft}
-            onChange={(e) => setSearchDraft(e.target.value)}
-          />
+          </div>
 
           <select
             className={selectClassName}
@@ -262,10 +152,15 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
             ))}
           </select>
         </div>
+
+        <span className="text-xs font-semibold text-slate-500 shrink-0">
+          Showing <strong className="text-navy-900">{faculty.length}</strong> faculty
+        </span>
       </div>
 
       {error ? <p className="text-sm text-critical">{error}</p> : null}
 
+      {/* WORKLOAD KPI STAT CARDS (No Attendance) */}
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 xl:grid-cols-4 sm:gap-3">
         {loading ? (
           <>
@@ -276,175 +171,159 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
           </>
         ) : (
           <>
-            <StatCard compact label="Total Faculty" value={kpis.totalFaculty} hint="In active scope" />
             <StatCard
               compact
-              label="Classes Today"
-              value={sessionStats.totalScheduled}
-              hint={`Date: ${selectedDate}`}
+              label="Total Faculty"
+              value={kpis.totalFaculty}
+              hint="In active scope"
+            />
+            <StatCard
+              compact
+              label="Average Load"
+              value={`${kpis.averageLoad} p/wk`}
+              hint={kpis.averageHours ? `${kpis.averageHours} hrs/wk avg` : "Per faculty"}
               tone="info"
             />
             <StatCard
               compact
-              label="Classes Posted"
-              value={`${sessionStats.totalPosted} / ${sessionStats.totalScheduled}`}
-              hint={sessionStats.totalScheduled > 0 ? `${Math.round((sessionStats.totalPosted / sessionStats.totalScheduled) * 100)}% Conducted` : "No classes"}
-              tone={sessionStats.totalPosted === sessionStats.totalScheduled && sessionStats.totalScheduled > 0 ? "success" : "warning"}
+              label="Balanced Faculty"
+              value={kpis.balanced}
+              hint="Optimal weekly load"
+              tone="success"
             />
             <StatCard
               compact
-              label="Attendance Rate"
-              value={sessionStats.totalEnrolled > 0 ? `${sessionStats.overallStudentPct}%` : "—"}
-              hint={sessionStats.totalEnrolled > 0 ? `${sessionStats.totalPresent} / ${sessionStats.totalEnrolled} Attended` : "Pending posting"}
-              tone={sessionStats.overallStudentPct >= 75 ? "success" : "critical"}
+              label="Workload Alerts"
+              value={`${kpis.overloaded} Over · ${kpis.underloaded} Under`}
+              hint={kpis.overloaded > 0 ? "Requires rebalancing" : "Normal distribution"}
+              tone={kpis.overloaded > 0 ? "warning" : "default"}
             />
           </>
         )}
       </div>
 
       {loading ? (
-        <TableSkeleton columns={7} rows={6} />
+        <TableSkeleton columns={10} rows={7} />
       ) : (
         <>
-
-      {/* MOBILE CARD VIEW FOR FACULTY WORKLOAD (Compact Small Cards) */}
-      <div className="block md:hidden space-y-2.5">
-        {faculty.length === 0 ? (
-          <div className="rounded-xl border border-border bg-white p-6 text-center text-xs text-slate-500">
-            No faculty match the current filters.
-          </div>
-        ) : (
-          faculty.map((row) => {
-            const fSessions = sessions.filter((s) => s.facultyName === row.name);
-            const schedCount = fSessions.length;
-            const postedCount = fSessions.filter((s) => s.posted).length;
-            const presentCount = fSessions.reduce((sum, s) => sum + (s.presentCount ?? 0), 0);
-            const absentCount = fSessions.reduce((sum, s) => sum + (s.absentCount ?? 0), 0);
-            const totalStudents = presentCount + absentCount;
-            const studentPct = totalStudents > 0 ? Math.round((presentCount / totalStudents) * 100) : null;
-            const isExpanded = expandedFacultyId === row.id;
-
-            return (
-              <div
-                key={row.id}
-                className="rounded-xl border border-border/80 bg-white p-3 shadow-2xs space-y-2.5"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <FacultyAvatar
-                      name={row.name}
-                      photo={row.profilePhoto}
-                      hrmsEmployeeId={row.hrmsEmployeeId}
-                      size="xs"
-                    />
-                    <div className="min-w-0">
-                      <p className="font-bold text-navy-900 text-xs truncate">{row.name}</p>
-                      <p className="text-[10px] text-slate-500 truncate">{row.department} {row.code ? `• ${row.code}` : ""}</p>
-                    </div>
-                  </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[9.5px] font-bold shrink-0 ${postedCount === schedCount && schedCount > 0 ? "bg-emerald-100 text-emerald-800" : schedCount > 0 ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
-                    {schedCount > 0 ? `${postedCount}/${schedCount} Posted` : "No classes"}
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-50 p-1.5 text-center text-[10px] border border-slate-100">
-                  <div>
-                    <span className="text-slate-400 block">Weekly Load</span>
-                    <strong className="text-navy-900 font-extrabold">{row.periodsPerWeek} p/wk</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block">Enrolled</span>
-                    <strong className="text-navy-900 font-extrabold">{totalStudents > 0 ? totalStudents : "—"}</strong>
-                  </div>
-                  <div>
-                    <span className="text-slate-400 block">Attendance</span>
-                    <strong className={studentPct !== null && studentPct >= 75 ? "text-emerald-700 font-extrabold" : "text-amber-700 font-extrabold"}>
-                      {studentPct !== null ? `${studentPct}%` : "Pending"}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-1.5 pt-0.5">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 px-2 text-[11px] font-semibold"
-                    onClick={() => setExpandedFacultyId(isExpanded ? null : row.id)}
-                  >
-                    {isExpanded ? <ChevronUp className="h-3 w-3 mr-1" /> : <ChevronDown className="h-3 w-3 mr-1" />}
-                    {fSessions.length} Classes
-                  </Button>
-                  <Link href={`/staff-workload/${row.id}`}>
-                    <Button size="sm" variant="secondary" className="h-7 px-2.5 text-[11px] font-semibold">
-                      Grid View
-                    </Button>
-                  </Link>
-                </div>
-
-                {/* Mobile Expanded Sessions */}
-                {isExpanded && (
-                  <div className="pt-2 border-t border-border space-y-2">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                      Classes for {selectedDate}
-                    </p>
-                    {fSessions.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic">No classes scheduled on this date.</p>
-                    ) : (
-                      fSessions.map((s) => (
-                        <div key={s.id} className="rounded-lg border border-slate-200 p-2 bg-slate-50 text-[11px] space-y-1">
-                          <div className="flex justify-between items-start">
-                            <span className="font-bold text-navy-900 line-clamp-1">{s.subjectName || s.subjectCode}</span>
-                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${s.posted ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                              {s.posted ? "Attended" : "Pending"}
-                            </span>
-                          </div>
-                          <p className="text-slate-500 text-[10px]">{s.section || "Sec"} · {s.slotLabel || s.startTime}</p>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* DETAILED FACULTY TIMETABLE & CLASS ATTENDANCE TABLE (DESKTOP) */}
-      <div className="hidden md:block overflow-x-auto rounded-lg border border-border bg-white shadow-sm">
-        <table className="w-full text-left text-xs border-collapse">
-          <thead>
-            <tr className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 border-b border-border">
-              <th className="px-3 py-3">Faculty Member</th>
-              <th className="px-3 py-3">Department</th>
-              <th className="px-3 py-3">Weekly Load</th>
-              <th className="px-3 py-3 text-center">Classes ({selectedDate})</th>
-              <th className="px-3 py-3 text-center">Enrolled Students</th>
-              <th className="px-3 py-3 text-center">Students Attended</th>
-              <th className="px-3 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border">
+          {/* MOBILE CARD VIEW FOR FACULTY WORKLOAD */}
+          <div className="block md:hidden space-y-2.5">
             {faculty.length === 0 ? (
-              <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-sm text-slate-500">
-                  No faculty match the current filters.
-                </td>
-              </tr>
+              <div className="rounded-xl border border-border bg-white p-6 text-center text-xs text-slate-500">
+                No faculty match the current filters.
+              </div>
             ) : (
-              faculty.map((row) => {
-                const fSessions = sessions.filter((s) => s.facultyName === row.name);
-                const schedCount = fSessions.length;
-                const postedCount = fSessions.filter((s) => s.posted).length;
-                const presentCount = fSessions.reduce((sum, s) => sum + (s.presentCount ?? 0), 0);
-                const absentCount = fSessions.reduce((sum, s) => sum + (s.absentCount ?? 0), 0);
-                const totalStudents = presentCount + absentCount;
-                const studentPct = totalStudents > 0 ? Math.round((presentCount / totalStudents) * 100) : null;
-                const isExpanded = expandedFacultyId === row.id;
+              faculty.map((row) => (
+                <div
+                  key={row.id}
+                  className="rounded-xl border border-border/80 bg-white p-3 shadow-2xs space-y-2.5 hover:border-indigo-300 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <FacultyAvatar
+                        name={row.name}
+                        photo={row.profilePhoto}
+                        hrmsEmployeeId={row.hrmsEmployeeId}
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <p className="font-bold text-navy-900 text-xs truncate">{row.name}</p>
+                        <div className="flex flex-wrap items-center gap-1 text-[10px] text-slate-500">
+                          <span className="font-mono font-semibold text-slate-600">
+                            {row.hrmsEmployeeId || row.code}
+                          </span>
+                          {row.designation && row.designation !== "—" ? (
+                            <>
+                              <span>•</span>
+                              <span className="truncate">{row.designation}</span>
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200/80 shrink-0">
+                      {row.department}
+                    </span>
+                  </div>
 
-                return (
-                  <Fragment key={row.id}>
-                    <tr className="hover:bg-slate-50/80 transition-colors">
+                  {/* Day-wise slot distribution cards */}
+                  <div className="grid grid-cols-6 gap-1 rounded-lg bg-slate-50/80 p-1.5 text-center text-[10px] border border-slate-100">
+                    {DAY_COLUMNS.map((d) => {
+                      const count = row.periodsByDay?.[d.key] ?? 0;
+                      return (
+                        <div key={d.key} className="flex flex-col items-center">
+                          <span className="text-[9px] font-semibold text-slate-400 uppercase">
+                            {d.label}
+                          </span>
+                          <span
+                            className={`font-bold mt-0.5 ${
+                              count > 0 ? "text-indigo-950 font-extrabold" : "text-slate-300"
+                            }`}
+                          >
+                            {count > 0 ? count : "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Bottom bar with load summary & View Grid button */}
+                  <div className="flex items-center justify-between pt-1 border-t border-border/60">
+                    <div className="flex items-center gap-2">
+                      <div className="text-[11px]">
+                        <strong className="text-navy-900 font-bold">{row.periodsPerWeek} p/wk</strong>{" "}
+                        <span className="text-slate-400 text-[10px]">({row.hoursPerWeek}h)</span>
+                      </div>
+                      <StatusBadge status={row.status} />
+                    </div>
+
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="h-7 px-2.5 text-[11px] font-semibold text-indigo-900 bg-indigo-50/80 border-indigo-200 hover:bg-indigo-100 cursor-pointer"
+                      onClick={() => setSelectedFaculty(row)}
+                    >
+                      <Calendar className="h-3 w-3 mr-1 text-indigo-600" />
+                      View Grid
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* DESKTOP TABLE: Photo, Name, ID, Role, Department, Mon-Sat Slot Counts, Weekly Load & Grid Button */}
+          <div className="hidden md:block overflow-x-auto rounded-lg border border-border bg-white shadow-xs">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500 border-b border-border">
+                  <th className="px-3 py-3 w-[24%]">Faculty Member</th>
+                  <th className="px-3 py-3 w-[10%]">Department</th>
+                  <th className="px-2 py-3 text-center w-[6%]">Mon</th>
+                  <th className="px-2 py-3 text-center w-[6%]">Tue</th>
+                  <th className="px-2 py-3 text-center w-[6%]">Wed</th>
+                  <th className="px-2 py-3 text-center w-[6%]">Thu</th>
+                  <th className="px-2 py-3 text-center w-[6%]">Fri</th>
+                  <th className="px-2 py-3 text-center w-[6%]">Sat</th>
+                  <th className="px-3 py-3 w-[17%]">Weekly Load</th>
+                  <th className="px-3 py-3 text-right w-[13%]">Timetable</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {faculty.length === 0 ? (
+                  <tr>
+                    <td colSpan={10} className="px-4 py-8 text-center text-sm text-slate-500">
+                      No faculty match the current filters.
+                    </td>
+                  </tr>
+                ) : (
+                  faculty.map((row) => (
+                    <tr
+                      key={row.id}
+                      className="hover:bg-indigo-50/30 transition-colors group cursor-pointer"
+                      onClick={() => setSelectedFaculty(row)}
+                    >
+                      {/* Photo, Name, ID, Role */}
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-2.5">
                           <FacultyAvatar
@@ -453,136 +332,111 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
                             hrmsEmployeeId={row.hrmsEmployeeId}
                             size="sm"
                           />
-                          <div>
-                            <p className="font-semibold text-navy-900">{row.name}</p>
-                            <p className="text-[10px] text-slate-400 font-mono">{row.code || row.division}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 text-slate-600 font-medium">{row.department}</td>
-                      <td className="px-3 py-3 text-slate-600">
-                        <span className="font-bold text-navy-900">{row.periodsPerWeek}</span> periods/wk
-                        <span className="text-[10px] text-slate-400 block">({row.hoursPerWeek} hrs/wk)</span>
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        {schedCount > 0 ? (
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${postedCount === schedCount ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                            {postedCount} / {schedCount} Conducted
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 text-[10px]">No class today</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-center font-bold text-navy-900">
-                        {totalStudents > 0 ? `${totalStudents} Students` : "—"}
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        {studentPct !== null ? (
-                          <div className="inline-flex items-center gap-1.5">
-                            <div className="w-16 bg-slate-200 h-2 rounded-full overflow-hidden">
-                              <div className={`h-full ${studentPct >= 75 ? "bg-emerald-500" : "bg-amber-500"}`} style={{ width: `${studentPct}%` }} />
+                          <div className="min-w-0">
+                            <p className="font-bold text-navy-900 group-hover:text-indigo-600 transition-colors truncate">
+                              {row.name}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                              <span className="font-mono font-semibold text-slate-700">
+                                {row.hrmsEmployeeId || row.code}
+                              </span>
+                              {row.designation && row.designation !== "—" ? (
+                                <>
+                                  <span className="text-slate-300">•</span>
+                                  <span
+                                    className="text-slate-500 font-medium truncate max-w-[140px]"
+                                    title={row.designation}
+                                  >
+                                    {row.designation}
+                                  </span>
+                                </>
+                              ) : null}
                             </div>
-                            <span className="font-bold text-slate-800">{presentCount} ({studentPct}%)</span>
                           </div>
-                        ) : (
-                          <span className="text-slate-400 text-[10px]">Pending</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-xs"
-                            onClick={() => setExpandedFacultyId(isExpanded ? null : row.id)}
-                          >
-                            {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                            Classes
-                          </Button>
-                          <Link href={`/staff-workload/${row.id}`}>
-                            <Button size="sm" variant="secondary" className="h-7 px-2 text-xs">
-                              Grid
-                            </Button>
-                          </Link>
                         </div>
+                      </td>
+
+                      {/* Department */}
+                      <td className="px-3 py-3">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200/80">
+                          {row.department || "—"}
+                        </span>
+                      </td>
+
+                      {/* Day slots counts: Mon - Sat */}
+                      {DAY_COLUMNS.map((d) => {
+                        const count = row.periodsByDay?.[d.key] ?? 0;
+                        const hours = row.hoursByDay?.[d.key] ?? 0;
+                        return (
+                          <td key={d.key} className="px-2 py-3 text-center">
+                            {count > 0 ? (
+                              <div className="inline-flex flex-col items-center justify-center">
+                                <span
+                                  className="inline-flex min-w-[28px] h-6 px-1.5 items-center justify-center rounded-md bg-indigo-50 border border-indigo-200/80 text-xs font-bold text-indigo-900 shadow-2xs group-hover:bg-indigo-100 transition-colors"
+                                  title={`${d.full}: ${count} slot${count === 1 ? "" : "s"} (${hours} hrs)`}
+                                >
+                                  {count}
+                                </span>
+                                {hours > 0 ? (
+                                  <span className="text-[9.5px] text-slate-400 mt-0.5 font-medium">
+                                    {hours}h
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : (
+                              <span className="text-slate-300 font-medium text-xs">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+
+                      {/* Weekly Load */}
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-2">
+                          <div>
+                            <div className="flex items-baseline gap-1">
+                              <span className="font-extrabold text-navy-900 text-xs">
+                                {row.periodsPerWeek}
+                              </span>
+                              <span className="text-[11px] text-slate-600 font-medium">
+                                periods/wk
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-slate-400 block font-medium">
+                              ({row.hoursPerWeek} hrs/wk)
+                            </span>
+                          </div>
+                          <StatusBadge status={row.status} />
+                        </div>
+                      </td>
+
+                      {/* Actions: Grid popup button */}
+                      <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-7.5 px-3 text-xs font-semibold shadow-2xs border-slate-300 hover:border-indigo-300 hover:bg-indigo-50 hover:text-indigo-900 cursor-pointer"
+                          onClick={() => setSelectedFaculty(row)}
+                        >
+                          <Calendar className="h-3.5 w-3.5 mr-1.5 text-indigo-600" />
+                          View Grid
+                        </Button>
                       </td>
                     </tr>
-
-                    {/* EXPANDABLE CLASS SESSION BREAKDOWN FOR THIS FACULTY */}
-                    {isExpanded && (
-                      <tr className="bg-slate-50/90">
-                        <td colSpan={7} className="px-4 py-3">
-                          <div className="rounded-lg border border-border bg-white p-3.5 space-y-2.5 shadow-sm">
-                            <div className="flex items-center justify-between border-b border-border/60 pb-2">
-                              <h4 className="text-xs font-bold text-navy-900 uppercase tracking-wider flex items-center gap-1.5">
-                                <BookOpen className="h-4 w-4 text-brand-600" />
-                                Assigned Class Sessions for {row.name} ({selectedDate})
-                              </h4>
-                              <span className="text-xs text-slate-500">{fSessions.length} Classes Scheduled</span>
-                            </div>
-
-                            {fSessions.length === 0 ? (
-                              <p className="text-xs text-slate-500 italic py-2">
-                                No class sessions found for {row.name} on {selectedDate}.
-                              </p>
-                            ) : (
-                              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                                {fSessions.map((s) => {
-                                  const sEnrolled = (s.presentCount ?? 0) + (s.absentCount ?? 0);
-                                  const sPct = sEnrolled > 0 ? Math.round(((s.presentCount ?? 0) / sEnrolled) * 100) : null;
-
-                                  return (
-                                    <div key={s.id} className="rounded-lg border border-border p-3 bg-white space-y-2 shadow-2xs">
-                                      <div className="flex justify-between items-start">
-                                        <div>
-                                          <p className="font-bold text-navy-900 text-xs">{s.subjectName || s.subjectCode}</p>
-                                          <p className="text-[11px] text-slate-500">{s.section || "Section"} · Room {s.roomLabel || "N/A"}</p>
-                                        </div>
-                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${s.posted ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`}>
-                                          {s.posted ? "Attended" : "Pending"}
-                                        </span>
-                                      </div>
-
-                                      <div className="rounded-md bg-slate-50 p-2 text-[11px] space-y-1 border border-slate-100">
-                                        <div className="flex justify-between text-slate-600">
-                                          <span>Time Slot:</span>
-                                          <span className="font-semibold text-slate-800">{s.slotLabel || `${s.startTime} - ${s.endTime}`}</span>
-                                        </div>
-                                        <div className="flex justify-between text-slate-600">
-                                          <span>Enrolled Students:</span>
-                                          <span className="font-bold text-navy-900">{sEnrolled > 0 ? `${sEnrolled} Students` : "Enrolled Class"}</span>
-                                        </div>
-                                        {s.posted && (
-                                          <>
-                                            <div className="flex justify-between text-slate-600">
-                                              <span>Students Present:</span>
-                                              <span className="font-bold text-emerald-700">{s.presentCount ?? 0} ({sPct}%)</span>
-                                            </div>
-                                            <div className="flex justify-between text-slate-600">
-                                              <span>Students Absent:</span>
-                                              <span className="font-bold text-rose-600">{s.absentCount ?? 0}</span>
-                                            </div>
-                                          </>
-                                        )}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
+
+      {/* TIMETABLE GRID POPUP MODAL */}
+      <FacultyTimetableModal
+        open={Boolean(selectedFaculty)}
+        faculty={selectedFaculty}
+        onClose={() => setSelectedFaculty(null)}
+      />
     </div>
   );
 }

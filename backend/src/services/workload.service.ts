@@ -555,6 +555,7 @@ function matchesStaffFilters(
     code: string;
     department: string;
     division: string;
+    designation?: string;
   },
   filters: WorkloadFilters,
 ) {
@@ -566,7 +567,8 @@ function matchesStaffFilters(
       !faculty.name.toLowerCase().includes(q) &&
       !faculty.code.toLowerCase().includes(q) &&
       !faculty.hrmsEmployeeId.toLowerCase().includes(q) &&
-      !faculty.department.toLowerCase().includes(q)
+      !faculty.department.toLowerCase().includes(q) &&
+      !(faculty.designation && faculty.designation.toLowerCase().includes(q))
     ) {
       return false;
     }
