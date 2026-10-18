@@ -11,6 +11,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { FilterBar, FilterField } from "@/components/ui/FilterBar";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
 import { apiFetch } from "@/lib/api";
 import {
   formatCredits,
@@ -136,6 +137,10 @@ export function ResultsView() {
           </span>
         }
       />
+
+      <div className="mb-4 print:hidden">
+        <AcademicFilterBar title="Academic Scope Filters" />
+      </div>
 
       {hasData && summary ? (
         <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">

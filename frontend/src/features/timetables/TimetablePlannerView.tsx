@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -1222,7 +1222,40 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     return `?${params.toString()}`;
   }, [filters, filtersComplete]);
 
+  const rosterQueryKey = useMemo(() => {
+    const collegeId = filters.collegeId !== "all" && filters.collegeId ? filters.collegeId : planner?.context?.collegeId;
+    if (!collegeId) return null;
+    const targetCourseId = filters.courseId !== "all" && filters.courseId ? filters.courseId : planner?.context?.courseId;
+    const targetBranchId = filters.branchId !== "all" && filters.branchId ? filters.branchId : planner?.context?.branchId;
+    const targetBatch = filters.batch !== "all" && filters.batch ? filters.batch : planner?.context?.batch;
+    const targetYear = filters.year !== "all" && filters.year != null ? filters.year : planner?.context?.year;
+    const targetSemester = filters.semester !== "all" && filters.semester != null ? filters.semester : planner?.context?.semester;
+    const targetSection = filters.section !== "all" && filters.section ? filters.section : planner?.context?.section;
+    return `${collegeId}|${targetCourseId || ""}|${targetBranchId || ""}|${targetBatch || ""}|${targetYear ?? ""}|${targetSemester ?? ""}|${targetSection || ""}`;
+  }, [
+    filters.collegeId,
+    filters.courseId,
+    filters.branchId,
+    filters.batch,
+    filters.year,
+    filters.semester,
+    filters.section,
+    planner?.context?.collegeId,
+    planner?.context?.courseId,
+    planner?.context?.branchId,
+    planner?.context?.batch,
+    planner?.context?.year,
+    planner?.context?.semester,
+    planner?.context?.section,
+  ]);
+
+  const lastFetchedRosterKeyRef = useRef<string | null>(null);
+
   const fetchSectionStudents = useCallback(async () => {
+    if (!rosterQueryKey) {
+      setSectionStudents([]);
+      return;
+    }
     const collegeId = filters.collegeId !== "all" && filters.collegeId ? filters.collegeId : planner?.context?.collegeId;
     if (!collegeId) {
       setSectionStudents([]);
@@ -1326,11 +1359,36 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     } finally {
       setLoadingStudents(false);
     }
-  }, [filters, planner?.context]);
+  }, [
+    rosterQueryKey,
+    filters.collegeId,
+    filters.courseId,
+    filters.branchId,
+    filters.batch,
+    filters.year,
+    filters.semester,
+    filters.section,
+    planner?.context?.collegeId,
+    planner?.context?.courseId,
+    planner?.context?.branchId,
+    planner?.context?.batch,
+    planner?.context?.year,
+    planner?.context?.semester,
+    planner?.context?.section,
+  ]);
 
   useEffect(() => {
+    if (!rosterQueryKey) {
+      setSectionStudents([]);
+      lastFetchedRosterKeyRef.current = null;
+      return;
+    }
+    if (lastFetchedRosterKeyRef.current === rosterQueryKey) {
+      return;
+    }
+    lastFetchedRosterKeyRef.current = rosterQueryKey;
     void fetchSectionStudents();
-  }, [fetchSectionStudents]);
+  }, [rosterQueryKey, fetchSectionStudents]);
 
   const loadPlanner = useCallback(async () => {
     if (!query) {

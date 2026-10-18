@@ -1,6 +1,11 @@
 import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.middleware.js";
-import { getAuthz, requirePermission, scopedFilters } from "../authz/require-permission.js";
+import {
+  ensureEntityScope,
+  getAuthz,
+  requirePermission,
+  scopedFilters,
+} from "../authz/require-permission.js";
 import {
   getClassTeacherDashboardData,
   getClassTeacherOverview,
@@ -120,10 +125,16 @@ classTeacherRouter.get(
 
 classTeacherRouter.post(
   "/assign",
-  requirePermission("timetable.edit", "mentoring.assign", "mentoring.manage", "timetable.view"),
+  requirePermission("timetable.edit", "mentoring.assign", "mentoring.manage"),
   async (req: AuthedRequest, res, next) => {
     try {
       const body = req.body || {};
+      const collegeId = optionalNumber(body.collegeId);
+      const branchId = optionalNumber(body.branchId);
+      if (collegeId != null || branchId != null) {
+        ensureEntityScope(req, { collegeId, branchId });
+      }
+
       const result = await assignClassTeacherToSection(getAuthz(req), {
         facultyStaffLinkId: optionalNumber(body.facultyStaffLinkId),
         hrmsEmployeeId: typeof body.hrmsEmployeeId === "string" ? body.hrmsEmployeeId.trim() : undefined,
@@ -150,10 +161,16 @@ classTeacherRouter.post(
 
 classTeacherRouter.post(
   "/unassign",
-  requirePermission("timetable.edit", "mentoring.assign", "mentoring.manage", "timetable.view"),
+  requirePermission("timetable.edit", "mentoring.assign", "mentoring.manage"),
   async (req: AuthedRequest, res, next) => {
     try {
       const body = req.body || {};
+      const collegeId = optionalNumber(body.collegeId);
+      const branchId = optionalNumber(body.branchId);
+      if (collegeId != null || branchId != null) {
+        ensureEntityScope(req, { collegeId, branchId });
+      }
+
       const result = await unassignClassTeacherFromSection(getAuthz(req), {
         collegeId: optionalNumber(body.collegeId),
         branchId: Number(body.branchId),

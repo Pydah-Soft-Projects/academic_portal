@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { FilterBar, FilterField } from "@/components/ui/FilterBar";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { useAcademicContext, type AcademicFilters } from "@/components/layout/AcademicProvider";
 import { Button } from "@/components/ui/Button";
 import { apiFetch } from "@/lib/api";
 import { CombineSectionsModal } from "@/features/timetables/CombineSectionsModal";
@@ -17,38 +17,31 @@ const selectClassName =
 const searchClassName =
   "h-11 sm:h-9 w-full sm:min-w-[220px] rounded-md border border-border bg-white px-3 text-sm text-foreground outline-none focus:border-navy-800";
 
-const HIDDEN_ON = [
-  "/",
-  "/reports",
-  "/settings",
-  "/faculty-departments",
-  "/curriculum-subjects",
-  "/academic-calendar",
-  "/attendance-calendar",
-  "/user-management",
-  "/staff-workload",
-  "/my-timetable",
-  "/requests",
-  "/attendance-posting",
-  "/internal-marks-management",
-  "/internal-marks",
-  "/timetables/combined",
-];
-
 type Props = {
   title?: string;
   hideBatch?: boolean;
   hideSection?: boolean;
+  pageKey?: string;
+  filters?: AcademicFilters;
+  setFilters?: (next: Partial<AcademicFilters>) => void;
+  resetFilters?: () => void;
 };
 
 export function AcademicFilterBar({
   title = "Filters",
   hideBatch,
   hideSection,
+  pageKey,
+  filters: propFilters,
+  setFilters: propSetFilters,
+  resetFilters: propResetFilters,
 }: Props) {
   const pathname = usePathname();
-  const { masters, loading, filters, setFilters, resetFilters, studentsListStats } =
-    useAcademicContext();
+  const context = useAcademicContext(pageKey);
+  const filters = propFilters ?? context.filters;
+  const setFilters = propSetFilters ?? context.setFilters;
+  const resetFilters = propResetFilters ?? context.resetFilters;
+  const { masters, loading, studentsListStats } = context;
   const { authorization } = useAuth();
   const [searchDraft, setSearchDraft] = useState(filters.q);
   const [studentStatuses, setStudentStatuses] = useState<string[]>([]);
@@ -62,28 +55,24 @@ export function AcademicFilterBar({
   const shouldHideBatch = true;
   const shouldHideSection = Boolean(hideSection) || isTodayTimetable;
 
-  const isDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
-  const hiddenOnPath = HIDDEN_ON.some(
-    (path) => pathname === path || pathname.startsWith(`${path}/`),
-  );
-  
   const isStudentDetail = pathname.startsWith("/students/") && pathname !== "/students";
   const isMentoringDetail = pathname.startsWith("/mentoring-risks/") && pathname !== "/mentoring-risks";
   const isAttendanceSession = pathname.startsWith("/attendance-posting/") && pathname !== "/attendance-posting";
-  
-  // Hide filters on dashboard and detail pages unconditionally
-  const hidden = hiddenOnPath || isDashboard || isStudentDetail || isMentoringDetail || isAttendanceSession;
-  const showSearch =
-    pathname === "/students";
-  const isMentoringPage =
-    pathname === "/mentoring-risks";
+
+  // Hide filters on detail pages unconditionally
+  const hidden = isStudentDetail || isMentoringDetail || isAttendanceSession;
+  const showSearch = pathname === "/students" || pageKey === "/students";
+  const isMentoringPage = pathname === "/mentoring-risks" || pageKey === "/mentoring-risks";
   const showStudentQuerySearch = showSearch || isMentoringPage;
   const isTimetablesPage =
     pathname === "/timetables" ||
     pathname.startsWith("/timetables/") ||
-    isTodayTimetable;
+    isTodayTimetable ||
+    pageKey === "/timetables";
   const isAttendanceAnalytics =
-    pathname === "/attendance-analytics" || pathname.startsWith("/attendance-analytics");
+    pathname === "/attendance-analytics" ||
+    pathname.startsWith("/attendance-analytics") ||
+    pageKey === "/attendance-analytics";
   const usesBatchProgressYear = false;
 
   useEffect(() => {

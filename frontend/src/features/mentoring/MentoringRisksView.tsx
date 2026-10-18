@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FilterBar, FilterField } from "@/components/ui/FilterBar";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { apiFetch } from "@/lib/api";
 import { StudentAvatar } from "@/features/students/StudentAvatar";
@@ -89,6 +90,10 @@ export function MentoringRisksView() {
         title="Class Teacher & Mentoring"
         description="Section in-charge roster, attendance-risk monitoring, interventions, and mentoring cases."
       />
+
+      <div className="mb-4 print:hidden">
+        <AcademicFilterBar title="Academic Scope Filters" />
+      </div>
 
       {error ? (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-critical">

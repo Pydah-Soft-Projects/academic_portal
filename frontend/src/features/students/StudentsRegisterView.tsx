@@ -10,6 +10,7 @@ import {
   MobileDataCardField,
 } from "@/components/ui/MobileDataCard";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
 import { StudentAvatar } from "@/features/students/StudentAvatar";
 import { StudentDetailDrawer } from "@/features/students/StudentDetailDrawer";
 import type { StudentListRow } from "@/features/students/student-types";
@@ -443,6 +444,10 @@ export function StudentsRegisterView() {
           <p className="mt-1 text-sm text-critical">{error}</p>
         </div>
       ) : null}
+
+      <div className="mb-4 print:hidden">
+        <AcademicFilterBar title="Student filters" />
+      </div>
 
       <div className="relative">
         {loading && !students.length ? (

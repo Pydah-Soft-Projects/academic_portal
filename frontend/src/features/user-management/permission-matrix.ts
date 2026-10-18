@@ -68,7 +68,7 @@ export const PERMISSION_PRESENTATION: Record<
   "students.view": {
     key: "students.view",
     label: "View Students",
-    description: "View student list and profiles. Also unlocks Class Teacher & Mentoring in the sidebar.",
+    description: "View student list and profiles. Also unlocks Class Teacher Assignment in the sidebar.",
     kind: "read",
   },
   "faculty.view": {
@@ -272,20 +272,20 @@ export const PERMISSION_PRESENTATION: Record<
   },
   "mentoring.view": {
     key: "mentoring.view",
-    label: "View Class Teacher & Mentoring",
-    description: "View class teacher dashboard, mentees, and complaints within academic scope.",
+    label: "View Class Teacher Assignment",
+    description: "View class teacher assignments, dashboard, mentees, and section overview within academic scope.",
     kind: "read",
   },
   "mentoring.manage": {
     key: "mentoring.manage",
-    label: "Manage Mentoring Scope",
-    description: "View all students in scope for mentoring (not limited to own mentees).",
+    label: "Manage Class Teacher Scope",
+    description: "View all students and sections in scope for class teacher assignment and mentoring.",
     kind: "read",
   },
   "mentoring.assign": {
     key: "mentoring.assign",
-    label: "Assign Mentors",
-    description: "Assign, change, or remove mentor assignments.",
+    label: "Assign Class Teachers",
+    description: "Assign, change, or remove class teacher assignments for sections.",
     kind: "write",
   },
   "mentoring.intervene": {
@@ -406,6 +406,22 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
   },
   {
     group: "Academics",
+    label: "Class Teacher Assignment",
+    href: "/class-teacher-assignment",
+    iconName: "UserCheck",
+    sidebarUnlockPermissions: ["timetable.view", "mentoring.view", "students.view"],
+    accessNote: "Unlocks Class Teacher Assignment and section management under Academics.",
+    permissions: [
+      asDef("mentoring.view"),
+      asDef("mentoring.manage"),
+      asDef("mentoring.assign"),
+      asDef("mentoring.intervene"),
+      asDef("mentoring.case_manage"),
+      asDef("mentoring.escalate"),
+    ],
+  },
+  {
+    group: "Academics",
     label: "Attendance Posting",
     href: "/attendance-posting",
     iconName: "ClipboardCheck",
@@ -484,23 +500,6 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
     permissions: [asDef("reports.view")],
   },
 
-  // 6. Student Support
-  {
-    group: "Student Support",
-    label: "Class Teacher & Mentoring",
-    href: "/mentoring-risks",
-    iconName: "ShieldAlert",
-    sidebarUnlockPermissions: ["mentoring.view", "students.view"],
-    accessNote: "mentoring.view unlocks this page in sidebar. students.view remains supported for legacy access during RBAC rollout.",
-    permissions: [
-      asDef("mentoring.view"),
-      asDef("mentoring.manage"),
-      asDef("mentoring.assign"),
-      asDef("mentoring.intervene"),
-      asDef("mentoring.case_manage"),
-      asDef("mentoring.escalate"),
-    ],
-  },
 
   // 7. Operations
   {

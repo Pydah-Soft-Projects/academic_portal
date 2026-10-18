@@ -6,8 +6,10 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
+import { usePathname } from "next/navigation";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { scopeAllowsBranch, scopeAllowsCollege } from "@/lib/teaching-scope";
@@ -84,23 +86,106 @@ export type StudentsListStats = {
   lowRisk: number;
 };
 
-const STORAGE_KEY = "academic-portal-filters-v4";
+export function getPageKey(pathname: string | null): string {
+  if (!pathname || pathname === "/") return "/dashboard";
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return "/dashboard";
+  return `/${segments[0]}`;
+}
 
-const defaultFilters: AcademicFilters = {
-  date: todayIso(),
-  academicYear: "",
-  collegeId: "all",
-  courseId: "all",
-  branchId: "all",
-  batch: "all",
-  year: "all",
-  semester: 1,
-  section: "all",
-  studentStatus: "Regular",
-  q: "",
+export function computeInitialFilters(
+  masters: AcademicMasters | null,
+  authorization: any,
+  saved?: Partial<AcademicFilters>,
+): AcademicFilters {
+  const defaultYear =
+    masters?.defaults?.academicYear ||
+    masters?.academicYears?.find((y) => y.isActive)?.label ||
+    masters?.academicYears?.[0]?.label ||
+    "";
+
+  let defaultCollegeId: number | "all" = "all";
+  if (!authorization?.scope?.isGlobal && masters?.colleges?.length === 1) {
+    defaultCollegeId = masters.colleges[0]!.id;
+  }
+
+  const base: AcademicFilters = {
+    date: todayIso(),
+    academicYear: defaultYear,
+    collegeId: defaultCollegeId,
+    courseId: "all",
+    branchId: "all",
+    batch: "all",
+    year: "all",
+    semester: 1,
+    section: "all",
+    studentStatus: "Regular",
+    q: "",
+  };
+
+  if (!saved) return base;
+
+  const merged = { ...base, ...saved };
+
+  // Validate saved academic year
+  if (
+    masters &&
+    masters.academicYears &&
+    masters.academicYears.length > 0 &&
+    (!merged.academicYear ||
+      !masters.academicYears.some((y) => y.label === merged.academicYear))
+  ) {
+    merged.academicYear = defaultYear;
+  }
+
+  // Scoped user to single college constraint
+  if (defaultCollegeId !== "all") {
+    merged.collegeId = defaultCollegeId;
+  }
+
+  return merged;
+}
+
+const STORAGE_PREFIX = "academic-portal-page-filters-v1:";
+
+function readStoredPageFilters(pageKey: string): Partial<AcademicFilters> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(`${STORAGE_PREFIX}${pageKey}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as Partial<AcademicFilters>;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPageFilters(pageKey: string, filters: AcademicFilters) {
+  if (typeof window === "undefined") return;
+  try {
+    const { q: _q, ...persistable } = filters;
+    window.sessionStorage.setItem(
+      `${STORAGE_PREFIX}${pageKey}`,
+      JSON.stringify(persistable),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+type AcademicContextInternalValue = {
+  masters: AcademicMasters | null;
+  loading: boolean;
+  getPageFilters: (pageKey: string) => AcademicFilters;
+  setPageFilters: (pageKey: string, next: Partial<AcademicFilters>) => void;
+  resetPageFilters: (pageKey: string) => void;
+  studentsListStats: StudentsListStats | null;
+  setStudentsListStats: (next: StudentsListStats | null) => void;
+  filters: AcademicFilters;
+  setFilters: (next: Partial<AcademicFilters>) => void;
+  resetFilters: () => void;
 };
 
-type AcademicContextValue = {
+export type AcademicContextValue = {
   masters: AcademicMasters | null;
   loading: boolean;
   filters: AcademicFilters;
@@ -108,42 +193,38 @@ type AcademicContextValue = {
   resetFilters: () => void;
   studentsListStats: StudentsListStats | null;
   setStudentsListStats: (next: StudentsListStats | null) => void;
+  pageKey: string;
+  getPageFilters: (pageKey: string) => AcademicFilters;
+  setPageFilters: (pageKey: string, next: Partial<AcademicFilters>) => void;
+  resetPageFilters: (pageKey: string) => void;
 };
 
-const AcademicContext = createContext<AcademicContextValue | null>(null);
-
-function readStoredFilters(): AcademicFilters | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw =
-      window.localStorage.getItem(STORAGE_KEY) ??
-      window.localStorage.getItem("academic-portal-filters-v3") ??
-      window.localStorage.getItem("academic-portal-filters-v2");
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<AcademicFilters>;
-    const studentStatus =
-      !parsed.studentStatus || parsed.studentStatus === "all"
-        ? "Regular"
-        : parsed.studentStatus;
-    const date = parsed.date || todayIso();
-    const semester = parsed.semester != null ? parsed.semester : 1;
-    return { ...defaultFilters, ...parsed, date, semester, studentStatus, q: "" };
-  } catch {
-    return null;
-  }
-}
+const AcademicContext = createContext<AcademicContextInternalValue | null>(null);
 
 export function AcademicProvider({ children }: { children: React.ReactNode }) {
   const { authorization } = useAuth();
+  const pathname = usePathname();
   const [masters, setMasters] = useState<AcademicMasters | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filters, setFiltersState] = useState<AcademicFilters>(defaultFilters);
-  const [studentsListStats, setStudentsListStats] =
-    useState<StudentsListStats | null>(null);
+  const [pageFiltersState, setPageFiltersState] = useState<Record<string, AcademicFilters>>({});
+  const [studentsListStats, setStudentsListStats] = useState<StudentsListStats | null>(null);
+  const cachedFiltersRef = useRef<Record<string, AcademicFilters>>({});
 
+  // Reset cached filter objects when masters or auth change so they recompute once with fresh catalog
   useEffect(() => {
-    const stored = readStoredFilters();
-    if (stored) setFiltersState(stored);
+    cachedFiltersRef.current = {};
+  }, [masters, authorization]);
+
+  // Clear obsolete global storage keys on startup
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.removeItem("academic-portal-filters-v4");
+      window.localStorage.removeItem("academic-portal-filters-v3");
+      window.localStorage.removeItem("academic-portal-filters-v2");
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   useEffect(() => {
@@ -189,47 +270,6 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
           yearOptions: data.yearOptions ?? [1, 2, 3, 4],
           semesterOptions: data.semesterOptions ?? [1, 2],
         });
-        setFiltersState((prev) => {
-          const defaultYear =
-            data.defaults?.academicYear ||
-            data.academicYears.find((y) => y.isActive)?.label ||
-            data.academicYears[0]?.label ||
-            "";
-
-          // If the stored/previous academic year is empty, invalid, an old bugged value (e.g. 2002-2003, 2001-2002),
-          // or a premature future year (e.g. 2027-2028), use the current academic year default.
-          const isInvalidPrevYear =
-            !prev.academicYear ||
-            prev.academicYear === "2002-2003" ||
-            prev.academicYear === "2001-2002" ||
-            prev.academicYear === "2027-2028" ||
-            parseInt(prev.academicYear.slice(0, 4), 10) > new Date().getFullYear() ||
-            !data.academicYears.some((y) => y.label === prev.academicYear);
-
-          const academicYear = isInvalidPrevYear ? defaultYear : prev.academicYear;
-
-          let collegeId = prev.collegeId;
-          if (!authorization?.scope?.isGlobal && scopedColleges.length === 1) {
-            collegeId = scopedColleges[0]!.id;
-          } else if (
-            collegeId !== "all" &&
-            !scopedColleges.some((college) => college.id === collegeId)
-          ) {
-            collegeId = scopedColleges.length === 1 ? scopedColleges[0]!.id : "all";
-          }
-
-          let branchId = prev.branchId;
-          if (
-            branchId !== "all" &&
-            !scopedBranches.some((branch) => branch.id === branchId)
-          ) {
-            branchId = "all";
-          }
-
-          const date = prev.date || todayIso();
-          const semester = prev.semester === "all" ? 1 : (prev.semester || 1);
-          return { ...prev, academicYear, collegeId, branchId, date, semester };
-        });
       } catch {
         if (!cancelled) setMasters(null);
       } finally {
@@ -243,65 +283,117 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authorization]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const { q: _q, ...persistable } = filters;
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(persistable));
-  }, [filters]);
-
-  const setFilters = useCallback((next: Partial<AcademicFilters>) => {
-    setFiltersState((prev) => {
-      const merged = { ...prev, ...next };
-
-      if (next.collegeId !== undefined && next.collegeId !== prev.collegeId) {
-        if (next.courseId === undefined) merged.courseId = "all";
-        if (next.branchId === undefined) merged.branchId = "all";
-        if (next.batch === undefined) merged.batch = "all";
-        if (next.section === undefined) merged.section = "all";
+  const getPageFilters = useCallback(
+    (pageKey: string): AcademicFilters => {
+      if (pageFiltersState[pageKey]) {
+        return pageFiltersState[pageKey];
       }
-      if (next.courseId !== undefined && next.courseId !== prev.courseId) {
-        if (next.branchId === undefined) merged.branchId = "all";
-        if (next.batch === undefined) merged.batch = "all";
-        if (next.section === undefined) merged.section = "all";
+      if (cachedFiltersRef.current[pageKey]) {
+        return cachedFiltersRef.current[pageKey];
       }
-      if (next.branchId !== undefined && next.branchId !== prev.branchId) {
-        if (next.batch === undefined) merged.batch = "all";
-        if (next.section === undefined) merged.section = "all";
-      }
+      const stored = readStoredPageFilters(pageKey);
+      const computed = computeInitialFilters(masters, authorization, stored || undefined);
+      cachedFiltersRef.current[pageKey] = computed;
+      return computed;
+    },
+    [pageFiltersState, masters, authorization],
+  );
 
-      return merged;
-    });
-  }, []);
+  const setPageFilters = useCallback(
+    (pageKey: string, next: Partial<AcademicFilters>) => {
+      setPageFiltersState((prev) => {
+        const current =
+          prev[pageKey] ||
+          cachedFiltersRef.current[pageKey] ||
+          computeInitialFilters(
+            masters,
+            authorization,
+            readStoredPageFilters(pageKey) || undefined,
+          );
+        const merged = { ...current, ...next };
+
+        if (next.collegeId !== undefined && next.collegeId !== current.collegeId) {
+          if (next.courseId === undefined) merged.courseId = "all";
+          if (next.branchId === undefined) merged.branchId = "all";
+          if (next.batch === undefined) merged.batch = "all";
+          if (next.section === undefined) merged.section = "all";
+        }
+        if (next.courseId !== undefined && next.courseId !== current.courseId) {
+          if (next.branchId === undefined) merged.branchId = "all";
+          if (next.batch === undefined) merged.batch = "all";
+          if (next.section === undefined) merged.section = "all";
+        }
+        if (next.branchId !== undefined && next.branchId !== current.branchId) {
+          if (next.batch === undefined) merged.batch = "all";
+          if (next.section === undefined) merged.section = "all";
+        }
+
+        cachedFiltersRef.current[pageKey] = merged;
+        writeStoredPageFilters(pageKey, merged);
+        return {
+          ...prev,
+          [pageKey]: merged,
+        };
+      });
+    },
+    [masters, authorization],
+  );
+
+  const resetPageFilters = useCallback(
+    (pageKey: string) => {
+      const initial = computeInitialFilters(masters, authorization);
+      cachedFiltersRef.current[pageKey] = initial;
+      writeStoredPageFilters(pageKey, initial);
+      setPageFiltersState((prev) => ({
+        ...prev,
+        [pageKey]: initial,
+      }));
+    },
+    [masters, authorization],
+  );
+
+  const currentPageKey = useMemo(() => getPageKey(pathname), [pathname]);
+  const currentFilters = useMemo(
+    () => getPageFilters(currentPageKey),
+    [getPageFilters, currentPageKey],
+  );
+
+  const setFilters = useCallback(
+    (next: Partial<AcademicFilters>) => {
+      setPageFilters(currentPageKey, next);
+    },
+    [setPageFilters, currentPageKey],
+  );
 
   const resetFilters = useCallback(() => {
-    setFiltersState((_prev) => {
-      const defaultYear =
-        masters?.defaults?.academicYear ||
-        masters?.academicYears.find((y) => y.isActive)?.label ||
-        "2026-2027";
-      let collegeId: number | "all" = "all";
-      if (!authorization?.scope?.isGlobal && masters?.colleges.length === 1) {
-        collegeId = masters.colleges[0]!.id;
-      }
-      return {
-        ...defaultFilters,
-        academicYear: defaultYear,
-        collegeId,
-      };
-    });
-  }, [masters, authorization]);
+    resetPageFilters(currentPageKey);
+  }, [resetPageFilters, currentPageKey]);
 
-  const value = useMemo(
+  const value = useMemo<AcademicContextInternalValue>(
     () => ({
       masters,
       loading,
-      filters,
-      setFilters,
-      resetFilters,
+      getPageFilters,
+      setPageFilters,
+      resetPageFilters,
       studentsListStats,
       setStudentsListStats,
+      filters: currentFilters,
+      setFilters,
+      resetFilters,
     }),
-    [masters, loading, filters, setFilters, resetFilters, studentsListStats],
+    [
+      masters,
+      loading,
+      getPageFilters,
+      setPageFilters,
+      resetPageFilters,
+      studentsListStats,
+      setStudentsListStats,
+      currentFilters,
+      setFilters,
+      resetFilters,
+    ],
   );
 
   return (
@@ -309,10 +401,51 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function useAcademicContext() {
+export function useAcademicContext(customPageKey?: string): AcademicContextValue {
   const ctx = useContext(AcademicContext);
   if (!ctx) {
     throw new Error("useAcademicContext must be used within AcademicProvider");
   }
-  return ctx;
+  const pathname = usePathname();
+  const pageKey = customPageKey || getPageKey(pathname);
+
+  const filters = ctx.getPageFilters(pageKey);
+  const setFilters = useCallback(
+    (next: Partial<AcademicFilters>) => {
+      ctx.setPageFilters(pageKey, next);
+    },
+    [ctx, pageKey],
+  );
+  const resetFilters = useCallback(() => {
+    ctx.resetPageFilters(pageKey);
+  }, [ctx, pageKey]);
+
+  return useMemo(
+    () => ({
+      masters: ctx.masters,
+      loading: ctx.loading,
+      filters,
+      setFilters,
+      resetFilters,
+      studentsListStats: ctx.studentsListStats,
+      setStudentsListStats: ctx.setStudentsListStats,
+      pageKey,
+      getPageFilters: ctx.getPageFilters,
+      setPageFilters: ctx.setPageFilters,
+      resetPageFilters: ctx.resetPageFilters,
+    }),
+    [
+      ctx.masters,
+      ctx.loading,
+      ctx.studentsListStats,
+      ctx.setStudentsListStats,
+      ctx.getPageFilters,
+      ctx.setPageFilters,
+      ctx.resetPageFilters,
+      filters,
+      setFilters,
+      resetFilters,
+      pageKey,
+    ],
+  );
 }

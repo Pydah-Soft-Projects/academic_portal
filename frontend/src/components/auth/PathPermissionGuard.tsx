@@ -51,6 +51,9 @@ function requiredPermissionsForPath(pathname: string): string[] | null {
   if (pathname.startsWith("/internal-marks")) {
     return ["internal_marks.view", "internal_marks.edit"];
   }
+  if (pathname.startsWith("/class-teacher-assignment")) {
+    return ["timetable.view", "mentoring.view", "students.view"];
+  }
 
   return bestMatch?.permissions ?? null;
 }

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { apiFetch } from "@/lib/api";
 import type { AttendanceSessionCard } from "@/features/attendance-posting/AttendanceTodayView";
@@ -235,6 +236,10 @@ export function PendingExceptionsView() {
         title="Pending & Exceptions"
         description="Operational queue derived from live attendance posting, timetable coverage, workload, and attendance-risk signals. Formal exception tickets are not configured yet."
       />
+
+      <div className="mb-4 print:hidden">
+        <AcademicFilterBar title="Scope Filters" />
+      </div>
 
       {warnings.length > 0 ? (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

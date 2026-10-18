@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/MobileDataCard";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
 import { apiFetch } from "@/lib/api";
 import {
   isoToDisplay,
@@ -171,6 +172,10 @@ export function ExaminationsView() {
           </span>
         }
       />
+
+      <div className="mb-4 print:hidden">
+        <AcademicFilterBar title="Academic Scope Filters" />
+      </div>
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {loading ? (

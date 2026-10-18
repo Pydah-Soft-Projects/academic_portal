@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
 import { apiFetch } from "@/lib/api";
 import { StudentAvatar } from "@/features/students/StudentAvatar";
 import { cn } from "@/lib/cn";
@@ -1164,6 +1165,11 @@ export function AttendanceAnalyticsView({ embedded = false }: { embedded?: boole
 
   return (
     <div className="space-y-3 pb-8">
+      {!embedded ? (
+        <div className="print:hidden">
+          <AcademicFilterBar title="Attendance Analytics Filters" />
+        </div>
+      ) : null}
       {/* Compact Top Header Bar: Title + Tabs + Export */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
         <div className="flex flex-wrap items-center gap-3">

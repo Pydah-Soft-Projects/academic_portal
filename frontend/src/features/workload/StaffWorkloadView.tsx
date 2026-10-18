@@ -11,7 +11,6 @@ import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import { apiFetch } from "@/lib/api";
 import { FacultyAvatar } from "@/components/ui/FacultyAvatar";
 import {
-  Printer,
   ChevronDown,
   ChevronUp,
   BookOpen,
@@ -21,7 +20,6 @@ import {
   Clock,
   Filter,
 } from "lucide-react";
-import { escapeHtml, printHtml } from "@/lib/print-service";
 import type { AttendanceSessionCard } from "@/features/attendance-posting/AttendanceTodayView";
 
 function todayIso() {
@@ -116,7 +114,6 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
   const [selectedDate, setSelectedDate] = useState<string>(todayIso());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [freeOnly, setFreeOnly] = useState(false);
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [divisionFilter, setDivisionFilter] = useState("all");
@@ -184,11 +181,7 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
   const divisionOptions = summary?.filterOptions?.divisions ?? [];
   const deptOptions = summary?.filterOptions?.departments ?? [];
 
-  const faculty = useMemo(() => {
-    const rows = summary?.faculty ?? [];
-    if (!freeOnly) return rows;
-    return rows.filter((row) => row.status === "Underloaded");
-  }, [summary, freeOnly]);
+  const faculty = summary?.faculty ?? [];
 
   const kpis = summary?.kpis ?? {
     totalFaculty: 0,
@@ -209,58 +202,6 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
     return { totalScheduled, totalPosted, totalPresent, totalAbsent, totalEnrolled, overallStudentPct };
   }, [sessions]);
 
-  function printStaffReport() {
-    const tableRowsHtml = faculty.map((f) => {
-      const fSessions = sessions.filter((s) => s.facultyName === f.name);
-      const sched = fSessions.length;
-      const posted = fSessions.filter((s) => s.posted).length;
-      const present = fSessions.reduce((sum, s) => sum + (s.presentCount ?? 0), 0);
-      const absent = fSessions.reduce((sum, s) => sum + (s.absentCount ?? 0), 0);
-      const totalStud = present + absent;
-      const pct = totalStud > 0 ? `${Math.round((present / totalStud) * 100)}%` : "—";
-
-      const sessionListHtml = fSessions.map((s) => {
-        const sEnrolled = (s.presentCount ?? 0) + (s.absentCount ?? 0);
-        const sPct = sEnrolled > 0 ? `${Math.round(((s.presentCount ?? 0) / sEnrolled) * 100)}%` : "N/A";
-        return `<div>
-          <strong>${escapeHtml(s.subjectName || s.subjectCode || "Class")}</strong> (${escapeHtml(s.section || "Sec")}) · ${escapeHtml(s.slotLabel || s.startTime || "")}<br/>
-          <small>Status: ${s.posted ? "Attended / Posted" : "Pending"} | Enrolled Students: ${sEnrolled} | Attended: ${s.presentCount ?? 0} (${sPct})</small>
-        </div>`;
-      }).join("<hr style='border:0;border-top:1px solid #e2e8f0;margin:4px 0;'/>");
-
-      return `<tr>
-        <td><strong>${escapeHtml(f.name)}</strong><br/><small>${escapeHtml(f.code || "")}</small></td>
-        <td>${escapeHtml(f.department)}</td>
-        <td>${f.periodsPerWeek} p/wk</td>
-        <td>${sched > 0 ? `${posted} / ${sched} Posted` : "No class scheduled"}</td>
-        <td>${totalStud > 0 ? `${present} / ${totalStud} (${pct})` : "—"}</td>
-        <td>${sessionListHtml || "<em>No class sessions recorded</em>"}</td>
-      </tr>`;
-    }).join("");
-
-    printHtml(
-      `<table style="width:100%;border-collapse:collapse;font-size:12px;" border="1" cellpadding="6">
-        <thead>
-          <tr style="background:#f1f5f9;text-align:left;">
-            <th>Faculty</th>
-            <th>Department</th>
-            <th>Workload</th>
-            <th>Classes Today</th>
-            <th>Students Attended</th>
-            <th>Class Session Details</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRowsHtml}
-        </tbody>
-      </table>`,
-      {
-        title: "Staff Timetable & Attendance Report",
-        subtitle: `Date: ${selectedDate} · Total Faculty: ${faculty.length} · Scheduled Classes: ${sessionStats.totalScheduled} · Classes Posted: ${sessionStats.totalPosted}`,
-      }
-    );
-  }
-
   return (
     <div className="space-y-4">
       {!embedded ? (
@@ -269,21 +210,6 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
           description={
             summary?.source ||
             "Teaching hours and live class attendance from published timetables across all branches."
-          }
-          actions={
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="secondary" onClick={printStaffReport}>
-                <Printer className="mr-1.5 h-4 w-4" />
-                Print Staff Report
-              </Button>
-              <Button
-                size="sm"
-                variant={freeOnly ? "primary" : "secondary"}
-                onClick={() => setFreeOnly((prev) => !prev)}
-              >
-                {freeOnly ? "Show all faculty" : "Find underloaded faculty"}
-              </Button>
-            </div>
           }
         />
       ) : null}
@@ -335,13 +261,6 @@ export function StaffWorkloadView({ embedded = false }: { embedded?: boolean }) 
               </option>
             ))}
           </select>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <Button size="sm" variant="secondary" onClick={printStaffReport}>
-            <Printer className="mr-1.5 h-4 w-4" />
-            Print Report
-          </Button>
         </div>
       </div>
 

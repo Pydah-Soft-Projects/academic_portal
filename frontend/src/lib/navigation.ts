@@ -98,6 +98,12 @@ export const NAV_GROUPS: NavGroup[] = [
         permissions: ["workload.view"],
       },
       {
+        label: "Class Teacher Assignment",
+        href: "/class-teacher-assignment",
+        icon: UserCheck,
+        permissions: ["timetable.view", "mentoring.view", "students.view"],
+      },
+      {
         label: "Attendance Posting",
         href: "/attendance-posting",
         icon: ClipboardCheck,
@@ -204,18 +210,6 @@ export const NAV_GROUPS: NavGroup[] = [
         href: "/reports?tab=student-analytics",
         icon: LineChart,
         permissions: ["attendance_analytics.view", "reports.view"],
-      },
-    ],
-  },
-  {
-    title: "Student Support",
-    icon: UserCheck,
-    items: [
-      {
-        label: "Class Teacher Assignment",
-        href: "/class-teacher-assignment",
-        icon: UserCheck,
-        permissions: ["timetable.view", "mentoring.view", "students.view"],
       },
     ],
   },
