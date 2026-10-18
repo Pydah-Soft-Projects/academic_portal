@@ -1231,7 +1231,7 @@ export async function getStudentsForMarksEntry(params: {
       s.admission_number,
       s.pin_no,
       s.student_name,
-      COALESCE(ss.section_name, s.section) AS section_name
+      COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci) AS section_name
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE ${whereStud.join(" AND ")}
@@ -1258,7 +1258,7 @@ export async function getStudentsForMarksEntry(params: {
         s.admission_number,
         s.pin_no,
         s.student_name,
-        COALESCE(ss.section_name, s.section) AS section_name
+        COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci) AS section_name
       FROM students s
       LEFT JOIN student_sections ss ON ss.student_id = s.id
       WHERE s.college_id = ? AND s.course_id = ? AND s.branch_id = ?

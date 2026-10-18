@@ -756,7 +756,7 @@ export async function getClassTeacherOverview(
 
   // 2. Fetch target classes from student database
   const targetWhere: string[] = [
-    "(s.student_status = 'Regular' OR s.student_status = 'Active' OR s.student_status IS NULL)",
+    "(TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci IN ('Regular', 'Active') OR s.student_status IS NULL)",
     "s.current_year IS NOT NULL",
     "s.current_semester IS NOT NULL",
     "TRIM(s.batch) <> ''",
@@ -790,7 +790,7 @@ export async function getClassTeacherOverview(
   }
 
   if (filters.batch && filters.batch !== "all") {
-    targetWhere.push("TRIM(s.batch) = ?");
+    targetWhere.push("TRIM(COALESCE(s.batch, '')) COLLATE utf8mb4_unicode_ci = TRIM(?) COLLATE utf8mb4_unicode_ci");
     targetParams.push(filters.batch.trim());
   }
   if (filters.year && filters.year > 0) {
@@ -802,7 +802,9 @@ export async function getClassTeacherOverview(
     targetParams.push(filters.semester);
   }
   if (filters.section && filters.section !== "all") {
-    targetWhere.push("TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?");
+    targetWhere.push(
+      "TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) = TRIM(?) COLLATE utf8mb4_unicode_ci"
+    );
     targetParams.push(filters.section.trim());
   }
 
@@ -834,7 +836,7 @@ export async function getClassTeacherOverview(
       TRIM(s.batch) AS batch,
       s.current_year AS year,
       s.current_semester AS semester,
-      TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name,
+      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) AS section_name,
       COUNT(DISTINCT s.id) AS student_count
     FROM students s
     JOIN course_branches cb ON cb.id = s.branch_id
@@ -845,7 +847,7 @@ export async function getClassTeacherOverview(
     GROUP BY
       c.id, c.name, c.code, cr.id, cr.name, cb.id, cb.name,
       TRIM(s.batch), s.current_year, s.current_semester,
-      TRIM(COALESCE(ss.section_name, s.section, 'A'))
+      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci))
     HAVING COUNT(DISTINCT s.id) > 0
     ORDER BY c.name, cr.name, cb.name, s.current_year, s.current_semester, section_name
     `,
@@ -990,7 +992,7 @@ export async function getClassTeacherOverview(
           TRIM(s.batch) AS batch,
           s.current_year,
           s.current_semester,
-          TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name
+          TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) AS section_name
         FROM students s
         LEFT JOIN student_sections ss ON ss.student_id = s.id
         WHERE s.id IN (${slice.map(() => "?").join(",")})
@@ -1221,11 +1223,18 @@ export async function getClassTeacherForSection(scope: {
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE s.branch_id = ?
-      AND TRIM(s.batch) COLLATE utf8mb4_unicode_ci = ?
+      AND TRIM(COALESCE(s.batch, '')) COLLATE utf8mb4_unicode_ci = TRIM(?) COLLATE utf8mb4_unicode_ci
       ${scope.year ? "AND s.current_year = ?" : ""}
       ${scope.semester ? "AND s.current_semester = ?" : ""}
-      AND TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section, 'A')) = ?
-      AND (TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci IN ('Regular', 'Active') OR s.student_status IS NULL)
+      AND TRIM(COALESCE(
+        ss.section_name COLLATE utf8mb4_unicode_ci,
+        s.section COLLATE utf8mb4_unicode_ci,
+        'A' COLLATE utf8mb4_unicode_ci
+      )) = TRIM(?) COLLATE utf8mb4_unicode_ci
+      AND (
+        TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci IN ('Regular', 'Active')
+        OR s.student_status IS NULL
+      )
     `,
     [
       scope.branchId,
@@ -1365,11 +1374,18 @@ export async function assignClassTeacherToSection(
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE s.branch_id = ?
-      AND TRIM(s.batch) = ?
+      AND TRIM(COALESCE(s.batch, '')) COLLATE utf8mb4_unicode_ci = TRIM(?) COLLATE utf8mb4_unicode_ci
       ${input.year ? "AND s.current_year = ?" : ""}
       ${input.semester ? "AND s.current_semester = ?" : ""}
-      AND TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?
-      AND (s.student_status = 'Regular' OR s.student_status = 'Active' OR s.student_status IS NULL)
+      AND TRIM(COALESCE(
+        ss.section_name COLLATE utf8mb4_unicode_ci,
+        s.section COLLATE utf8mb4_unicode_ci,
+        'A' COLLATE utf8mb4_unicode_ci
+      )) = TRIM(?) COLLATE utf8mb4_unicode_ci
+      AND (
+        TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci IN ('Regular', 'Active')
+        OR s.student_status IS NULL
+      )
     `,
     [
       input.branchId,
@@ -1500,10 +1516,14 @@ export async function unassignClassTeacherFromSection(
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE s.branch_id = ?
-      AND TRIM(s.batch) = ?
+      AND TRIM(COALESCE(s.batch, '')) COLLATE utf8mb4_unicode_ci = TRIM(?) COLLATE utf8mb4_unicode_ci
       ${input.year ? "AND s.current_year = ?" : ""}
       ${input.semester ? "AND s.current_semester = ?" : ""}
-      AND TRIM(COALESCE(ss.section_name, s.section, 'A')) = ?
+      AND TRIM(COALESCE(
+        ss.section_name COLLATE utf8mb4_unicode_ci,
+        s.section COLLATE utf8mb4_unicode_ci,
+        'A' COLLATE utf8mb4_unicode_ci
+      )) = TRIM(?) COLLATE utf8mb4_unicode_ci
     `,
     [
       input.branchId,

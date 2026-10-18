@@ -2925,7 +2925,7 @@ export async function getSlotsAttendanceSummary(filters: {
       s.course_id,
       s.branch_id,
       s.current_year,
-      COALESCE(NULLIF(TRIM(ss.section_name), ''), NULLIF(TRIM(s.section), ''), 'A') as section_name,
+      COALESCE(NULLIF(TRIM(ss.section_name COLLATE utf8mb4_unicode_ci), ''), NULLIF(TRIM(s.section COLLATE utf8mb4_unicode_ci), ''), 'A') as section_name,
       COUNT(DISTINCT s.id) as total_students
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id

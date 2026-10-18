@@ -2242,6 +2242,12 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           <CollegeTimetablesOverview
             academicYear={filters.academicYear}
             selectedCollegeId={filters.collegeId}
+            courseId={filters.courseId}
+            branchId={filters.branchId}
+            batch={filters.batch}
+            year={filters.year}
+            semester={filters.semester}
+            section={filters.section}
             onSelectCollege={(collegeId) => {
               setFilters({ collegeId });
             }}

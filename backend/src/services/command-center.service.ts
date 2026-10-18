@@ -58,9 +58,9 @@ function buildStudentWhere(filters: CommandCenterFilters) {
   }
   if (filters.section && filters.section !== "all") {
     where.push(
-      `(TRIM(IFNULL(s.section, '')) = ? OR EXISTS (
+      `(TRIM(IFNULL(s.section, '')) COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci OR EXISTS (
           SELECT 1 FROM student_sections ss
-          WHERE ss.student_id = s.id AND TRIM(ss.section_name) = ?
+          WHERE ss.student_id = s.id AND TRIM(ss.section_name) COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
         ))`,
     );
     params.push(filters.section, filters.section);

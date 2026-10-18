@@ -88,6 +88,12 @@ export type TimetableOverviewData = {
 type Props = {
   academicYear?: string;
   selectedCollegeId?: number | "all";
+  courseId?: number | "all";
+  branchId?: number | "all";
+  batch?: string | "all";
+  year?: number | "all";
+  semester?: number | "all";
+  section?: string | "all";
   onSelectClass?: (classInfo: {
     collegeId: number;
     courseId: number;
@@ -103,6 +109,12 @@ type Props = {
 export function CollegeTimetablesOverview({
   academicYear,
   selectedCollegeId,
+  courseId,
+  branchId,
+  batch,
+  year,
+  semester,
+  section,
   onSelectClass,
   onSelectCollege,
 }: Props) {
@@ -126,6 +138,24 @@ export function CollegeTimetablesOverview({
       if (selectedCollegeId && selectedCollegeId !== "all") {
         params.set("collegeId", String(selectedCollegeId));
       }
+      if (courseId && courseId !== "all") {
+        params.set("courseId", String(courseId));
+      }
+      if (branchId && branchId !== "all") {
+        params.set("branchId", String(branchId));
+      }
+      if (batch && batch !== "all") {
+        params.set("batch", String(batch));
+      }
+      if (year && year !== "all") {
+        params.set("year", String(year));
+      }
+      if (semester && semester !== "all") {
+        params.set("semester", String(semester));
+      }
+      if (section && section !== "all") {
+        params.set("section", String(section));
+      }
       const res = await apiFetch(`/timetables/overview?${params.toString()}`);
       if (!res.ok) {
         throw new Error(`Failed to load timetable overview (${res.status})`);
@@ -141,7 +171,7 @@ export function CollegeTimetablesOverview({
 
   useEffect(() => {
     void loadOverview();
-  }, [academicYear, selectedCollegeId]);
+  }, [academicYear, selectedCollegeId, courseId, branchId, batch, year, semester, section]);
 
   const toggleYearSemExpand = (collegeId: number, year: number, sem: number) => {
     const key = `${collegeId}-${year}-${sem}`;
@@ -180,10 +210,38 @@ export function CollegeTimetablesOverview({
     return data.colleges
       .map((col) => {
         const validYearSems = col.yearSemBreakdown
+          .filter((ys) => {
+            if (year && year !== "all" && ys.year !== Number(year)) {
+              return false;
+            }
+            if (semester && semester !== "all" && ys.semester !== Number(semester)) {
+              return false;
+            }
+            return true;
+          })
           .map((ys) => {
-            const validClasses = ys.classes.filter(
-              (c) => (c.studentCount ?? 0) > 0
-            );
+            const validClasses = ys.classes.filter((c) => {
+              if ((c.studentCount ?? 0) <= 0) return false;
+              if (courseId && courseId !== "all" && c.courseId !== Number(courseId)) {
+                return false;
+              }
+              if (branchId && branchId !== "all" && c.branchId !== Number(branchId)) {
+                return false;
+              }
+              if (batch && batch !== "all" && c.batch?.trim().toLowerCase() !== String(batch).trim().toLowerCase()) {
+                return false;
+              }
+              if (year && year !== "all" && c.year !== Number(year)) {
+                return false;
+              }
+              if (semester && semester !== "all" && c.semester !== Number(semester)) {
+                return false;
+              }
+              if (section && section !== "all" && c.section?.trim().toUpperCase() !== String(section).trim().toUpperCase()) {
+                return false;
+              }
+              return true;
+            });
             const pub = validClasses.filter((c) => c.status === "published").length;
             const draft = validClasses.filter((c) => c.status === "drafted").length;
             const pend = validClasses.filter((c) => c.status === "pending").length;
@@ -213,7 +271,21 @@ export function CollegeTimetablesOverview({
         };
       })
       .filter((col) => col.totalClasses > 0);
-  }, [data]);
+  }, [data, year, semester, courseId, branchId, batch, section]);
+
+  // Auto-expand if single configuration is displayed when filtered
+  useEffect(() => {
+    if (sanitizedColleges.length === 1 && sanitizedColleges[0].yearSemBreakdown.length === 1) {
+      const ys = sanitizedColleges[0].yearSemBreakdown[0];
+      const key = `${sanitizedColleges[0].collegeId}-${ys.year}-${ys.semester}`;
+      setExpandedYearSems((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    }
+  }, [sanitizedColleges]);
 
   const summary = useMemo(() => {
     const totalColleges = sanitizedColleges.length;

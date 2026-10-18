@@ -336,9 +336,9 @@ async function countStudentsForScope(filters: TimetablePlannerFilters) {
   }
   if (filters.section && filters.section !== "all") {
     where.push(
-      `(TRIM(IFNULL(s.section,'')) = ? OR EXISTS (
+      `(TRIM(IFNULL(s.section,'')) COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci OR EXISTS (
         SELECT 1 FROM student_sections ss
-        WHERE ss.student_id = s.id AND TRIM(ss.section_name) = ?
+        WHERE ss.student_id = s.id AND TRIM(ss.section_name) COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci
       ))`,
     );
     params.push(filters.section, filters.section);
@@ -3323,7 +3323,7 @@ export async function getTimetableRoster(
       s.pin_no,
       s.student_name,
       s.admission_number,
-      COALESCE(ss.section_name, s.section) AS section,
+      COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci) AS section,
       s.batch,
       s.branch_id,
       cb.name AS branch_name,
@@ -3341,7 +3341,7 @@ export async function getTimetableRoster(
   const hasSection = Boolean(filters.section && filters.section !== "all");
 
   if (hasSection) {
-    const sectionSql = `${baseSql} AND (s.section = ? OR ss.section_name = ?) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
+    const sectionSql = `${baseSql} AND (s.section COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci OR ss.section_name COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
     rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
       sectionSql,
       [...params, filters.section, filters.section],
@@ -3373,7 +3373,7 @@ export async function getTimetableRoster(
         s.pin_no,
         s.student_name,
         s.admission_number,
-        COALESCE(ss.section_name, s.section) AS section,
+        COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci) AS section,
         s.batch,
         s.branch_id,
         cb.name AS branch_name,
@@ -3511,7 +3511,7 @@ export async function getTimetableOverview(
 
   // 2. Fetch target classes from student database
   const targetWhere: string[] = [
-    "(s.student_status = 'Regular' OR s.student_status IS NULL)",
+    "(TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci IN ('Regular', 'Active') OR s.student_status IS NULL)",
     "s.current_year IS NOT NULL",
     "s.current_semester IS NOT NULL",
     "TRIM(s.batch) <> ''",
@@ -3523,6 +3523,35 @@ export async function getTimetableOverview(
   } else if (filters.collegeIds && filters.collegeIds.length > 0) {
     targetWhere.push(`c.id IN (${filters.collegeIds.map(() => "?").join(",")})`);
     targetParams.push(...filters.collegeIds);
+  }
+  if (filters.courseId) {
+    targetWhere.push("cr.id = ?");
+    targetParams.push(filters.courseId);
+  }
+  if (filters.branchId) {
+    targetWhere.push("cb.id = ?");
+    targetParams.push(filters.branchId);
+  } else if (filters.branchIds && filters.branchIds.length > 0) {
+    targetWhere.push(`cb.id IN (${filters.branchIds.map(() => "?").join(",")})`);
+    targetParams.push(...filters.branchIds);
+  }
+  if (filters.batch && filters.batch !== "all") {
+    targetWhere.push("TRIM(COALESCE(s.batch, '')) COLLATE utf8mb4_unicode_ci = TRIM(?) COLLATE utf8mb4_unicode_ci");
+    targetParams.push(filters.batch.trim());
+  }
+  if (filters.year && filters.year > 0) {
+    targetWhere.push("s.current_year = ?");
+    targetParams.push(filters.year);
+  }
+  if (filters.semester && filters.semester > 0) {
+    targetWhere.push("s.current_semester = ?");
+    targetParams.push(filters.semester);
+  }
+  if (filters.section && filters.section !== "all") {
+    targetWhere.push(
+      "TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) = TRIM(?) COLLATE utf8mb4_unicode_ci"
+    );
+    targetParams.push(filters.section.trim());
   }
 
   const targetRows = await queryStudent<
@@ -3553,7 +3582,7 @@ export async function getTimetableOverview(
       TRIM(s.batch) AS batch,
       s.current_year AS year,
       s.current_semester AS semester,
-      TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name,
+      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) AS section_name,
       COUNT(DISTINCT s.id) AS student_count
     FROM students s
     JOIN course_branches cb ON cb.id = s.branch_id
@@ -3564,7 +3593,7 @@ export async function getTimetableOverview(
     GROUP BY
       c.id, c.name, c.code, cr.id, cr.name, cb.id, cb.name,
       TRIM(s.batch), s.current_year, s.current_semester,
-      TRIM(COALESCE(ss.section_name, s.section, 'A'))
+      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci))
     HAVING COUNT(DISTINCT s.id) > 0
     ORDER BY c.name, cr.name, cb.name, s.current_year, s.current_semester
     `,
@@ -3584,6 +3613,33 @@ export async function getTimetableOverview(
   } else if (filters.collegeIds && filters.collegeIds.length > 0) {
     planWhere.push(`college_id IN (${filters.collegeIds.map(() => "?").join(",")})`);
     planParams.push(...filters.collegeIds);
+  }
+  if (filters.courseId) {
+    planWhere.push("course_id = ?");
+    planParams.push(filters.courseId);
+  }
+  if (filters.branchId) {
+    planWhere.push("branch_id = ?");
+    planParams.push(filters.branchId);
+  } else if (filters.branchIds && filters.branchIds.length > 0) {
+    planWhere.push(`branch_id IN (${filters.branchIds.map(() => "?").join(",")})`);
+    planParams.push(...filters.branchIds);
+  }
+  if (filters.batch && filters.batch !== "all") {
+    planWhere.push("batch = ?");
+    planParams.push(filters.batch.trim());
+  }
+  if (filters.year && filters.year > 0) {
+    planWhere.push("year_of_study = ?");
+    planParams.push(filters.year);
+  }
+  if (filters.semester && filters.semester > 0) {
+    planWhere.push("semester_number = ?");
+    planParams.push(filters.semester);
+  }
+  if (filters.section && filters.section !== "all") {
+    planWhere.push("section_name = ?");
+    planParams.push(filters.section.trim());
   }
 
   const plans = await queryAcademic<
@@ -3728,7 +3784,7 @@ export async function getTimetableOverview(
           s.branch_id,
           TRIM(s.batch) AS batch,
           s.current_semester,
-          TRIM(COALESCE(ss.section_name, s.section, 'A')) AS section_name
+          TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) AS section_name
         FROM students s
         LEFT JOIN student_sections ss ON ss.student_id = s.id
         WHERE s.id IN (${slice.map(() => "?").join(",")})
