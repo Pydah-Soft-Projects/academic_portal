@@ -143,6 +143,11 @@ export function computeInitialFilters(
     merged.collegeId = defaultCollegeId;
   }
 
+  // If no specific branch is selected, ensure section is 'all'
+  if (merged.branchId === "all") {
+    merged.section = "all";
+  }
+
   return merged;
 }
 

@@ -206,6 +206,13 @@ export function AcademicFilterBar({
     selectedBranch?.hasSections && sectionsForBranch.length > 0,
   );
 
+  // If the branch does not have sections, ensure section filter state is reset to 'all'
+  useEffect(() => {
+    if (!showSectionFilter && filters.section !== "all") {
+      setFilters({ section: "all" });
+    }
+  }, [showSectionFilter, filters.section, setFilters]);
+
   const autoYearSemesterFromBatch = false;
   const showYearSemesterFilters = true;
 
@@ -411,6 +418,8 @@ export function AcademicFilterBar({
                       : "all";
                     setFilters({
                       courseId: cId,
+                      branchId: "all",
+                      section: "all",
                       year: validYear,
                       semester: isTimetablesPage ? (filters.semester === "all" ? 1 : filters.semester) : "all",
                       batch: validBatch,
@@ -431,11 +440,22 @@ export function AcademicFilterBar({
                   className={selectClassName}
                   value={filters.branchId === "all" ? "all" : String(filters.branchId)}
                   disabled={loading || !masters}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    const bId = e.target.value === "all" ? "all" : Number(e.target.value);
+                    const branchObj = bId !== "all" ? masters?.branches.find((b) => b.id === bId) : null;
+                    const sectionsForThisBranch = bId !== "all"
+                      ? masters?.sections.filter((s) => s.branchId === bId).map((s) => s.name) ?? []
+                      : [];
+                    const defaultSection = branchObj?.hasSections
+                      ? filters.section !== "all" && sectionsForThisBranch.includes(filters.section)
+                        ? filters.section
+                        : "all"
+                      : "all";
                     setFilters({
-                      branchId: e.target.value === "all" ? "all" : Number(e.target.value),
-                    })
-                  }
+                      branchId: bId,
+                      section: defaultSection,
+                    });
+                  }}
                 >
                   <option value="all">All Branches</option>
                   {branchesForCourse.map((branch) => (
@@ -677,6 +697,8 @@ export function AcademicFilterBar({
                 : "all";
               setFilters({
                 courseId: cId,
+                branchId: "all",
+                section: "all",
                 year: validYear,
                 semester: isTimetablesPage ? (filters.semester === "all" ? 1 : filters.semester) : "all",
                 batch: validBatch,
@@ -700,7 +722,7 @@ export function AcademicFilterBar({
             onChange={(e) => {
               const bId = e.target.value === "all" ? "all" : Number(e.target.value);
               if (bId === "all") {
-                setFilters({ branchId: "all" });
+                setFilters({ branchId: "all", section: "all" });
                 return;
               }
               const branchObj = masters?.branches.find((b) => b.id === bId);
@@ -710,7 +732,7 @@ export function AcademicFilterBar({
               const defaultSection = branchObj?.hasSections
                 ? filters.section !== "all" && sectionsForThisBranch.includes(filters.section)
                   ? filters.section
-                  : sectionsForThisBranch[0] ?? "all"
+                  : "all"
                 : "all";
 
               const nextYear = isTimetablesPage && filters.year === "all" ? 1 : filters.year;

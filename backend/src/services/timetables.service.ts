@@ -3417,6 +3417,7 @@ export type TimetableOverviewClass = {
   year: number;
   semester: number;
   section: string;
+  hasSections?: boolean;
   studentCount: number;
   status: "published" | "drafted" | "pending";
   planId: number | null;
@@ -3547,9 +3548,17 @@ export async function getTimetableOverview(
     targetWhere.push("s.current_semester = ?");
     targetParams.push(filters.semester);
   }
+  const branchMetaRows = await queryStudent<
+    (RowDataPacket & { id: number; metadata?: unknown })[]
+  >(`SELECT id, metadata FROM course_branches`);
+  const branchHasSectionsMap = new Map<number, boolean>();
+  for (const b of branchMetaRows) {
+    branchHasSectionsMap.set(b.id, branchHasConfiguredSections(b.metadata));
+  }
+
   if (filters.section && filters.section !== "all") {
     targetWhere.push(
-      "TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) = TRIM(?) COLLATE utf8mb4_unicode_ci"
+      "TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, '' COLLATE utf8mb4_unicode_ci)) = TRIM(?) COLLATE utf8mb4_unicode_ci"
     );
     targetParams.push(filters.section.trim());
   }
@@ -3582,7 +3591,7 @@ export async function getTimetableOverview(
       TRIM(s.batch) AS batch,
       s.current_year AS year,
       s.current_semester AS semester,
-      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci)) AS section_name,
+      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, '' COLLATE utf8mb4_unicode_ci)) AS section_name,
       COUNT(DISTINCT s.id) AS student_count
     FROM students s
     JOIN course_branches cb ON cb.id = s.branch_id
@@ -3593,7 +3602,7 @@ export async function getTimetableOverview(
     GROUP BY
       c.id, c.name, c.code, cr.id, cr.name, cb.id, cb.name,
       TRIM(s.batch), s.current_year, s.current_semester,
-      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, 'A' COLLATE utf8mb4_unicode_ci))
+      TRIM(COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci, '' COLLATE utf8mb4_unicode_ci))
     HAVING COUNT(DISTINCT s.id) > 0
     ORDER BY c.name, cr.name, cb.name, s.current_year, s.current_semester
     `,
@@ -3694,7 +3703,10 @@ export async function getTimetableOverview(
   const allActivePlans: MatchedPlan[] = [];
 
   for (const p of plans) {
-    const sec = (p.section_name || "A").trim().toUpperCase();
+    const pHasSections = branchHasSectionsMap.get(p.branch_id) ?? true;
+    const sec = pHasSections
+      ? (p.section_name || "A").trim().toUpperCase()
+      : (p.section_name || "").trim().toUpperCase();
     const batch = (p.batch || "").trim().toUpperCase();
     const key = `${p.college_id}:${p.course_id}:${p.branch_id}:${batch}:${p.semester_number}:${sec}`;
     const isPub = p.status === "published";
@@ -3793,7 +3805,9 @@ export async function getTimetableOverview(
       );
 
       for (const r of studentSectionRows) {
-        const key = `${r.branch_id}:${(r.batch || "").trim().toUpperCase()}:${r.current_semester}:${(r.section_name || "A").trim().toUpperCase()}`;
+        const hasSec = branchHasSectionsMap.get(r.branch_id) ?? true;
+        const sec = hasSec ? (r.section_name || "A").trim().toUpperCase() : "";
+        const key = `${r.branch_id}:${(r.batch || "").trim().toUpperCase()}:${r.current_semester}:${sec}`;
         studentToSectionKeyMap.set(Number(r.id), key);
       }
     }
@@ -3823,7 +3837,9 @@ export async function getTimetableOverview(
           section?: string;
         };
         if (parsed.branchId && parsed.batch) {
-          secKey = `${parsed.branchId}:${(parsed.batch || "").trim().toUpperCase()}:${parsed.semester || 1}:${(parsed.section || "A").trim().toUpperCase()}`;
+          const hasSec = branchHasSectionsMap.get(parsed.branchId) ?? true;
+          const sec = hasSec ? (parsed.section || "A").trim().toUpperCase() : "";
+          secKey = `${parsed.branchId}:${(parsed.batch || "").trim().toUpperCase()}:${parsed.semester || 1}:${sec}`;
         }
       } catch {
         secKey = null;
@@ -3853,12 +3869,20 @@ export async function getTimetableOverview(
     const colBreakdown = collegeBreakdowns.get(row.college_id);
     if (!colBreakdown) continue;
 
-    const sec = (row.section_name || "A").trim().toUpperCase();
+    const hasSections = branchHasSectionsMap.get(row.branch_id) ?? true;
+    const sec = hasSections ? (row.section_name || "A").trim().toUpperCase() : "";
     const batch = (row.batch || "").trim().toUpperCase();
     const key = `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:${sec}`;
     const altKey = `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:*`;
 
-    let matched = planMap.get(key) || planMap.get(altKey);
+    let matched =
+      planMap.get(key) ||
+      (!hasSections
+        ? planMap.get(
+            `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:A`
+          )
+        : undefined) ||
+      planMap.get(altKey);
     let status: "published" | "drafted" | "pending" = "pending";
     let planId: number | null = null;
     let versionNo: number | null = null;
@@ -3882,33 +3906,66 @@ export async function getTimetableOverview(
       });
     }
 
-    const teacherTally = sectionTeacherMap.get(
-      `${row.branch_id}:${batch}:${row.semester}:${sec}`,
-    );
+    const teacherTally =
+      sectionTeacherMap.get(`${row.branch_id}:${batch}:${row.semester}:${sec}`) ||
+      (!hasSections
+        ? sectionTeacherMap.get(`${row.branch_id}:${batch}:${row.semester}:A`)
+        : null);
 
-    colBreakdown.get(ysKey)!.classes.push({
-      courseId: Number(row.course_id),
-      courseName: row.course_name,
-      branchId: Number(row.branch_id),
-      branchName: row.branch_name,
-      batch: row.batch,
-      year: Number(row.year),
-      semester: Number(row.semester),
-      section: row.section_name || "A",
-      studentCount,
-      status,
-      planId,
-      versionNo,
-      updatedAt,
-      classTeacher: teacherTally
-        ? {
-            facultyStaffLinkId: teacherTally.facultyStaffLinkId,
-            facultyName: teacherTally.facultyName,
-            hrmsEmployeeId: teacherTally.hrmsEmployeeId,
-            departmentName: teacherTally.departmentName,
-          }
-        : null,
-    });
+    const classesList = colBreakdown.get(ysKey)!.classes;
+
+    const existingClassIndex = !hasSections
+      ? classesList.findIndex(
+          (c) =>
+            c.branchId === Number(row.branch_id) &&
+            c.batch === row.batch &&
+            c.semester === Number(row.semester)
+        )
+      : -1;
+
+    if (existingClassIndex >= 0) {
+      const existing = classesList[existingClassIndex];
+      existing.studentCount += studentCount;
+      if (!existing.planId && planId) {
+        existing.planId = planId;
+        existing.status = status;
+        existing.versionNo = versionNo;
+        existing.updatedAt = updatedAt;
+      }
+      if (!existing.classTeacher && teacherTally) {
+        existing.classTeacher = {
+          facultyStaffLinkId: teacherTally.facultyStaffLinkId,
+          facultyName: teacherTally.facultyName,
+          hrmsEmployeeId: teacherTally.hrmsEmployeeId,
+          departmentName: teacherTally.departmentName,
+        };
+      }
+    } else {
+      classesList.push({
+        courseId: Number(row.course_id),
+        courseName: row.course_name,
+        branchId: Number(row.branch_id),
+        branchName: row.branch_name,
+        batch: row.batch,
+        year: Number(row.year),
+        semester: Number(row.semester),
+        section: hasSections ? (row.section_name || "A") : "",
+        hasSections,
+        studentCount,
+        status,
+        planId,
+        versionNo,
+        updatedAt,
+        classTeacher: teacherTally
+          ? {
+              facultyStaffLinkId: teacherTally.facultyStaffLinkId,
+              facultyName: teacherTally.facultyName,
+              hrmsEmployeeId: teacherTally.hrmsEmployeeId,
+              departmentName: teacherTally.departmentName,
+            }
+          : null,
+      });
+    }
   }
 
   let totalClassesAll = 0;

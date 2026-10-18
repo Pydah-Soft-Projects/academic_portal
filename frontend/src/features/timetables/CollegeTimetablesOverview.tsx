@@ -38,6 +38,7 @@ export type TimetableOverviewClass = {
   year: number;
   semester: number;
   section: string;
+  hasSections?: boolean;
   studentCount: number;
   status: "published" | "drafted" | "pending";
   planId: number | null;
@@ -1131,9 +1132,15 @@ export function CollegeTimetablesOverview({
                                                     </td>
                                                     <td className="py-2.5 px-3 text-center">
                                                       <div className="inline-flex flex-col items-center gap-0.5">
-                                                        <span className="inline-flex h-6 px-2.5 items-center justify-center rounded bg-indigo-50 border border-indigo-200/80 text-[11px] font-bold text-indigo-900 shadow-2xs">
-                                                          Sec {cls.section || "A"}
-                                                        </span>
+                                                        {cls.hasSections === false || !cls.section ? (
+                                                          <span className="inline-flex h-6 px-2.5 items-center justify-center rounded bg-slate-100 border border-slate-200/80 text-[11px] font-bold text-slate-700 shadow-2xs">
+                                                            No Section
+                                                          </span>
+                                                        ) : (
+                                                          <span className="inline-flex h-6 px-2.5 items-center justify-center rounded bg-indigo-50 border border-indigo-200/80 text-[11px] font-bold text-indigo-900 shadow-2xs">
+                                                            Sec {cls.section}
+                                                          </span>
+                                                        )}
                                                         {cls.studentCount <= 0 ? (
                                                           <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-rose-600">
                                                             <AlertCircle className="h-2.5 w-2.5" /> No students
@@ -1197,7 +1204,7 @@ export function CollegeTimetablesOverview({
                                                                 batch: cls.batch,
                                                                 year: cls.year,
                                                                 semester: cls.semester,
-                                                                sectionName: cls.section || "A",
+                                                                sectionName: cls.hasSections === false || !cls.section ? "" : cls.section,
                                                                 studentCount: cls.studentCount,
                                                                 academicYearLabel: data?.academicYear,
                                                                 currentTeacher: cls.classTeacher,
@@ -1232,7 +1239,7 @@ export function CollegeTimetablesOverview({
                                                                 batch: cls.batch,
                                                                 year: cls.year,
                                                                 semester: cls.semester,
-                                                                sectionName: cls.section || "A",
+                                                                sectionName: cls.hasSections === false || !cls.section ? "" : cls.section,
                                                                 studentCount: cls.studentCount,
                                                                 academicYearLabel: data?.academicYear,
                                                                 currentTeacher: null,
@@ -1276,7 +1283,7 @@ export function CollegeTimetablesOverview({
                                                               batch: cls.batch,
                                                               year: cls.year,
                                                               semester: cls.semester,
-                                                              section: cls.section,
+                                                              section: cls.hasSections === false || !cls.section ? "all" : cls.section,
                                                             })
                                                           }
                                                           className={`text-xs h-7.5 px-3 font-semibold cursor-pointer shadow-2xs transition-all ${

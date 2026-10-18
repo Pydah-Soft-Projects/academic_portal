@@ -201,7 +201,7 @@ export function AssignClassTeacherModal({
           <div className="flex items-center gap-2">
             <span className="font-semibold text-navy-900">Section:</span>
             <span className="px-2 py-0.5 rounded bg-white border border-indigo-200 font-bold text-navy-900">
-              {sectionInfo.branchName} - Sec {sectionInfo.sectionName} ({sectionInfo.batch})
+              {sectionInfo.branchName}{sectionInfo.sectionName ? ` - Sec ${sectionInfo.sectionName}` : ""} ({sectionInfo.batch})
             </span>
           </div>
           {sectionInfo.studentCount != null ? (
