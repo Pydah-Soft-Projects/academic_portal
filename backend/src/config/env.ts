@@ -55,7 +55,7 @@ export const env = {
     backendUrl:
       process.env.CRM_BACKEND_URL?.trim() ||
       process.env.NEXT_PUBLIC_CRM_BACKEND_URL?.trim() ||
-      "https://pydah-crm-backend.pydah.edu.in",
+      "https://crm.pydah.edu.in",
     portalId: process.env.AP_SSO_PORTAL_ID?.trim() || "academic-portal",
     frontendUrl:
       process.env.CRM_FRONTEND_URL?.trim() ||

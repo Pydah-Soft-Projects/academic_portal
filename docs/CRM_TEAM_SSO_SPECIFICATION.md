@@ -72,7 +72,7 @@ The Academic Portal backend will call the CRM backend to verify the token receiv
 ### Endpoint Details
 - **Method**: `POST`
 - **Path**: `/auth/verify-token`
-- **Full URL**: `https://pydah-crm-backend.pydah.edu.in/auth/verify-token`
+- **Full URL**: `https://crm.pydah.edu.in/auth/verify-token`
 - **Local Dev URL (Optional)**: `http://localhost:3000/auth/verify-token`
 - **Headers**:
   ```http
@@ -243,6 +243,6 @@ curl -X POST http://localhost:3000/auth/verify-token \
 |---|---|
 | **Portal Login Path** | `/login?token={TOKEN}` |
 | **Portal Backend SSO Endpoints** | `POST /api/auth/sso-login`, `POST /api/auth/sso-session` |
-| **Backend Environment Variable** | `CRM_BACKEND_URL=https://pydah-crm-backend.pydah.edu.in` |
+| **Backend Environment Variable** | `CRM_BACKEND_URL=https://crm.pydah.edu.in` |
 | **Frontend Environment Variable** | `NEXT_PUBLIC_CRM_FRONTEND_URL=https://crm.pydah.edu.in` |
 | **Cookie Created** | `ap_sid` (HTTP-only session cookie) |

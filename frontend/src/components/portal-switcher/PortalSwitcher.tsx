@@ -81,7 +81,7 @@ export function PortalSwitcher() {
 
     const crmBackend = (
       process.env.NEXT_PUBLIC_CRM_BACKEND_URL ||
-      "https://pydah-crm-backend.pydah.edu.in"
+      "https://crm.pydah.edu.in"
     ).replace(/\/+$/, "");
 
     const scriptSrc = `${crmFrontend}/portal-switcher.js`;
