@@ -58,7 +58,7 @@ jobs:
       - name: Build frontend
         working-directory: frontend
         env:
-          NEXT_PUBLIC_API_BASE_URL: /api
+          NEXT_PUBLIC_API_BASE_URL: https://acad-backend.pydah.edu.in/api
           NEXT_PUBLIC_CRM_FRONTEND_URL: https://crm.pydah.edu.in
           NEXT_PUBLIC_CRM_BACKEND_URL: https://crm.pydah.edu.in
         run: |
