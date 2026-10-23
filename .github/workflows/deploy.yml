@@ -1,0 +1,227 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy to AWS Lightsail
+    runs-on: ubuntu-latest
+
+    steps:
+      #################################################
+      # Checkout code
+      #################################################
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      #################################################
+      # Setup Node.js for builds
+      #################################################
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            backend/package-lock.json
+
+      #################################################
+      # Build backend on GitHub Actions
+      #################################################
+      - name: Install backend dependencies
+        working-directory: backend
+        run: |
+          npm ci
+
+      - name: Build backend
+        working-directory: backend
+        run: |
+          npm run build
+
+      #################################################
+      # Build frontend on GitHub Actions
+      #################################################
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: |
+          npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_BASE_URL: /api
+          NEXT_PUBLIC_CRM_FRONTEND_URL: https://crm.pydah.edu.in
+          NEXT_PUBLIC_CRM_BACKEND_URL: https://crm.pydah.edu.in
+        run: |
+          npm run build
+
+      #################################################
+      # Configure SSH
+      #################################################
+      - name: Configure SSH
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.SERVER_IP }}" >> ~/.ssh/known_hosts
+
+      #################################################
+      # Upload builds to server
+      #################################################
+      - name: Upload backend build
+        run: |
+          rsync -avz \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            backend/dist/ \
+            "ec2-user@${{ secrets.SERVER_IP }}:/tmp/backend-dist/"
+
+      - name: Upload frontend build
+        run: |
+          rsync -avz \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            --exclude 'cache/' \
+            frontend/.next/ \
+            "ec2-user@${{ secrets.SERVER_IP }}:/tmp/frontend-next/"
+
+      #################################################
+      # Deploy to server
+      #################################################
+      - name: Deploy to server
+        env:
+          SERVER_IP: ${{ secrets.SERVER_IP }}
+        run: |
+          set -e
+          ssh -i ~/.ssh/deploy_key \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            "ec2-user@${SERVER_IP}" << 'ENDSSH'
+
+          set -e
+
+          PROJECT_DIR="/home/ec2-user/academic_portal"
+
+          echo "=========================================="
+          echo "Starting deployment"
+          echo "=========================================="
+
+          cd "${PROJECT_DIR}"
+
+          echo "==> Pulling latest code from main..."
+          git fetch origin main
+          git checkout main
+          # Discard any local changes to log files before pulling
+          git checkout -- backend/logs/ 2>/dev/null || true
+          git checkout -- frontend/logs/ 2>/dev/null || true
+          git pull origin main
+
+          #################################################
+          # BACKEND PART
+          #################################################
+          echo "==> Checking backend dependencies..."
+          cd "${PROJECT_DIR}/backend"
+
+          LOCK_HASH_FILE="${PROJECT_DIR}/backend/.npm-ci-lockhash"
+          CURRENT_HASH="$(sha256sum package-lock.json package.json 2>/dev/null | sha256sum | awk '{print $1}')"
+          PREV_HASH="$(cat "${LOCK_HASH_FILE}" 2>/dev/null || true)"
+
+          if [ ! -d node_modules ] || [ "${CURRENT_HASH}" != "${PREV_HASH}" ]; then
+            echo "==> Installing backend dependencies (lockfile changed or node_modules missing)..."
+            if [ -f package-lock.json ]; then
+              npm ci --omit=dev
+            else
+              npm install --omit=dev
+            fi
+            echo "${CURRENT_HASH}" > "${LOCK_HASH_FILE}"
+          else
+            echo "==> Backend dependencies unchanged, skipping npm ci"
+          fi
+
+          echo "==> Deploying backend compiled dist..."
+          mkdir -p "${PROJECT_DIR}/backend/dist"
+          rsync -av --delete /tmp/backend-dist/ "${PROJECT_DIR}/backend/dist/"
+
+          #################################################
+          # FRONTEND PART
+          #################################################
+          echo "==> Checking frontend dependencies..."
+          cd "${PROJECT_DIR}/frontend"
+
+          FE_LOCK_HASH_FILE="${PROJECT_DIR}/frontend/.npm-ci-lockhash"
+          FE_CURRENT_HASH="$(sha256sum package-lock.json package.json 2>/dev/null | sha256sum | awk '{print $1}')"
+          FE_PREV_HASH="$(cat "${FE_LOCK_HASH_FILE}" 2>/dev/null || true)"
+
+          if [ ! -d node_modules ] || [ "${FE_CURRENT_HASH}" != "${FE_PREV_HASH}" ]; then
+            echo "==> Installing frontend dependencies (lockfile changed or node_modules missing)..."
+            if [ -f package-lock.json ]; then
+              npm ci --omit=dev
+            else
+              npm install --omit=dev
+            fi
+            echo "${FE_CURRENT_HASH}" > "${FE_LOCK_HASH_FILE}"
+          else
+            echo "==> Frontend dependencies unchanged, skipping npm ci"
+          fi
+
+          echo "==> Deploying frontend Next.js build artifacts (.next)..."
+          mkdir -p "${PROJECT_DIR}/frontend/.next"
+          rsync -av --delete /tmp/frontend-next/ "${PROJECT_DIR}/frontend/.next/"
+
+          #################################################
+          # PM2 PROCESSES
+          #################################################
+          echo "==> Cleaning up any legacy PM2 process names if present..."
+          pm2 delete backend 2>/dev/null || true
+          pm2 delete frontend 2>/dev/null || true
+          pm2 delete academic-api 2>/dev/null || true
+          pm2 delete academic-web 2>/dev/null || true
+
+          echo "==> Reloading backend PM2 process via ecosystem file..."
+          cd "${PROJECT_DIR}/backend"
+          mkdir -p logs
+          pm2 startOrReload ecosystem.config.cjs --update-env
+
+          echo "==> Reloading frontend PM2 process via ecosystem file..."
+          cd "${PROJECT_DIR}/frontend"
+          mkdir -p logs
+          pm2 startOrReload ecosystem.config.cjs --update-env
+
+          echo "==> Saving PM2 process list..."
+          pm2 save
+          pm2 status
+
+          #################################################
+          # Health checks
+          #################################################
+          echo "==> Performing health checks..."
+          sleep 3
+          curl -fsS -o /dev/null -w "Backend API: %{http_code}\n" http://127.0.0.1:4000/api/health || echo "Backend health check failed"
+          curl -fsS -o /dev/null -w "Frontend Web: %{http_code}\n" http://127.0.0.1:3000/ || echo "Frontend health check failed"
+          curl -fsS -o /dev/null -w "Nginx Proxy: %{http_code}\n" http://127.0.0.1/ || echo "Nginx health check failed"
+
+          #################################################
+          # Cleanup
+          #################################################
+          rm -rf /tmp/backend-dist /tmp/frontend-next
+
+          echo "=========================================="
+          echo "Deployment completed successfully"
+          echo "=========================================="
+
+          ENDSSH
+
+      #################################################
+      # Cleanup SSH key
+      #################################################
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
