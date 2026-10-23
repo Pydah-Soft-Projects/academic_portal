@@ -22,6 +22,7 @@ import {
   ArrowLeftRight,
   GitMerge,
   UserCheck,
+  MessageSquare,
 } from "lucide-react";
 
 export type NavItem = {
@@ -210,6 +211,12 @@ export const NAV_GROUPS: NavGroup[] = [
         href: "/reports?tab=student-analytics",
         icon: LineChart,
         permissions: ["attendance_analytics.view", "reports.view"],
+      },
+      {
+        label: "Feedback Application Reports",
+        href: "/reports?tab=feedback-reports",
+        icon: MessageSquare,
+        permissions: ["reports.view", "settings.view", "today_timetable.view"],
       },
     ],
   },

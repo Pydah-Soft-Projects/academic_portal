@@ -13,6 +13,20 @@ import {
   getComplaintTypes,
   saveComplaintTypes,
 } from "../services/complaint-types.service.js";
+import {
+  listFeedbackForms,
+  getFeedbackForm,
+  createFeedbackForm,
+  updateFeedbackForm,
+  deleteFeedbackForm,
+  listFeedbackPublications,
+  createFeedbackPublication,
+  updateFeedbackPublication,
+  deleteFeedbackPublication,
+  getFeedbackReportData,
+  submitFeedbackResponse,
+  getStaffSubjectsForScope,
+} from "../services/feedback-forms.service.js";
 import { writeAuditLog } from "../services/audit.service.js";
 
 export const settingsRouter = Router();
@@ -158,3 +172,327 @@ settingsRouter.put(
     }
   },
 );
+
+settingsRouter.get(
+  "/feedback-forms",
+  requirePermission("settings.view", "reports.view"),
+  async (_req, res, next) => {
+    try {
+      res.json(await listFeedbackForms());
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.get(
+  "/feedback-publications",
+  requirePermission("reports.view", "settings.view", "today_timetable.view"),
+  async (_req, res, next) => {
+    try {
+      res.json(await listFeedbackPublications());
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.post(
+  "/feedback-publications",
+  requirePermission("settings.edit", "reports.view"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const created = await createFeedbackPublication(req.body, req.authUser?.id);
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.feedback_publication_created",
+        entityType: "ap_feedback_publications",
+        entityId: created.id,
+        oldValue: {},
+        newValue: created,
+        ipAddress: req.ip,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      const status = Number((error as { status?: number }).status);
+      if (status >= 400 && status < 500) {
+        res.status(status).json({ message: (error as Error).message });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+settingsRouter.put(
+  "/feedback-publications/:id",
+  requirePermission("settings.edit", "reports.view"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid publication ID" });
+        return;
+      }
+      const updated = await updateFeedbackPublication(id, req.body);
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.feedback_publication_updated",
+        entityType: "ap_feedback_publications",
+        entityId: id,
+        oldValue: {},
+        newValue: updated,
+        ipAddress: req.ip,
+      });
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.delete(
+  "/feedback-publications/:id",
+  requirePermission("settings.edit", "reports.view"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid publication ID" });
+        return;
+      }
+      await deleteFeedbackPublication(id);
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.feedback_publication_deleted",
+        entityType: "ap_feedback_publications",
+        entityId: id,
+        oldValue: {},
+        newValue: {},
+        ipAddress: req.ip,
+      });
+      res.json({ success: true, message: "Publication deleted" });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.post(
+  "/feedback-publications/:id/submit",
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid publication ID" });
+        return;
+      }
+      const result = await submitFeedbackResponse(id, req.body);
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.get(
+  "/feedback-forms/staff-subjects",
+  requirePermission("reports.view", "settings.view", "today_timetable.view"),
+  async (req, res, next) => {
+    try {
+      const collegeId = req.query.collegeId ? Number(req.query.collegeId) : undefined;
+      const collegeIds = typeof req.query.collegeIds === "string"
+        ? req.query.collegeIds.split(",").map(Number).filter(Boolean)
+        : undefined;
+      const courseId = req.query.courseId ? Number(req.query.courseId) : undefined;
+      const courseIds = typeof req.query.courseIds === "string"
+        ? req.query.courseIds.split(",").map(Number).filter(Boolean)
+        : undefined;
+      const branchId = req.query.branchId ? Number(req.query.branchId) : undefined;
+      const branchIds = typeof req.query.branchIds === "string"
+        ? req.query.branchIds.split(",").map(Number).filter(Boolean)
+        : undefined;
+      const semester = req.query.semester ? Number(req.query.semester) : undefined;
+      const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : undefined;
+      const batch = typeof req.query.batch === "string" ? req.query.batch : undefined;
+      const batches = typeof req.query.batches === "string"
+        ? req.query.batches.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined;
+      const section = typeof req.query.section === "string" ? req.query.section : undefined;
+      const sections = typeof req.query.sections === "string"
+        ? req.query.sections.split(",").map((s) => s.trim()).filter(Boolean)
+        : undefined;
+
+      const items = await getStaffSubjectsForScope({
+        collegeId,
+        collegeIds,
+        courseId,
+        courseIds,
+        branchId,
+        branchIds,
+        semester,
+        academicYear,
+        batch,
+        batches,
+        section,
+        sections,
+      });
+      res.json(items);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.get(
+  "/feedback-forms/reports",
+  requirePermission("reports.view", "settings.view", "today_timetable.view"),
+  async (req, res, next) => {
+    try {
+      const rawPubId = req.query.publicationId || req.query.formId;
+      const pubId = rawPubId ? Number(rawPubId) : undefined;
+      const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
+      const semester = req.query.semester ? Number(req.query.semester) : undefined;
+      const report = await getFeedbackReportData(pubId, branch, semester);
+      res.json(report);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.post(
+  "/feedback-forms/:id/submit",
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid form ID" });
+        return;
+      }
+      const result = await submitFeedbackResponse(id, req.body);
+      res.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.get(
+  "/feedback-forms/:id",
+  requirePermission("settings.view", "reports.view"),
+  async (req, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid form ID" });
+        return;
+      }
+      const form = await getFeedbackForm(id);
+      if (!form) {
+        res.status(404).json({ message: "Feedback form not found" });
+        return;
+      }
+      res.json(form);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.post(
+  "/feedback-forms",
+  requirePermission("settings.edit"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const created = await createFeedbackForm(req.body);
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.feedback_form_created",
+        entityType: "ap_feedback_forms",
+        entityId: created.id,
+        oldValue: {},
+        newValue: created,
+        ipAddress: req.ip,
+      });
+      res.status(201).json(created);
+    } catch (error) {
+      const status = Number((error as { status?: number }).status);
+      if (status >= 400 && status < 500) {
+        res.status(status).json({ message: (error as Error).message });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+settingsRouter.put(
+  "/feedback-forms/:id",
+  requirePermission("settings.edit"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid form ID" });
+        return;
+      }
+      const previous = await getFeedbackForm(id);
+      if (!previous) {
+        res.status(404).json({ message: "Feedback form not found" });
+        return;
+      }
+      const updated = await updateFeedbackForm(id, req.body);
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.feedback_form_updated",
+        entityType: "ap_feedback_forms",
+        entityId: id,
+        oldValue: previous,
+        newValue: updated,
+        ipAddress: req.ip,
+      });
+      res.json(updated);
+    } catch (error) {
+      const status = Number((error as { status?: number }).status);
+      if (status >= 400 && status < 500) {
+        res.status(status).json({ message: (error as Error).message });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
+settingsRouter.delete(
+  "/feedback-forms/:id",
+  requirePermission("settings.edit"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const id = Number(req.params.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ message: "Invalid form ID" });
+        return;
+      }
+      const previous = await getFeedbackForm(id);
+      if (!previous) {
+        res.status(404).json({ message: "Feedback form not found" });
+        return;
+      }
+      await deleteFeedbackForm(id);
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.feedback_form_deleted",
+        entityType: "ap_feedback_forms",
+        entityId: id,
+        oldValue: previous,
+        newValue: {},
+        ipAddress: req.ip,
+      });
+      res.json({ success: true, message: "Feedback form deleted" });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+

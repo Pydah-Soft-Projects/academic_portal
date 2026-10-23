@@ -10,6 +10,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { AttendanceAnalyticsView } from "@/features/attendance-analytics/AttendanceAnalyticsView";
 import { StaffWorkloadView } from "@/features/workload/StaffWorkloadView";
 import { MasterVsChangedReport } from "@/features/reports/MasterVsChangedReport";
+import { FeedbackReportsView } from "@/features/reports/FeedbackReportsView";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { apiFetch } from "@/lib/api";
 import { Calendar, ChevronRight, Printer, RotateCcw } from "lucide-react";
@@ -33,7 +34,8 @@ type ReportKey =
   | "change-audit"
   | "department-timetables"
   | "staff-timetables"
-  | "student-analytics";
+  | "student-analytics"
+  | "feedback-reports";
 
 type ReportDef = {
   key: ReportKey;
@@ -76,6 +78,11 @@ const REPORT_TABS: ReportDef[] = [
     key: "student-analytics",
     title: "Student Analytics Reports",
     permissions: ["attendance_analytics.view", "reports.view"],
+  },
+  {
+    key: "feedback-reports",
+    title: "Feedback Application Reports",
+    permissions: ["reports.view", "settings.view", "today_timetable.view"],
   },
 ];
 
@@ -133,6 +140,8 @@ export function ReportsView() {
       return <DepartmentTimetableReport />;
     if (activeTab.key === "staff-timetables")
       return <StaffWorkloadView embedded />;
+    if (activeTab.key === "feedback-reports")
+      return <FeedbackReportsView />;
     return <AttendanceAnalyticsView embedded />;
   }
 

@@ -63,6 +63,12 @@ const sections: SettingsSection[] = [
     permissions: ["settings.view", "settings.edit"],
   },
   {
+    title: "Academic Feedback Forms",
+    description: "Configure student academic feedback forms, questions, rating scales, and activation periods.",
+    href: "/settings/feedback-forms",
+    permissions: ["settings.view", "settings.edit"],
+  },
+  {
     title: "Attendance Thresholds",
     description: "Risk and posting thresholds (coming soon).",
     permissions: ["settings.view"],
