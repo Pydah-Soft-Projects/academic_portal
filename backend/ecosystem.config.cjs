@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "academic-portal-backend",
+      name: "acad-backend",
       script: "./node_modules/tsx/dist/cli.mjs",
       args: "src/index.ts",
       cwd: __dirname,

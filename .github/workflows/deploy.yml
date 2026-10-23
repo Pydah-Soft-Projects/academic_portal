@@ -153,12 +153,6 @@ jobs:
           #################################################
           # PM2 PROCESSES
           #################################################
-          echo "==> Cleaning up any legacy PM2 process names if present..."
-          pm2 delete backend 2>/dev/null || true
-          pm2 delete frontend 2>/dev/null || true
-          pm2 delete academic-api 2>/dev/null || true
-          pm2 delete academic-web 2>/dev/null || true
-
           echo "==> Reloading backend PM2 process via ecosystem file..."
           cd "${PROJECT_DIR}/backend"
           mkdir -p logs

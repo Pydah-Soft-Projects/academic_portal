@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: "academic-portal-frontend",
+      name: "acad-frontend",
       script: "node_modules/next/dist/bin/next",
       args: "start -p 3000",
       cwd: __dirname,
