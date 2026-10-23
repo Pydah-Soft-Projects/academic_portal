@@ -2,7 +2,8 @@ module.exports = {
   apps: [
     {
       name: "academic-portal-backend",
-      script: "dist/index.js",
+      script: "./node_modules/tsx/dist/cli.mjs",
+      args: "src/index.ts",
       cwd: __dirname,
       instances: 1,
       autorestart: true,
