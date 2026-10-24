@@ -26,6 +26,8 @@ import {
   Building,
   Check,
   ChevronDown,
+  ChevronUp,
+  MessageSquare,
   Search,
   Target,
   BarChart2,
@@ -172,6 +174,26 @@ export type FeedbackReportData = {
     totalSubmittedCount: number;
     totalExpectedCount: number | null;
     overallStatus: "pending" | "partial" | "submitted";
+    averageRating?: number | null;
+    averageUnitsCovered?: number | null;
+    completionRate?: number | null;
+    unitsCoveredDistribution?: Array<{
+      unit: string;
+      label: string;
+      count: number;
+      percentage: number;
+    }>;
+    facultyRatingDistribution?: Array<{
+      stars: number;
+      count: number;
+      percentage: number;
+    }>;
+    unitStatusDistribution?: Array<{
+      status: string;
+      count: number;
+      percentage: number;
+      color: string;
+    }>;
   }>;
   submissionSummary?: {
     totalAllocations: number;
@@ -491,18 +513,246 @@ const rowStatusCfg = {
   submitted: { label: "Submitted", bg: "bg-emerald-50", text: "text-emerald-700", border: "border-emerald-200", dot: "bg-emerald-400", icon: CheckCircle2   },
 };
 
+/**
+ * Renders the 3 Questions (Units Covered, Rate Subject Faculty, Unit Status)
+ * for a specific individual faculty member.
+ */
+function StaffQuestionBreakdownCards({ item }: { item: SubmissionProgressItem }) {
+  const unitsDist =
+    item.unitsCoveredDistribution && item.unitsCoveredDistribution.length > 0
+      ? item.unitsCoveredDistribution
+      : ["1", "2", "3", "4", "5"].map((u) => ({ unit: u, label: `Unit ${u}`, count: 0, percentage: 0 }));
+
+  const ratingDist =
+    item.facultyRatingDistribution && item.facultyRatingDistribution.length > 0
+      ? item.facultyRatingDistribution
+      : [5, 4, 3, 2, 1].map((s) => ({ stars: s, count: 0, percentage: 0 }));
+
+  const statusDist =
+    item.unitStatusDistribution && item.unitStatusDistribution.length > 0
+      ? item.unitStatusDistribution
+      : [
+          { status: "Completed", count: 0, percentage: 0, color: "emerald" },
+          { status: "Ending", count: 0, percentage: 0, color: "blue" },
+          { status: "Middle", count: 0, percentage: 0, color: "amber" },
+          { status: "Starting", count: 0, percentage: 0, color: "slate" },
+        ];
+
+  const totalSubs = item.totalSubmittedCount || 0;
+  const avgRating = item.averageRating;
+  const compRate = item.completionRate;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      {/* Card 1: Question 1 - Units Covered */}
+      <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider">
+              Question 1
+            </span>
+            <h3 className="text-base font-bold text-navy-900">Units Covered</h3>
+          </div>
+          <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+            Multiple Choice
+          </span>
+        </div>
+
+        <div className="space-y-3 pt-1">
+          {unitsDist.map((u) => (
+            <div key={u.unit} className="space-y-1">
+              <div className="flex items-center justify-between text-xs font-medium">
+                <span className="text-slate-700">{u.label}</span>
+                <div className="flex items-center gap-1.5 text-slate-500">
+                  <span className="font-semibold text-navy-900">{u.count}</span>
+                  <span>({u.percentage}%)</span>
+                </div>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-blue-600 transition-all duration-500"
+                  style={{ width: `${u.percentage}%` }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600 border border-slate-100">
+          <span className="font-semibold text-slate-800">Insight: </span>
+          {totalSubs > 0
+            ? "Evaluation of units covered per academic curriculum pace."
+            : "No student responses submitted yet for this instructor."}
+        </div>
+      </Card>
+
+      {/* Card 2: Question 2 - Rate Subject Faculty */}
+      <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">
+              Question 2
+            </span>
+            <h3 className="text-base font-bold text-navy-900">Rate Subject Faculty</h3>
+          </div>
+          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+            Rating Scale (1-5)
+          </span>
+        </div>
+
+        {/* Big Score Header */}
+        <div className="flex items-center gap-4 rounded-xl bg-amber-50/60 p-3.5 border border-amber-200/60">
+          <div className="text-center">
+            <span className="text-3xl font-black text-amber-900">
+              {avgRating != null ? avgRating.toFixed(1) : "null"}
+            </span>
+            <span className="block text-[10px] text-amber-700 uppercase font-bold">
+              Average
+            </span>
+          </div>
+          <div className="border-l border-amber-200 pl-4 space-y-0.5">
+            <div className="flex items-center gap-1 text-amber-500">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Star
+                  key={star}
+                  className={`h-4 w-4 ${
+                    avgRating != null && star <= Math.round(avgRating)
+                      ? "fill-amber-400 text-amber-400"
+                      : "text-amber-200"
+                  }`}
+                />
+              ))}
+            </div>
+            <span className="text-xs text-amber-900 font-medium">
+              {totalSubs > 0
+                ? `Based on ${totalSubs} verified student review${totalSubs > 1 ? "s" : ""}`
+                : "0 verified student reviews"}
+            </span>
+          </div>
+        </div>
+
+        {/* Rating Distribution Bars */}
+        <div className="space-y-2 pt-1">
+          {ratingDist.map((r) => (
+            <div key={r.stars} className="flex items-center gap-2 text-xs">
+              <span className="w-12 text-slate-700 font-medium">{r.stars} Stars</span>
+              <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-amber-500 transition-all duration-500"
+                  style={{ width: `${r.percentage}%` }}
+                />
+              </div>
+              <span className="w-14 text-right text-slate-500 font-mono">
+                {r.count} ({r.percentage}%)
+              </span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {/* Card 3: Question 3 - Unit Status */}
+      <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
+              Question 3
+            </span>
+            <h3 className="text-base font-bold text-navy-900">Unit Status</h3>
+          </div>
+          <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+            Syllabus Phase
+          </span>
+        </div>
+
+        {/* Multi-segment bar */}
+        <div className="space-y-2 pt-1">
+          <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
+            {totalSubs > 0 ? (
+              statusDist.map((st) => (
+                <div
+                  key={st.status}
+                  title={`${st.status}: ${st.percentage}%`}
+                  className={`h-full transition-all ${
+                    st.status === "Completed"
+                      ? "bg-emerald-500"
+                      : st.status === "Ending"
+                      ? "bg-blue-500"
+                      : st.status === "Middle"
+                      ? "bg-amber-400"
+                      : "bg-slate-400"
+                  }`}
+                  style={{ width: `${st.percentage}%` }}
+                />
+              ))
+            ) : (
+              <div className="h-full w-full bg-slate-200" title="No submissions yet" />
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 pt-2">
+            {statusDist.map((st) => (
+              <div
+                key={st.status}
+                className="rounded-lg border border-slate-100 bg-slate-50/80 p-2 text-xs"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      st.status === "Completed"
+                        ? "bg-emerald-500"
+                        : st.status === "Ending"
+                        ? "bg-blue-500"
+                        : st.status === "Middle"
+                        ? "bg-amber-400"
+                        : "bg-slate-400"
+                    }`}
+                  />
+                  <span className="font-semibold text-slate-800">{st.status}</span>
+                </div>
+                <div className="mt-1 flex items-baseline justify-between text-slate-500">
+                  <span className="text-sm font-bold text-navy-900">{st.count}</span>
+                  <span>{st.percentage}%</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-lg bg-emerald-50/60 p-3 text-xs text-emerald-900 border border-emerald-100">
+          <span className="font-semibold">Curriculum Progression: </span>
+          {compRate != null
+            ? `${compRate}% of topics are in ending or completed stages.`
+            : "No student responses submitted yet for syllabus progression."}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function SubmissionProgressCard({
   progress,
   summary,
+  selectedStaffKey,
+  onSelectStaffKey,
 }: {
   progress: SubmissionProgressItem[];
   summary?: FeedbackReportData["submissionSummary"];
+  selectedStaffKey?: string | null;
+  onSelectStaffKey?: (key: string) => void;
 }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "pending" | "partial" | "submitted">("all");
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
-    let list = progress;
+    // Only include sections that have enrolled students (or unknown headcount, but exclude 0 students)
+    let list = progress
+      .map((item) => ({
+        ...item,
+        sections: item.sections.filter((s) => s.expectedCount === null || s.expectedCount > 0),
+      }))
+      .filter((item) => item.sections.length > 0);
+
     if (filter !== "all") list = list.filter((x) => x.overallStatus === filter);
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -601,8 +851,8 @@ function SubmissionProgressCard({
         </div>
       </div>
 
-      {/* Rows — one per faculty+subject */}
-      <div className="divide-y divide-slate-100 max-h-[520px] overflow-y-auto">
+      {/* Rows — one per faculty+subject with expandable Question Breakdown */}
+      <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-14 text-slate-400">
             <FileText className="h-8 w-8 mb-2 text-slate-300" />
@@ -611,89 +861,138 @@ function SubmissionProgressCard({
           </div>
         ) : (
           filtered.map((item, idx) => {
+            const rowKey = `${item.facultyName}|${item.subjectName}`;
+            const isExpanded = expandedKey === rowKey;
+            const isSelected = selectedStaffKey === rowKey;
             const cfg = rowStatusCfg[item.overallStatus];
             const StatusIcon = cfg.icon;
-            // Sort sections: pending → partial → submitted, then by section name
-            const sortedSections = [...item.sections].sort(
-              (a, b) =>
-                ["pending", "partial", "submitted"].indexOf(a.status) -
-                ["pending", "partial", "submitted"].indexOf(b.status) ||
-                (a.sectionName ?? "").localeCompare(b.sectionName ?? ""),
-            );
+
+            // Sort sections: pending → partial → submitted, then by section name (skip sections with 0 students)
+            const sortedSections = [...item.sections]
+              .filter((s) => s.expectedCount === null || s.expectedCount > 0)
+              .sort(
+                (a, b) =>
+                  ["pending", "partial", "submitted"].indexOf(a.status) -
+                  ["pending", "partial", "submitted"].indexOf(b.status) ||
+                  (a.sectionName ?? "").localeCompare(b.sectionName ?? ""),
+              );
+
             return (
               <div
-                key={`${item.facultyName}|${item.subjectName}|${idx}`}
-                className="flex items-start gap-4 px-5 py-4 hover:bg-slate-50/80 transition-colors"
+                key={`${rowKey}|${idx}`}
+                className={cn(
+                  "flex flex-col transition-colors",
+                  isSelected && "bg-indigo-50/30",
+                )}
               >
-                {/* Status dot */}
-                <div className={cn("h-2.5 w-2.5 rounded-full flex-shrink-0 mt-1.5", cfg.dot)} />
+                <div className="flex items-start gap-4 px-5 py-4 hover:bg-slate-50/80 transition-colors">
+                  {/* Status dot */}
+                  <div className={cn("h-2.5 w-2.5 rounded-full flex-shrink-0 mt-1.5", cfg.dot)} />
 
-                {/* Faculty + Subject + sections */}
-                <div className="min-w-0 flex-1 space-y-2">
-                  {/* Faculty name + employee code */}
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <span className="text-sm font-bold text-navy-900">{item.facultyName}</span>
-                    {item.employeeCode && (
-                      <span className="text-[10px] text-slate-400 font-mono">{item.employeeCode}</span>
-                    )}
+                  {/* Faculty + Subject + sections */}
+                  <div className="min-w-0 flex-1 space-y-2">
+                    {/* Faculty name + employee code */}
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="text-sm font-bold text-navy-900">{item.facultyName}</span>
+                      {item.employeeCode && (
+                        <span className="text-[10px] text-slate-400 font-mono">{item.employeeCode}</span>
+                      )}
+                    </div>
+
+                    {/* Subject name + code */}
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold text-slate-700">{item.subjectName}</span>
+                      {item.subjectCode && (
+                        <span className="text-[10px] bg-slate-100 text-slate-500 rounded px-1.5 py-0.5 font-mono">
+                          {item.subjectCode}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Sections as chips — each chip shows section + count + status color */}
+                    <div className="flex flex-wrap gap-1.5">
+                      {sortedSections.map((sec, si) => {
+                        const sCfg = sectionStatusCfg[sec.status];
+                        return (
+                          <div
+                            key={`${sec.sectionName ?? "all"}-${sec.semester ?? ""}-${sec.batch ?? ""}-${si}`}
+                            className={cn(
+                              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+                              sCfg.bg, sCfg.text, sCfg.border,
+                            )}
+                          >
+                            <div className={cn("h-1.5 w-1.5 rounded-full", sCfg.dot)} />
+                            {sec.sectionName ? `Sec ${sec.sectionName}` : "All Sections"}
+                            {sec.semester != null && ` · Sem ${sec.semester}`}
+                            {sec.batch && ` · ${sec.batch}`}
+                            <span className="ml-0.5 opacity-70">
+                              ({sec.submittedCount}{sec.expectedCount != null ? `/${sec.expectedCount}` : ""})
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  {/* Subject name + code */}
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-semibold text-slate-700">{item.subjectName}</span>
-                    {item.subjectCode && (
-                      <span className="text-[10px] bg-slate-100 text-slate-500 rounded px-1.5 py-0.5 font-mono">
-                        {item.subjectCode}
+                  {/* Total count */}
+                  <div className="text-right flex-shrink-0">
+                    <span className="text-xl font-bold text-navy-900 leading-none">{item.totalSubmittedCount}</span>
+                    {item.totalExpectedCount != null && item.totalExpectedCount > 0 && (
+                      <span className="text-xs text-slate-400 ml-1">/ {item.totalExpectedCount}</span>
+                    )}
+                    <div className="text-[10px] text-slate-400 mt-0.5">total responses</div>
+                  </div>
+
+                  {/* Overall status badge + Breakdown toggle */}
+                  <div className="flex-shrink-0 mt-0.5 flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
+                        cfg.bg, cfg.text, cfg.border,
+                      )}
+                    >
+                      <StatusIcon className="h-3 w-3" />
+                      {cfg.label}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandedKey(isExpanded ? null : rowKey);
+                        if (onSelectStaffKey) onSelectStaffKey(rowKey);
+                      }}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all shadow-2xs",
+                        isExpanded
+                          ? "bg-navy-900 text-white border-navy-900 shadow-xs"
+                          : "bg-white border-slate-200 text-slate-700 hover:bg-slate-100",
+                      )}
+                      title="View Question Feedback Breakdown for this instructor"
+                    >
+                      <MessageSquare className="h-3 w-3" />
+                      <span>Breakdown</span>
+                      {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Inline Expandable Question Breakdown for this staff member */}
+                {isExpanded && (
+                  <div className="px-5 pb-5 pt-2 bg-slate-50/80 border-t border-slate-100 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <MessageSquare className="h-4 w-4 text-indigo-600" />
+                        <span className="text-xs font-bold text-navy-900">
+                          Student Question Feedback Analysis: {item.facultyName} ({item.subjectName})
+                        </span>
+                      </div>
+                      <span className="text-xs font-medium text-slate-500">
+                        {item.totalSubmittedCount} verified response{item.totalSubmittedCount !== 1 ? "s" : ""}
                       </span>
-                    )}
+                    </div>
+                    <StaffQuestionBreakdownCards item={item} />
                   </div>
-
-                  {/* Sections as chips — each chip shows section + count + status color */}
-                  <div className="flex flex-wrap gap-1.5">
-                    {sortedSections.map((sec, si) => {
-                      const sCfg = sectionStatusCfg[sec.status];
-                      return (
-                        <div
-                          key={`${sec.sectionName ?? "all"}-${sec.semester ?? ""}-${sec.batch ?? ""}-${si}`}
-                          className={cn(
-                            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-                            sCfg.bg, sCfg.text, sCfg.border,
-                          )}
-                        >
-                          <div className={cn("h-1.5 w-1.5 rounded-full", sCfg.dot)} />
-                          {sec.sectionName ? `Sec ${sec.sectionName}` : "All Sections"}
-                          {sec.semester != null && ` · Sem ${sec.semester}`}
-                          {sec.batch && ` · ${sec.batch}`}
-                          <span className="ml-0.5 opacity-70">
-                            ({sec.submittedCount}{sec.expectedCount != null ? `/${sec.expectedCount}` : ""})
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Total count */}
-                <div className="text-right flex-shrink-0">
-                  <span className="text-xl font-bold text-navy-900 leading-none">{item.totalSubmittedCount}</span>
-                  {item.totalExpectedCount != null && item.totalExpectedCount > 0 && (
-                    <span className="text-xs text-slate-400 ml-1">/ {item.totalExpectedCount}</span>
-                  )}
-                  <div className="text-[10px] text-slate-400 mt-0.5">total responses</div>
-                </div>
-
-                {/* Overall status badge */}
-                <div className="flex-shrink-0 mt-0.5">
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
-                      cfg.bg, cfg.text, cfg.border,
-                    )}
-                  >
-                    <StatusIcon className="h-3 w-3" />
-                    {cfg.label}
-                  </span>
-                </div>
+                )}
               </div>
             );
           })
@@ -714,11 +1013,116 @@ function SubmissionProgressCard({
   );
 }
 
+/**
+ * Dedicated Section placed right UNDER the Submission Progress Card,
+ * allowing selection of any individual instructor to view their Question 1, 2, 3 breakdown.
+ */
+function StaffQuestionBreakdownSection({
+  progress,
+  selectedKey,
+  onSelectKey,
+}: {
+  progress: SubmissionProgressItem[];
+  selectedKey: string | null;
+  onSelectKey: (k: string) => void;
+}) {
+  const currentItem =
+    progress.find((p) => `${p.facultyName}|${p.subjectName}` === selectedKey) ||
+    progress.find((p) => p.totalSubmittedCount > 0) ||
+    progress[0];
+
+  if (!currentItem) return null;
+
+  return (
+    <Card className="border-slate-200 bg-white shadow-xs overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-slate-100 bg-slate-50/50">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-50 text-indigo-700">
+              <MessageSquare className="h-4 w-4" />
+            </div>
+            <h3 className="text-base font-bold text-navy-900">
+              Staff-Wise Question Feedback Breakdown
+            </h3>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Individual student evaluation breakdown for Question 1 (Units), Question 2 (Rating), and Question 3 (Unit Status)
+          </p>
+        </div>
+
+        {/* Staff selector */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="staff-breakdown-select" className="text-xs font-semibold text-slate-600">
+            Instructor:
+          </label>
+          <select
+            id="staff-breakdown-select"
+            value={selectedKey || `${currentItem.facultyName}|${currentItem.subjectName}`}
+            onChange={(e) => onSelectKey(e.target.value)}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 shadow-2xs max-w-sm truncate"
+          >
+            {progress.map((p) => {
+              const k = `${p.facultyName}|${p.subjectName}`;
+              return (
+                <option key={k} value={k}>
+                  {p.facultyName} — {p.subjectName} ({p.totalSubmittedCount} response{p.totalSubmittedCount !== 1 ? "s" : ""})
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      </div>
+
+      <div className="p-5 space-y-4">
+        {/* Selected Faculty header banner */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-200/70">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-navy-100 text-navy-900 font-bold text-sm">
+              {currentItem.facultyName.charAt(0)}
+            </div>
+            <div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-bold text-navy-900">{currentItem.facultyName}</span>
+                {currentItem.employeeCode && (
+                  <span className="text-[10px] text-slate-400 font-mono">{currentItem.employeeCode}</span>
+                )}
+              </div>
+              <p className="text-xs font-medium text-slate-600">
+                {currentItem.subjectName} {currentItem.subjectCode ? `(${currentItem.subjectCode})` : ""}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="text-right">
+              <span className="text-sm font-bold text-navy-900">{currentItem.totalSubmittedCount}</span>
+              {currentItem.totalExpectedCount != null && currentItem.totalExpectedCount > 0 && (
+                <span className="text-xs text-slate-400 ml-1">/ {currentItem.totalExpectedCount}</span>
+              )}
+              <div className="text-[10px] text-slate-400">responses</div>
+            </div>
+            {currentItem.averageRating != null && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-3 py-1 text-xs font-bold text-amber-700 border border-amber-200">
+                <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                {currentItem.averageRating.toFixed(1)} / 5.0
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* 3 Question breakdown cards */}
+        <StaffQuestionBreakdownCards item={currentItem} />
+      </div>
+    </Card>
+  );
+}
+
 export function FeedbackReportsView() {
   const [report, setReport] = useState<FeedbackReportData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [selectedStaffKey, setSelectedStaffKey] = useState<string | null>(null);
 
   // Filters state
   const [selectedPublicationId, setSelectedPublicationId] = useState<number | undefined>(undefined);
@@ -819,6 +1223,17 @@ export function FeedbackReportsView() {
       }
       if (data.currentAcademicYear && !publishAcademicYear) {
         setPublishAcademicYear(data.currentAcademicYear);
+      }
+      const progress = data.submissionProgress;
+      if (progress && progress.length > 0) {
+        setSelectedStaffKey((prev) => {
+          if (prev && progress.some((p) => `${p.facultyName}|${p.subjectName}` === prev)) {
+            return prev;
+          }
+          const withSubs = progress.find((p) => p.totalSubmittedCount > 0);
+          const chosen = withSubs || progress[0];
+          return `${chosen.facultyName}|${chosen.subjectName}`;
+        });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error loading reports");
@@ -1622,196 +2037,22 @@ export function FeedbackReportsView() {
               </Card>
             </div>
 
-            {/* Questions Detailed Breakdown Grid */}
-            <div className="grid gap-6 lg:grid-cols-3">
-              {/* Card 1: Question 1 - Units Covered Breakdown */}
-              <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div>
-                    <span className="text-[11px] font-bold text-blue-700 uppercase tracking-wider">
-                      Question 1
-                    </span>
-                    <h3 className="text-base font-bold text-navy-900">Units Covered</h3>
-                  </div>
-                  <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                    Multiple Choice
-                  </span>
-                </div>
-
-                <div className="space-y-3 pt-1">
-                  {report.unitsCoveredDistribution.map((item) => (
-                    <div key={item.unit} className="space-y-1">
-                      <div className="flex items-center justify-between text-xs font-medium">
-                        <span className="text-slate-700">{item.label}</span>
-                        <div className="flex items-center gap-1.5 text-slate-500">
-                          <span className="font-semibold text-navy-900">{item.count}</span>
-                          <span>({item.percentage}%)</span>
-                        </div>
-                      </div>
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className="h-full rounded-full bg-blue-600 transition-all duration-500"
-                          style={{ width: `${item.percentage}%` }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="rounded-lg bg-slate-50 p-3 text-xs text-slate-600 border border-slate-100">
-                  <span className="font-semibold text-slate-800">Insight: </span>
-                  {report.stats.totalSubmissions > 0
-                    ? "Evaluation of units covered per academic curriculum pace."
-                    : "No responses submitted yet for this feedback session."}
-                </div>
-              </Card>
-
-              {/* Card 2: Question 2 - Rate Subject Faculty */}
-              <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div>
-                    <span className="text-[11px] font-bold text-amber-600 uppercase tracking-wider">
-                      Question 2
-                    </span>
-                    <h3 className="text-base font-bold text-navy-900">Rate Subject Faculty</h3>
-                  </div>
-                  <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                    Rating Scale (1-5)
-                  </span>
-                </div>
-
-                {/* Big Score Header */}
-                <div className="flex items-center gap-4 rounded-xl bg-amber-50/60 p-3.5 border border-amber-200/60">
-                  <div className="text-center">
-                    <span className="text-3xl font-black text-amber-900">
-                      {report.stats.averageRating != null ? report.stats.averageRating.toFixed(1) : "null"}
-                    </span>
-                    <span className="block text-[10px] text-amber-700 uppercase font-bold">
-                      Average
-                    </span>
-                  </div>
-                  <div className="border-l border-amber-200 pl-4 space-y-0.5">
-                    <div className="flex items-center gap-1 text-amber-500">
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <Star
-                          key={star}
-                          className={`h-4 w-4 ${
-                            report.stats.averageRating != null && star <= Math.round(report.stats.averageRating)
-                              ? "fill-amber-400 text-amber-400"
-                              : "text-amber-200"
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    <span className="text-xs text-amber-900 font-medium">
-                      {report.stats.totalSubmissions > 0
-                        ? `Based on ${report.stats.totalSubmissions} verified student reviews`
-                        : "0 verified student reviews"}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Rating Distribution Bars */}
-                <div className="space-y-2 pt-1">
-                  {report.facultyRatingDistribution.map((r) => (
-                    <div key={r.stars} className="flex items-center gap-2 text-xs">
-                      <span className="w-12 text-slate-700 font-medium">{r.stars} Stars</span>
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className="h-full rounded-full bg-amber-500 transition-all duration-500"
-                          style={{ width: `${r.percentage}%` }}
-                        />
-                      </div>
-                      <span className="w-14 text-right text-slate-500 font-mono">
-                        {r.count} ({r.percentage}%)
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              {/* Card 3: Question 3 - Unit Status */}
-              <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <div>
-                    <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider">
-                      Question 3
-                    </span>
-                    <h3 className="text-base font-bold text-navy-900">Unit Status</h3>
-                  </div>
-                  <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
-                    Syllabus Phase
-                  </span>
-                </div>
-
-                {/* Multi-segment bar */}
-                <div className="space-y-2 pt-1">
-                  <div className="flex h-3 w-full overflow-hidden rounded-full bg-slate-100">
-                    {report.stats.totalSubmissions > 0 ? (
-                      report.unitStatusDistribution.map((st) => (
-                        <div
-                          key={st.status}
-                          title={`${st.status}: ${st.percentage}%`}
-                          className={`h-full transition-all ${
-                            st.status === "Completed"
-                              ? "bg-emerald-500"
-                              : st.status === "Ending"
-                              ? "bg-blue-500"
-                              : st.status === "Middle"
-                              ? "bg-amber-400"
-                              : "bg-slate-400"
-                          }`}
-                          style={{ width: `${st.percentage}%` }}
-                        />
-                      ))
-                    ) : (
-                      <div className="h-full w-full bg-slate-200" title="No submissions yet" />
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2 pt-2">
-                    {report.unitStatusDistribution.map((st) => (
-                      <div
-                        key={st.status}
-                        className="rounded-lg border border-slate-100 bg-slate-50/80 p-2 text-xs"
-                      >
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`h-2 w-2 rounded-full ${
-                              st.status === "Completed"
-                                ? "bg-emerald-500"
-                                : st.status === "Ending"
-                                ? "bg-blue-500"
-                                : st.status === "Middle"
-                                ? "bg-amber-400"
-                                : "bg-slate-400"
-                            }`}
-                          />
-                          <span className="font-semibold text-slate-800">{st.status}</span>
-                        </div>
-                        <div className="mt-1 flex items-baseline justify-between text-slate-500">
-                          <span className="text-sm font-bold text-navy-900">{st.count}</span>
-                          <span>{st.percentage}%</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-lg bg-emerald-50/60 p-3 text-xs text-emerald-900 border border-emerald-100">
-                  <span className="font-semibold">Curriculum Progression: </span>
-                  {report.stats.completionRate != null
-                    ? `${report.stats.completionRate}% of topics are in ending or completed stages.`
-                    : "No student responses submitted yet for syllabus progression."}
-                </div>
-              </Card>
-            </div>
-
-            {/* ── Submission Progress Card ── */}
+            {/* ── Submission Progress Card (with per-staff Question Breakdown) ── */}
             {report.submissionProgress && report.submissionProgress.length > 0 && (
               <SubmissionProgressCard
                 progress={report.submissionProgress}
                 summary={report.submissionSummary}
+                selectedStaffKey={selectedStaffKey}
+                onSelectStaffKey={setSelectedStaffKey}
+              />
+            )}
+
+            {/* ── Staff-Wise Question Feedback Breakdown (Moved under Submission Progress) ── */}
+            {report.submissionProgress && report.submissionProgress.length > 0 && (
+              <StaffQuestionBreakdownSection
+                progress={report.submissionProgress}
+                selectedKey={selectedStaffKey}
+                onSelectKey={setSelectedStaffKey}
               />
             )}
 

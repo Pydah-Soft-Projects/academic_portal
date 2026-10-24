@@ -160,6 +160,26 @@ export type FeedbackReportData = {
     totalSubmittedCount: number;
     totalExpectedCount: number | null;
     overallStatus: "pending" | "partial" | "submitted";
+    averageRating: number | null;
+    averageUnitsCovered: number | null;
+    completionRate: number | null;
+    unitsCoveredDistribution: Array<{
+      unit: string;
+      label: string;
+      count: number;
+      percentage: number;
+    }>;
+    facultyRatingDistribution: Array<{
+      stars: number;
+      count: number;
+      percentage: number;
+    }>;
+    unitStatusDistribution: Array<{
+      status: string;
+      count: number;
+      percentage: number;
+      color: string;
+    }>;
   }>;
   submissionSummary: {
     totalAllocations: number;
@@ -1128,7 +1148,9 @@ export async function getStaffSubjectsForScope(filter: {
     params,
   );
 
-  return rows.map((r) => ({
+  const getStudentCount = await loadSectionHeadcountHelper();
+
+  const mapped = rows.map((r) => ({
     staffLinkId: r.staffLinkId ? Number(r.staffLinkId) : null,
     facultyName: r.facultyName || "Faculty Member",
     employeeCode: r.employeeCode || null,
@@ -1143,6 +1165,90 @@ export async function getStaffSubjectsForScope(filter: {
     academicYear: r.academicYear || null,
     batch: r.batch || null,
   }));
+
+  // Only return sections that have students enrolled in them (skip sections with 0 students)
+  return mapped.filter((item) => {
+    if (!item.sectionName) return true;
+    const cnt = getStudentCount(item.branchId, item.batch, item.sectionName);
+    if (cnt !== null && cnt === 0) return false;
+    return true;
+  });
+}
+
+/**
+ * Loads student headcount per section from student_database.
+ * Returns a lookup helper: getStudentCount(branchId, batch, sectionName)
+ * Returns null if headcount data is unavailable (so we don't accidentally hide valid sections),
+ * or the student count (0 if section has no students).
+ */
+async function loadSectionHeadcountHelper(): Promise<
+  (branchId: number | null | undefined, batch: string | null | undefined, sectionName: string | null | undefined) => number | null
+> {
+  type HeadcountRow = RowDataPacket & {
+    branch_id: number | null;
+    batch: string | null;
+    section_name: string;
+    student_count: number;
+  };
+
+  const countByBranchBatchSec = new Map<string, number>();
+  const countByBatchSec = new Map<string, number>();
+  const countBySec = new Map<string, number>();
+
+  try {
+    const headcounts = await queryStudent<HeadcountRow[]>(`
+      SELECT
+        COALESCE(ss.branch_id, s.branch_id) AS branch_id,
+        COALESCE(NULLIF(TRIM(ss.batch), ''), NULLIF(TRIM(s.batch), '')) AS batch,
+        UPPER(TRIM(COALESCE(NULLIF(TRIM(ss.section_name), ''), NULLIF(TRIM(s.section), '')))) AS section_name,
+        COUNT(DISTINCT s.id) AS student_count
+      FROM students s
+      LEFT JOIN student_sections ss ON ss.student_id = s.id
+      WHERE (ss.section_name IS NOT NULL AND ss.section_name != '')
+         OR (s.section IS NOT NULL AND s.section != '')
+      GROUP BY
+        COALESCE(ss.branch_id, s.branch_id),
+        COALESCE(NULLIF(TRIM(ss.batch), ''), NULLIF(TRIM(s.batch), '')),
+        UPPER(TRIM(COALESCE(NULLIF(TRIM(ss.section_name), ''), NULLIF(TRIM(s.section), ''))))
+    `).catch(() => []);
+
+    for (const h of headcounts) {
+      const sec = (h.section_name || "").trim().toUpperCase();
+      const count = Number(h.student_count) || 0;
+      if (!sec) continue;
+
+      if (h.branch_id && h.batch) {
+        const k1 = `${h.branch_id}|${String(h.batch).trim()}|${sec}`;
+        countByBranchBatchSec.set(k1, (countByBranchBatchSec.get(k1) ?? 0) + count);
+      }
+      if (h.batch) {
+        const k2 = `${String(h.batch).trim()}|${sec}`;
+        countByBatchSec.set(k2, (countByBatchSec.get(k2) ?? 0) + count);
+      }
+      countBySec.set(sec, (countBySec.get(sec) ?? 0) + count);
+    }
+  } catch {
+    // If student DB cannot be queried, count maps remain empty
+  }
+
+  // If no headcount data exists at all, return helper that returns null (unknown)
+  if (countBySec.size === 0) {
+    return () => null;
+  }
+
+  return (branchId, batch, sectionName) => {
+    if (!sectionName) return null; // unknown / all sections
+    const sec = sectionName.trim().toUpperCase();
+    if (branchId && batch) {
+      const k1 = `${branchId}|${String(batch).trim()}|${sec}`;
+      return countByBranchBatchSec.get(k1) ?? 0;
+    }
+    if (batch) {
+      const k2 = `${String(batch).trim()}|${sec}`;
+      return countByBatchSec.get(k2) ?? 0;
+    }
+    return countBySec.get(sec) ?? null;
+  };
 }
 
 // =========================================================================
@@ -1176,8 +1282,8 @@ export async function getFeedbackReportData(
     queryStudent<(RowDataPacket & { batch: string })[]>(
       `SELECT DISTINCT batch FROM student_sections WHERE batch IS NOT NULL AND batch != '' ORDER BY batch DESC`,
     ).catch(() => []),
-    queryStudent<(RowDataPacket & { name: string })[]>(
-      `SELECT DISTINCT name FROM student_sections WHERE name IS NOT NULL AND name != '' ORDER BY name ASC`,
+    queryStudent<(RowDataPacket & { section_name: string })[]>(
+      `SELECT DISTINCT section_name FROM student_sections WHERE section_name IS NOT NULL AND section_name != '' ORDER BY section_name ASC`,
     ).catch(() => []),
     listFeedbackForms(),
     listFeedbackPublications(),
@@ -1243,7 +1349,7 @@ export async function getFeedbackReportData(
     : ["2026", "2025", "2024", "2023", "2022"];
 
   const availableSections = sectionRows.length > 0
-    ? sectionRows.map((s) => String(s.name).trim().toUpperCase()).filter(Boolean)
+    ? sectionRows.map((s) => String(s.section_name).trim().toUpperCase()).filter(Boolean)
     : ["A", "B", "C", "D"];
 
   const availableYearsOfStudy = [1, 2, 3, 4];
@@ -1278,36 +1384,28 @@ export async function getFeedbackReportData(
   // 3b. Build submission progress from mapped staff subjects
   // Always query ALL responses (unfiltered) for the publication so progress is accurate
   const allPubResponses = targetPub
-    ? await queryAcademic<{ faculty_name: string | null; subject_name: string | null; section_name: string | null }[]>(
-        `SELECT faculty_name, subject_name, section_name FROM ap_feedback_responses WHERE publication_id = ?`,
+    ? await queryAcademic<ResponseRow[]>(
+        `SELECT * FROM ap_feedback_responses WHERE publication_id = ?`,
         [targetPub.id],
       ).catch(() => [])
     : [];
 
   // Count responses per faculty+subject+section
   const responseCountMap = new Map<string, number>();
+  // Group full responses by faculty+subject for individual question analytics
+  const responsesByFacultySubject = new Map<string, ResponseRow[]>();
+
   for (const r of allPubResponses) {
     const k = `${(r.faculty_name ?? "").trim()}|${(r.subject_name ?? "").trim()}|${(r.section_name ?? "all").trim()}`;
     responseCountMap.set(k, (responseCountMap.get(k) ?? 0) + 1);
+
+    const fKey = `${(r.faculty_name ?? "").trim()}|${(r.subject_name ?? "").trim()}`;
+    if (!responsesByFacultySubject.has(fKey)) responsesByFacultySubject.set(fKey, []);
+    responsesByFacultySubject.get(fKey)!.push(r);
   }
 
-  // Try to get student headcount per section from student_sections / student_enrollments
-  let sectionHeadcountMap = new Map<string, number>();
-  try {
-    type SectionCountRow = RowDataPacket & { section_name: string; student_count: number };
-    const headcounts = await queryAcademic<SectionCountRow[]>(
-      `SELECT ss.name AS section_name, COUNT(DISTINCT se.student_id) AS student_count
-       FROM student_sections ss
-       LEFT JOIN student_enrollments se ON se.section_id = ss.id
-       GROUP BY ss.name`,
-    ).catch(() => []);
-    for (const row of headcounts) {
-      const k = String(row.section_name ?? "").trim().toUpperCase();
-      if (k) sectionHeadcountMap.set(k, Number(row.student_count) || 0);
-    }
-  } catch {
-    sectionHeadcountMap = new Map();
-  }
+  // Real student headcount helper per section from student_database
+  const getStudentCount = await loadSectionHeadcountHelper();
 
   // Build submission progress grouped by faculty+subject (sections combined into one row)
   type GroupedEntry = FeedbackReportData["submissionProgress"][number];
@@ -1317,15 +1415,21 @@ export async function getFeedbackReportData(
     const seenSection = new Set<string>(); // dedup individual section entries
 
     for (const item of targetPub.mappedStaffSubjects) {
+      // Check expected students enrolled in this section for this branch/batch
+      const expectedCount = getStudentCount(item.branchId, item.batch, item.sectionName);
+
+      // CRITICAL: We only show sections if there are students in it.
+      // If headcount is known and 0, do NOT show or validate this section!
+      if (expectedCount !== null && expectedCount === 0) {
+        continue;
+      }
+
       const sectionDedupKey = `${item.facultyName}|${item.subjectName}|${item.sectionName ?? "all"}|${item.semester ?? "all"}|${item.batch ?? "all"}`;
       if (seenSection.has(sectionDedupKey)) continue;
       seenSection.add(sectionDedupKey);
 
       const responseKey = `${item.facultyName.trim()}|${item.subjectName.trim()}|${(item.sectionName ?? "all").trim()}`;
       const submittedCount = responseCountMap.get(responseKey) ?? 0;
-
-      const secKey = (item.sectionName ?? "").trim().toUpperCase();
-      const expectedCount = secKey ? (sectionHeadcountMap.get(secKey) ?? null) : null;
 
       const sectionStatus: "pending" | "partial" | "submitted" =
         submittedCount === 0
@@ -1346,6 +1450,12 @@ export async function getFeedbackReportData(
           totalSubmittedCount: 0,
           totalExpectedCount: 0,
           overallStatus: "pending",
+          averageRating: null,
+          averageUnitsCovered: null,
+          completionRate: null,
+          unitsCoveredDistribution: [],
+          facultyRatingDistribution: [],
+          unitStatusDistribution: [],
         });
       }
       const entry = groupMap.get(groupKey)!;
@@ -1367,14 +1477,93 @@ export async function getFeedbackReportData(
     }
   }
 
-  // Derive overallStatus for each group and convert to array
-  const submissionProgress: FeedbackReportData["submissionProgress"] = Array.from(groupMap.values()).map((entry) => {
-    let overallStatus: "pending" | "partial" | "submitted";
-    const allPending = entry.sections.every((s) => s.status === "pending");
-    const allSubmitted = entry.sections.every((s) => s.status === "submitted");
-    overallStatus = allPending ? "pending" : allSubmitted ? "submitted" : "partial";
-    return { ...entry, overallStatus };
-  });
+  const statusColorMap: Record<string, string> = {
+    Completed: "emerald",
+    Ending: "blue",
+    Middle: "amber",
+    Starting: "slate",
+  };
+
+  // Derive overallStatus and individual question breakdown for each faculty group
+  // Exclude any groups that have no valid sections with students
+  const submissionProgress: FeedbackReportData["submissionProgress"] = Array.from(groupMap.values())
+    .filter((entry) => entry.sections.length > 0)
+    .map((entry) => {
+      let overallStatus: "pending" | "partial" | "submitted";
+      const allPending = entry.sections.every((s) => s.status === "pending");
+      const allSubmitted = entry.sections.every((s) => s.status === "submitted");
+      overallStatus = allPending ? "pending" : allSubmitted ? "submitted" : "partial";
+
+      const staffResponses =
+        responsesByFacultySubject.get(`${entry.facultyName.trim()}|${entry.subjectName.trim()}`) || [];
+      const staffSubmissions = staffResponses.length;
+
+      let rSum = 0;
+      let rCount = 0;
+      let uSum = 0;
+      let uCount = 0;
+      let compCount = 0;
+      const uMap: Record<string, number> = { "1": 0, "2": 0, "3": 0, "4": 0, "5": 0 };
+      const rMap: Record<number, number> = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
+      const sMap: Record<string, number> = { Completed: 0, Ending: 0, Middle: 0, Starting: 0 };
+
+      for (const r of staffResponses) {
+        if (r.faculty_rating != null && r.faculty_rating > 0) {
+          const star = Math.min(5, Math.max(1, Math.round(Number(r.faculty_rating))));
+          rSum += star;
+          rCount++;
+          rMap[star] = (rMap[star] || 0) + 1;
+        }
+        if (r.units_covered) {
+          const num = parseInt(String(r.units_covered).trim(), 10);
+          if (!isNaN(num) && num >= 1 && num <= 5) {
+            uSum += num;
+            uCount++;
+            uMap[String(num)] = (uMap[String(num)] || 0) + 1;
+          }
+        }
+        if (r.unit_status) {
+          const st = String(r.unit_status).trim();
+          sMap[st] = (sMap[st] || 0) + 1;
+          if (st === "Completed" || st === "Ending") compCount++;
+        }
+      }
+
+      const averageRating = rCount > 0 ? Math.round((rSum / rCount) * 10) / 10 : null;
+      const averageUnitsCovered = uCount > 0 ? Math.round((uSum / uCount) * 10) / 10 : null;
+      const completionRate = staffSubmissions > 0 ? Math.round((compCount / staffSubmissions) * 100) : null;
+
+      const unitsCoveredDistribution = ["1", "2", "3", "4", "5"].map((u) => ({
+        unit: u,
+        label: `Unit ${u}`,
+        count: uMap[u] || 0,
+        percentage: staffSubmissions > 0 ? Math.round(((uMap[u] || 0) / staffSubmissions) * 100) : 0,
+      }));
+
+      const facultyRatingDistribution = [5, 4, 3, 2, 1].map((s) => ({
+        stars: s,
+        count: rMap[s] || 0,
+        percentage: rCount > 0 ? Math.round(((rMap[s] || 0) / rCount) * 100) : 0,
+      }));
+
+      const unitStatusDistribution = ["Completed", "Ending", "Middle", "Starting"].map((st) => ({
+        status: st,
+        count: sMap[st] || 0,
+        percentage: staffSubmissions > 0 ? Math.round(((sMap[st] || 0) / staffSubmissions) * 100) : 0,
+        color: statusColorMap[st] || "slate",
+      }));
+
+      return {
+        ...entry,
+        overallStatus,
+        averageRating,
+        averageUnitsCovered,
+        completionRate,
+        unitsCoveredDistribution,
+        facultyRatingDistribution,
+        unitStatusDistribution,
+      };
+    });
 
   // Sort: pending first, then partial, then submitted; then alphabetically by faculty name
   const statusOrder = { pending: 0, partial: 1, submitted: 2 };
