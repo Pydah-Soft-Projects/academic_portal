@@ -72,12 +72,13 @@ export type HodDashboardData = {
     status: "Behind" | "On Track";
   }>;
   feeDue: {
-    totalAmount: string;
-    totalStudents: number;
+    totalAmount: string | null;
+    totalStudents: number | null;
+    statusText?: string | null;
     buckets: {
-      fifteenDays: { students: number; amount: string };
-      thirtyDays: { students: number; amount: string };
-      sixtyDays: { students: number; amount: string };
+      fifteenDays: { students: number | null; amount: string | null };
+      thirtyDays: { students: number | null; amount: string | null };
+      sixtyDays: { students: number | null; amount: string | null };
     };
   };
   facultyStatus: {
@@ -243,8 +244,8 @@ export async function getHodDashboardData(
   const activeDeptShort = targetBranch ? targetBranch.name : "CSE";
   const activeDeptName = FRIENDLY_NAMES[activeDeptShort] || activeDeptShort;
 
-  // 3. Dynamic Student Attendance Metrics
-  const activeFilterCondition = `s.branch_id = ? AND (s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved', 'discontinued', 'inactive', 'cancelled', 'admission cancelled', 'course completed', 'course complated', 'detained'))`;
+  // 3. Dynamic Student Attendance Metrics (Regular Students Only)
+  const activeFilterCondition = `s.branch_id = ? AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'`;
 
   // Total enrolled students
   let totalStudents = 0;
@@ -723,26 +724,23 @@ export async function getHodDashboardData(
     feePendingStudentsCount = 0;
   }
 
-  const estimatedTotalFeeLakhs = Math.round(feePendingStudentsCount * 0.22 * 10) / 10;
-  const fifteenDaysCount = Math.round(feePendingStudentsCount * 0.3);
-  const thirtyDaysCount = Math.round(feePendingStudentsCount * 0.42);
-  const sixtyDaysCount = Math.max(0, feePendingStudentsCount - fifteenDaysCount - thirtyDaysCount);
-
+  // 7. Fee Due Age Wise (Pending completion of fee portal)
   const feeDue: HodDashboardData["feeDue"] = {
-    totalAmount: `₹ ${estimatedTotalFeeLakhs} L`,
-    totalStudents: feePendingStudentsCount,
+    totalAmount: null,
+    totalStudents: null,
+    statusText: "Fee portal integration pending",
     buckets: {
       fifteenDays: {
-        students: fifteenDaysCount,
-        amount: `₹ ${Math.round(fifteenDaysCount * 0.18 * 10) / 10} L`,
+        students: null,
+        amount: null,
       },
       thirtyDays: {
-        students: thirtyDaysCount,
-        amount: `₹ ${Math.round(thirtyDaysCount * 0.23 * 10) / 10} L`,
+        students: null,
+        amount: null,
       },
       sixtyDays: {
-        students: sixtyDaysCount,
-        amount: `₹ ${Math.round(sixtyDaysCount * 0.24 * 10) / 10} L`,
+        students: null,
+        amount: null,
       },
     },
   };
@@ -904,40 +902,142 @@ export async function getHodDashboardData(
     totalFailedMarksStudents = 0;
   }
 
-  // 10. Real Faculty Status
+  // 10. Real Faculty Status (derived strictly from class sessions conducted & posted by staff)
   let totalFaculty = 0;
   try {
-    const [staffRow] = await queryAcademic<CountRow[]>(
-      `SELECT COUNT(*) as total FROM ap_staff_link WHERE department_name LIKE ?`,
-      [`%${activeDeptShort}%`],
+    const [branchFacRow] = await queryAcademic<CountRow[]>(
+      `SELECT COUNT(DISTINCT faculty_staff_link_id) as total FROM ap_class_sessions WHERE branch_id = ? AND faculty_staff_link_id IS NOT NULL`,
+      [activeBranchId],
     );
-    totalFaculty = Number(staffRow?.total || 0);
+    totalFaculty = Number(branchFacRow?.total || 0);
   } catch {
     totalFaculty = 0;
   }
 
   if (totalFaculty === 0) {
     try {
-      const db = await getHrmsDb();
-      totalFaculty = await db.collection("employees").countDocuments({
-        status: { $ne: "Inactive" },
-      });
+      const [staffRow] = await queryAcademic<CountRow[]>(
+        `SELECT COUNT(*) as total FROM ap_staff_link WHERE department_name LIKE ?`,
+        [`%${activeDeptShort}%`],
+      );
+      totalFaculty = Number(staffRow?.total || 0);
     } catch {
-      totalFaculty = 28;
+      totalFaculty = 0;
     }
   }
 
-  const presentFaculty = Math.max(0, totalFaculty - pendingLeaveRequestsCount);
-  const facultyAttendancePct = totalFaculty > 0 ? Math.round((presentFaculty / totalFaculty) * 100) : 100;
+  // Today's scheduled class sessions for this department
+  type FacSessionRow = RowDataPacket & {
+    faculty_staff_link_id: number;
+    status: string;
+    post_id: number | null;
+  };
+
+  let todayFacSessions: FacSessionRow[] = [];
+  try {
+    todayFacSessions = await queryAcademic<FacSessionRow[]>(
+      `
+      SELECT cs.faculty_staff_link_id, cs.status, ap.id as post_id
+      FROM ap_class_sessions cs
+      LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+      WHERE cs.branch_id = ?
+        AND cs.session_date = ?
+        AND cs.faculty_staff_link_id IS NOT NULL
+      `,
+      [activeBranchId, effectiveAttendanceDate],
+    );
+  } catch {
+    todayFacSessions = [];
+  }
+
+  const scheduledFacSet = new Set<number>();
+  const postedFacSet = new Set<number>();
+  const cancelledFacSet = new Set<number>();
+
+  for (const s of todayFacSessions) {
+    scheduledFacSet.add(s.faculty_staff_link_id);
+    if (s.status === "posted" || s.status === "completed" || s.post_id != null) {
+      postedFacSet.add(s.faculty_staff_link_id);
+    } else if (s.status === "cancelled") {
+      cancelledFacSet.add(s.faculty_staff_link_id);
+    }
+  }
+
+  // A faculty member is classified as PRESENT when they conducted and posted attendance for their class
+  const presentFaculty = postedFacSet.size;
+  const absentFaculty = Array.from(cancelledFacSet).filter((id) => !postedFacSet.has(id)).length;
+  const onLeaveToday = pendingLeaveRequestsCount;
+
+  if (totalFaculty === 0 && scheduledFacSet.size > 0) {
+    totalFaculty = scheduledFacSet.size;
+  }
+
+  let facultyAttendancePct = 0;
+  if (scheduledFacSet.size > 0) {
+    facultyAttendancePct = Math.round((presentFaculty / scheduledFacSet.size) * 100);
+  } else if (totalFaculty > 0) {
+    // If no classes scheduled specifically today, calculate within semester window for this branch
+    try {
+      const [semFacRow] = await queryAcademic<
+        (RowDataPacket & { total_fac: number; posting_fac: number })[]
+      >(
+        `
+        SELECT 
+          COUNT(DISTINCT cs.faculty_staff_link_id) as total_fac,
+          COUNT(DISTINCT CASE WHEN cs.status IN ('posted', 'completed') THEN cs.faculty_staff_link_id ELSE NULL END) as posting_fac
+        FROM ap_class_sessions cs
+        WHERE cs.branch_id = ?
+          AND cs.session_date <= CURDATE()
+          AND cs.faculty_staff_link_id IS NOT NULL
+        `,
+        [activeBranchId],
+      );
+      const semTotal = Number(semFacRow?.total_fac || 0);
+      const semPosting = Number(semFacRow?.posting_fac || 0);
+      facultyAttendancePct = semTotal > 0 ? Math.round((semPosting / semTotal) * 100) : 0;
+    } catch {
+      facultyAttendancePct = 0;
+    }
+  }
+
+  // Dynamic trend vs previous session day
+  let facultyTrendStr = "Stable vs yesterday";
+  try {
+    const [prevFacDay] = await queryAcademic<
+      (RowDataPacket & { prev_scheduled: number; prev_present: number })[]
+    >(
+      `
+      SELECT 
+        COUNT(DISTINCT cs.faculty_staff_link_id) as prev_scheduled,
+        COUNT(DISTINCT CASE WHEN cs.status IN ('posted', 'completed') THEN cs.faculty_staff_link_id ELSE NULL END) as prev_present
+      FROM ap_class_sessions cs
+      WHERE cs.branch_id = ?
+        AND cs.session_date < ?
+        AND cs.faculty_staff_link_id IS NOT NULL
+      GROUP BY cs.session_date
+      ORDER BY cs.session_date DESC
+      LIMIT 1
+      `,
+      [activeBranchId, effectiveAttendanceDate],
+    );
+
+    if (prevFacDay && Number(prevFacDay.prev_scheduled) > 0) {
+      const prevPct = Math.round((Number(prevFacDay.prev_present) / Number(prevFacDay.prev_scheduled)) * 100);
+      const diff = facultyAttendancePct - prevPct;
+      facultyTrendStr = diff > 0 ? `+${diff}% vs yesterday` : diff < 0 ? `${diff}% vs yesterday` : "Stable vs yesterday";
+    }
+  } catch {
+    facultyTrendStr = "Stable vs yesterday";
+  }
 
   const facultyStatus: HodDashboardData["facultyStatus"] = {
     attendancePct: facultyAttendancePct,
     present: presentFaculty,
     total: totalFaculty,
-    trend: "+2% vs last week",
+    trend: facultyTrendStr,
     lateToday: 0,
-    onLeaveToday: pendingLeaveRequestsCount,
-    absentToday: 0,
+    onLeaveToday,
+    absentToday: absentFaculty,
   };
 
   // 11. Priority Items (Fully Dynamic from Live DB)
@@ -1149,15 +1249,15 @@ export async function getHodDashboardData(
     });
   }
 
-  // Item Type 9: Fee Dues
-  if (feeDue.totalStudents > 0) {
+  // Item Type 9: Fee Dues (Skipped while fee portal is under development)
+  if (feeDue.totalStudents != null && feeDue.totalStudents > 0) {
     priorityItems.push({
       id: pId++,
       title: `Fee follow-up: ${feeDue.totalAmount} overdue across ${feeDue.totalStudents} students`,
       severity: "low",
       badge: "Fee Clearance",
       type: "fee",
-      amount: feeDue.totalAmount,
+      amount: feeDue.totalAmount || undefined,
       count: feeDue.totalStudents,
       detail: `Fee collection outstanding in ${activeDeptName}. Remind proctors to coordinate with parents.`,
       link: "/fees",
@@ -1223,19 +1323,19 @@ export async function getHodDashboardData(
     eligibleCount = 0;
   }
 
-  if (eligibleCount === 0) eligibleCount = Math.round(totalStudents * 0.25);
-  const placedCount = Math.round(eligibleCount * 0.76);
-  const unplacedCount = Math.max(0, eligibleCount - placedCount);
-  const placedPct = eligibleCount > 0 ? Math.round((placedCount / eligibleCount) * 100) : 0;
+  // No mock multipliers. Pure data based on enrolled 4th year students.
+  const placedCount = 0;
+  const unplacedCount = eligibleCount;
+  const placedPct = 0;
 
   const placements: HodDashboardData["placements"] = {
-    placedPct,
-    placedCount,
+    placedPct: 0,
+    placedCount: 0,
     eligibleCount,
     unplacedCount,
-    trainingOngoing: Math.round(eligibleCount * 0.24),
-    offersReceived: Math.round(placedCount * 1.8),
-    upcomingDrives: 4,
+    trainingOngoing: 0,
+    offersReceived: 0,
+    upcomingDrives: 0,
   };
 
   return {

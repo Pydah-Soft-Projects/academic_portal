@@ -99,12 +99,13 @@ export type HodDashboardData = {
     status: "Behind" | "On Track";
   }>;
   feeDue: {
-    totalAmount: string;
-    totalStudents: number;
+    totalAmount: string | null;
+    totalStudents: number | null;
+    statusText?: string | null;
     buckets: {
-      fifteenDays: { students: number; amount: string };
-      thirtyDays: { students: number; amount: string };
-      sixtyDays: { students: number; amount: string };
+      fifteenDays: { students: number | null; amount: string | null };
+      thirtyDays: { students: number | null; amount: string | null };
+      sixtyDays: { students: number | null; amount: string | null };
     };
   };
   facultyStatus: {
@@ -255,12 +256,12 @@ export function HodDashboard({
   const sectionsAtRisk = data?.sectionsAtRisk || [];
   const subjectsBehind = data?.subjectsBehind || [];
   const feeDue = data?.feeDue || {
-    totalAmount: "₹ 0 L",
-    totalStudents: 0,
+    totalAmount: null,
+    totalStudents: null,
     buckets: {
-      fifteenDays: { students: 0, amount: "₹ 0 L" },
-      thirtyDays: { students: 0, amount: "₹ 0 L" },
-      sixtyDays: { students: 0, amount: "₹ 0 L" },
+      fifteenDays: { students: null, amount: null },
+      thirtyDays: { students: null, amount: null },
+      sixtyDays: { students: null, amount: null },
     },
   };
   const facultyStatus = data?.facultyStatus || {
@@ -1104,11 +1105,11 @@ export function HodDashboard({
                     </>
                   ) : (
                     <>
-                      <span className="text-xl sm:text-2xl font-black text-emerald-700">
-                        {feeDue.totalAmount}
+                      <span className="text-xl sm:text-2xl font-black text-slate-800">
+                        {feeDue.totalAmount != null ? feeDue.totalAmount : "null"}
                       </span>
                       <span className="text-xs font-semibold text-slate-500">
-                        ({feeDue.totalStudents} Students)
+                        {feeDue.totalStudents != null ? `(${feeDue.totalStudents} Students)` : "(null)"}
                       </span>
                     </>
                   )}
@@ -1133,11 +1134,11 @@ export function HodDashboard({
                 ) : (
                   <>
                     <p className="text-sm font-black text-amber-700 mt-1">
-                      {feeDue.buckets.fifteenDays.students}
+                      {feeDue.buckets.fifteenDays.students != null ? feeDue.buckets.fifteenDays.students : "null"}
                     </p>
                     <p className="text-[10px] font-medium text-slate-600">Students</p>
                     <p className="text-xs font-black text-amber-800 mt-1">
-                      {feeDue.buckets.fifteenDays.amount}
+                      {feeDue.buckets.fifteenDays.amount != null ? feeDue.buckets.fifteenDays.amount : "null"}
                     </p>
                   </>
                 )}
@@ -1158,11 +1159,11 @@ export function HodDashboard({
                 ) : (
                   <>
                     <p className="text-sm font-black text-orange-700 mt-1">
-                      {feeDue.buckets.thirtyDays.students}
+                      {feeDue.buckets.thirtyDays.students != null ? feeDue.buckets.thirtyDays.students : "null"}
                     </p>
                     <p className="text-[10px] font-medium text-slate-600">Students</p>
                     <p className="text-xs font-black text-orange-800 mt-1">
-                      {feeDue.buckets.thirtyDays.amount}
+                      {feeDue.buckets.thirtyDays.amount != null ? feeDue.buckets.thirtyDays.amount : "null"}
                     </p>
                   </>
                 )}
@@ -1183,11 +1184,11 @@ export function HodDashboard({
                 ) : (
                   <>
                     <p className="text-sm font-black text-rose-700 mt-1">
-                      {feeDue.buckets.sixtyDays.students}
+                      {feeDue.buckets.sixtyDays.students != null ? feeDue.buckets.sixtyDays.students : "null"}
                     </p>
                     <p className="text-[10px] font-medium text-slate-600">Students</p>
                     <p className="text-xs font-black text-rose-800 mt-1">
-                      {feeDue.buckets.sixtyDays.amount}
+                      {feeDue.buckets.sixtyDays.amount != null ? feeDue.buckets.sixtyDays.amount : "null"}
                     </p>
                   </>
                 )}
@@ -1641,24 +1642,27 @@ export function HodDashboard({
 
             {activeModal === "fee-due" && (
               <div className="space-y-3">
+                <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-800">
+                  The student fee management portal is currently under active development. Fee dues are shown as <strong>null</strong> until the fee portal is fully connected.
+                </div>
                 <p className="text-xs text-slate-600">
                   Total pending fee breakdown for <strong>{displayDept}</strong>:
                 </p>
                 <div className="grid grid-cols-3 gap-2 text-center text-xs">
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl">
                     <p className="font-bold text-slate-700">&gt; 15 Days</p>
-                    <p className="text-sm font-black text-amber-800 mt-1">{feeDue.buckets.fifteenDays.amount}</p>
-                    <p className="text-[10px] text-slate-500">{feeDue.buckets.fifteenDays.students} students</p>
+                    <p className="text-sm font-black text-amber-800 mt-1">{feeDue.buckets.fifteenDays.amount ?? "null"}</p>
+                    <p className="text-[10px] text-slate-500">{feeDue.buckets.fifteenDays.students != null ? `${feeDue.buckets.fifteenDays.students} students` : "null"}</p>
                   </div>
                   <div className="p-3 bg-orange-50 border border-orange-200 rounded-xl">
                     <p className="font-bold text-slate-700">&gt; 30 Days</p>
-                    <p className="text-sm font-black text-orange-800 mt-1">{feeDue.buckets.thirtyDays.amount}</p>
-                    <p className="text-[10px] text-slate-500">{feeDue.buckets.thirtyDays.students} students</p>
+                    <p className="text-sm font-black text-orange-800 mt-1">{feeDue.buckets.thirtyDays.amount ?? "null"}</p>
+                    <p className="text-[10px] text-slate-500">{feeDue.buckets.thirtyDays.students != null ? `${feeDue.buckets.thirtyDays.students} students` : "null"}</p>
                   </div>
                   <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl">
                     <p className="font-bold text-slate-700">&gt; 60 Days</p>
-                    <p className="text-sm font-black text-rose-800 mt-1">{feeDue.buckets.sixtyDays.amount}</p>
-                    <p className="text-[10px] text-slate-500">{feeDue.buckets.sixtyDays.students} students</p>
+                    <p className="text-sm font-black text-rose-800 mt-1">{feeDue.buckets.sixtyDays.amount ?? "null"}</p>
+                    <p className="text-[10px] text-slate-500">{feeDue.buckets.sixtyDays.students != null ? `${feeDue.buckets.sixtyDays.students} students` : "null"}</p>
                   </div>
                 </div>
               </div>

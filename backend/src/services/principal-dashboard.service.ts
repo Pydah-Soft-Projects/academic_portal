@@ -300,28 +300,63 @@ export async function getPrincipalDashboardData(
   const liveLeave = facultyLeaveCount;
   const liveOd = facultyOdCount;
 
-  // Faculty Attendance percentage (dynamic)
-  let facultyAttPct = 95;
-  if (totalTeachingFacultyCount > 0) {
-    if (livePresent > 0) {
-      facultyAttPct = Math.min(100, Math.round(((livePresent + (totalTeachingFacultyCount - livePresent - liveAbsent - liveLeave)) / totalTeachingFacultyCount) * 100));
-    } else if (liveAbsent > 0 || liveLeave > 0) {
-      facultyAttPct = Math.max(0, Math.round(((totalTeachingFacultyCount - liveAbsent - liveLeave) / totalTeachingFacultyCount) * 100));
-    }
-  }
+  // Faculty Attendance percentage (Dynamic from today's class sessions)
+  const scheduledFacultyTodayCount = scheduledFacultyIds.size + presentFacultyIds.size + cancelledFacultyIds.size;
+  const facultyAttPct =
+    scheduledFacultyTodayCount > 0
+      ? Math.round((livePresent / scheduledFacultyTodayCount) * 100)
+      : todaySessions.length > 0
+      ? Math.round((postedSessionsCount / todaySessions.length) * 100)
+      : 0;
 
   // Classes Affected Today
   const totalClassesAffected = cancelledSessionsCount + adjustedClassesCount + substituteClassesCount;
 
-  // 6. Student Attendance & Risk per Scoped Branch (Indexed Fast Query)
+  // 6. Semester Date Windows from student_database.semesters
+  type CourseSemRow = RowDataPacket & {
+    course_id: number;
+    sem_start: string | null;
+    sem_end: string | null;
+  };
+
+  let courseSemRanges: CourseSemRow[] = [];
+  try {
+    courseSemRanges = await queryStudent<CourseSemRow[]>(
+      `
+      SELECT 
+        sem.course_id,
+        MIN(sem.start_date) as sem_start,
+        MAX(sem.end_date) as sem_end
+      FROM semesters sem
+      WHERE sem.start_date IS NOT NULL AND sem.end_date IS NOT NULL
+        ${filters.semester && filters.semester !== "all" ? "AND sem.semester_number = ?" : "AND sem.start_date <= CURDATE() AND sem.end_date >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)"}
+      GROUP BY sem.course_id
+      `,
+      filters.semester && filters.semester !== "all" ? [Number(filters.semester)] : [],
+    );
+  } catch {
+    courseSemRanges = [];
+  }
+
+  // Find min active semester start date across scoped courses
+  let minActiveSemStart = new Date(Date.now() - 150 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  for (const r of courseSemRanges) {
+    if (r.sem_start && r.sem_start < minActiveSemStart) {
+      minActiveSemStart = r.sem_start;
+    }
+  }
+
+  // Student Attendance & Risk per Scoped Branch (Indexed Fast Query within Semester Window)
   type StudentBranchRow = RowDataPacket & {
     branch_id: number;
     total_students: number;
+    distinct_sections: number;
     avg_att: number | null;
   };
 
   let studentBranchStats: StudentBranchRow[] = [];
   const lowAttendanceMap = new Map<number, number>();
+  const branchSecCountMap = new Map<number, number>();
 
   if (activeBranchIds.length > 0) {
     try {
@@ -330,15 +365,31 @@ export async function getPrincipalDashboardData(
         SELECT 
           s.branch_id,
           COUNT(DISTINCT s.id) as total_students,
+          COUNT(DISTINCT NULLIF(TRIM(s.section), '')) as distinct_sections,
           ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(ar.id), 0), 1) as avg_att
         FROM students s
-        LEFT JOIN attendance_records ar ON ar.student_id = s.id AND ar.attendance_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+        LEFT JOIN attendance_records ar ON ar.student_id = s.id 
+          AND ar.attendance_date >= ?
+          AND ar.attendance_date <= CURDATE()
         WHERE s.branch_id IN (${branchInSql})
-          AND (s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved', 'discontinued', 'inactive', 'cancelled'))
+          AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
         GROUP BY s.branch_id
         `,
-        activeBranchIds,
+        [minActiveSemStart, ...activeBranchIds],
       );
+
+      const secRows = await queryStudent<
+        (RowDataPacket & { branch_id: number; sec_cnt: number })[]
+      >(
+        `
+        SELECT branch_id, COUNT(DISTINCT section_name) as sec_cnt
+        FROM student_sections
+        WHERE branch_id IN (${branchInSql})
+        GROUP BY branch_id
+        `,
+        activeBranchIds,
+      ).catch(() => []);
+      for (const r of secRows) branchSecCountMap.set(r.branch_id, Number(r.sec_cnt));
 
       const lowAttRows = await queryStudent<
         (RowDataPacket & { branch_id: number; below_65_count: number })[]
@@ -346,20 +397,23 @@ export async function getPrincipalDashboardData(
         `
         SELECT 
           s.branch_id,
-          COUNT(DISTINCT s.id) as below_65_count
+          COUNT(DISTINCT low.student_id) as below_65_count
         FROM students s
         JOIN (
           SELECT ar.student_id, ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as pct
           FROM attendance_records ar
           JOIN students st ON st.id = ar.student_id
           WHERE st.branch_id IN (${branchInSql})
-            AND ar.attendance_date >= DATE_SUB(CURDATE(), INTERVAL 60 DAY)
+            AND LOWER(TRIM(COALESCE(st.student_status, ''))) = 'regular'
+            AND ar.attendance_date >= ?
+            AND ar.attendance_date <= CURDATE()
           GROUP BY ar.student_id
           HAVING pct < 65
         ) low ON low.student_id = s.id
+        WHERE LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
         GROUP BY s.branch_id
         `,
-        activeBranchIds,
+        [...activeBranchIds, minActiveSemStart],
       );
 
       for (const r of lowAttRows) {
@@ -367,6 +421,197 @@ export async function getPrincipalDashboardData(
       }
     } catch {
       studentBranchStats = [];
+    }
+  }
+
+  // 6b. Year-wise student attendance & enrollment breakdown (Regular Students Only)
+  type YearStatRow = RowDataPacket & {
+    branch_id: number;
+    current_year: number;
+    batches: string | null;
+    total_students: number;
+    avg_att: number | null;
+  };
+
+  let yearStatsRows: YearStatRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      yearStatsRows = await queryStudent<YearStatRow[]>(
+        `
+        SELECT 
+          s.branch_id,
+          s.current_year,
+          GROUP_CONCAT(DISTINCT s.batch ORDER BY s.batch DESC SEPARATOR ', ') as batches,
+          COUNT(DISTINCT s.id) as total_students,
+          ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(ar.id), 0), 1) as avg_att
+        FROM students s
+        LEFT JOIN attendance_records ar ON ar.student_id = s.id 
+          AND ar.attendance_date >= ?
+          AND ar.attendance_date <= CURDATE()
+        WHERE s.branch_id IN (${branchInSql})
+          AND s.current_year IS NOT NULL
+          AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
+        GROUP BY s.branch_id, s.current_year
+        ORDER BY s.branch_id, s.current_year
+        `,
+        [minActiveSemStart, ...activeBranchIds],
+      );
+    } catch {
+      yearStatsRows = [];
+    }
+  }
+
+  // 6c. Year-wise risk students (<65% attendance - Regular Students Only)
+  type YearRiskRow = RowDataPacket & {
+    branch_id: number;
+    current_year: number;
+    below_65_count: number;
+  };
+  let yearRiskRows: YearRiskRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      yearRiskRows = await queryStudent<YearRiskRow[]>(
+        `
+        SELECT 
+          s.branch_id,
+          s.current_year,
+          COUNT(DISTINCT low.student_id) as below_65_count
+        FROM students s
+        JOIN (
+          SELECT ar.student_id, ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as pct
+          FROM attendance_records ar
+          JOIN students st ON st.id = ar.student_id
+          WHERE st.branch_id IN (${branchInSql})
+            AND LOWER(TRIM(COALESCE(st.student_status, ''))) = 'regular'
+            AND ar.attendance_date >= ?
+            AND ar.attendance_date <= CURDATE()
+          GROUP BY ar.student_id
+          HAVING pct < 65
+        ) low ON low.student_id = s.id
+        WHERE s.current_year IS NOT NULL
+          AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
+        GROUP BY s.branch_id, s.current_year
+        `,
+        [...activeBranchIds, minActiveSemStart],
+      );
+    } catch {
+      yearRiskRows = [];
+    }
+  }
+
+  // 6d. Year-wise faculty classes from Academic Portal
+  type YearFacultyStatRow = RowDataPacket & {
+    branch_id: number;
+    year_of_study: number;
+    total_classes: number;
+    classes_posted: number;
+    total_faculty: number;
+    faculty_who_posted: number;
+  };
+
+  let yearFacultyRows: YearFacultyStatRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      yearFacultyRows = await queryAcademic<YearFacultyStatRow[]>(
+        `
+        SELECT 
+          cs.branch_id,
+          COALESCE(tp.year_of_study, 0) as year_of_study,
+          COUNT(cs.id) as total_classes,
+          SUM(CASE WHEN cs.status IN ('posted', 'completed') THEN 1 ELSE 0 END) as classes_posted,
+          COUNT(DISTINCT cs.faculty_staff_link_id) as total_faculty,
+          COUNT(DISTINCT CASE WHEN cs.status IN ('posted', 'completed') THEN cs.faculty_staff_link_id ELSE NULL END) as faculty_who_posted
+        FROM ap_class_sessions cs
+        LEFT JOIN ap_timetable_plans tp ON tp.id = cs.plan_id
+        WHERE cs.branch_id IN (${branchInSql})
+          AND cs.session_date >= ?
+          AND cs.session_date <= CURDATE()
+        GROUP BY cs.branch_id, year_of_study
+        ORDER BY cs.branch_id, year_of_study
+        `,
+        [...activeBranchIds, minActiveSemStart],
+      );
+    } catch {
+      yearFacultyRows = [];
+    }
+  }
+
+  // 6e. Year-wise subjects behind schedule
+  type YearBehindRow = RowDataPacket & {
+    branch_id: number;
+    year_of_study: number;
+    behind_count: number;
+  };
+  let yearBehindRows: YearBehindRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      yearBehindRows = await queryAcademic<YearBehindRow[]>(
+        `
+        SELECT 
+          cs.branch_id,
+          COALESCE(tp.year_of_study, 0) as year_of_study,
+          COUNT(DISTINCT cs.subject_id) as behind_count
+        FROM ap_class_sessions cs
+        LEFT JOIN ap_timetable_plans tp ON tp.id = cs.plan_id
+        WHERE cs.branch_id IN (${branchInSql})
+          AND cs.subject_name IS NOT NULL
+        GROUP BY cs.branch_id, year_of_study
+        HAVING SUM(CASE WHEN cs.status = 'cancelled' THEN 1 ELSE 0 END) > 0
+        `,
+        activeBranchIds,
+      );
+    } catch {
+      yearBehindRows = [];
+    }
+  }
+
+  // 7. Real Faculty Attendance per Scoped Branch from Class Sessions
+  // A teaching faculty member is classified as PRESENT when they conduct their class and post attendance.
+  type BranchFacultyClassStatRow = RowDataPacket & {
+    branch_id: number;
+    total_classes_scheduled: number;
+    classes_posted: number;
+    classes_cancelled: number;
+    total_assigned_faculty: number;
+    faculty_who_posted: number;
+  };
+
+  const branchFacultyAttMap = new Map<number, number>();
+  if (activeBranchIds.length > 0) {
+    try {
+      const branchClassStats = await queryAcademic<BranchFacultyClassStatRow[]>(
+        `
+        SELECT 
+          cs.branch_id,
+          COUNT(cs.id) as total_classes_scheduled,
+          SUM(CASE WHEN cs.status IN ('posted', 'completed') THEN 1 ELSE 0 END) as classes_posted,
+          SUM(CASE WHEN cs.status = 'cancelled' THEN 1 ELSE 0 END) as classes_cancelled,
+          COUNT(DISTINCT cs.faculty_staff_link_id) as total_assigned_faculty,
+          COUNT(DISTINCT CASE WHEN cs.status IN ('posted', 'completed') THEN cs.faculty_staff_link_id ELSE NULL END) as faculty_who_posted
+        FROM ap_class_sessions cs
+        WHERE cs.branch_id IN (${branchInSql})
+          AND cs.session_date >= ?
+          AND cs.session_date <= CURDATE()
+        GROUP BY cs.branch_id
+        `,
+        [...activeBranchIds, minActiveSemStart],
+      );
+
+      for (const r of branchClassStats) {
+        const totalScheduled = Number(r.total_classes_scheduled || 0);
+        const totalFac = Number(r.total_assigned_faculty || 0);
+        const facPosted = Number(r.faculty_who_posted || 0);
+        const classesPosted = Number(r.classes_posted || 0);
+
+        if (totalScheduled > 0) {
+          const pct = totalFac > 0
+            ? Math.round((facPosted / totalFac) * 100)
+            : Math.round((classesPosted / totalScheduled) * 100);
+          branchFacultyAttMap.set(r.branch_id, pct);
+        }
+      }
+    } catch {
+      //
     }
   }
 
@@ -378,70 +623,34 @@ export async function getPrincipalDashboardData(
     cleared_students: number;
   };
 
-  let studentFeeStats: StudentFeeRow[] = [];
-  if (activeBranchIds.length > 0) {
-    try {
-      studentFeeStats = await queryStudent<StudentFeeRow[]>(
-        `
-        SELECT 
-          s.branch_id,
-          COUNT(DISTINCT s.id) as total_students,
-          SUM(CASE WHEN s.fee_status IN ('due', 'pending') THEN 1 ELSE 0 END) as pending_students,
-          SUM(CASE WHEN s.fee_status = 'no due' THEN 1 ELSE 0 END) as cleared_students
-        FROM students s
-        WHERE s.branch_id IN (${branchInSql})
-          AND (s.student_status IS NULL OR LOWER(s.student_status) NOT IN ('relieved', 'discontinued', 'inactive', 'cancelled'))
-        GROUP BY s.branch_id
-        `,
-        activeBranchIds,
-      );
-    } catch {
-      studentFeeStats = [];
-    }
-  }
-
-  // Calculate Fee Aggregates
-  const totalFeeStudents = studentFeeStats.reduce((sum, s) => sum + Number(s.total_students || 0), 0);
-  const totalClearedFeeStudents = studentFeeStats.reduce((sum, s) => sum + Number(s.cleared_students || 0), 0);
-  const totalPendingFeeStudents = studentFeeStats.reduce((sum, s) => sum + Number(s.pending_students || 0), 0);
-
-  const feeCollectionPct =
-    totalFeeStudents > 0
-      ? Math.round((totalClearedFeeStudents / totalFeeStudents) * 100)
-      : 76;
-
-  // Approximate standard fee rate (₹ 25,000 / student average)
-  const avgFeePerStudent = 25000;
-  const totalFeeAmountInLakhs = ((totalFeeStudents * avgFeePerStudent) / 100000).toFixed(1);
-  const collectedFeeAmountInLakhs = ((totalClearedFeeStudents * avgFeePerStudent) / 100000).toFixed(1);
-
-  const dues15 = Math.round(totalPendingFeeStudents * 0.35);
-  const dues30 = Math.round(totalPendingFeeStudents * 0.40);
-  const dues60 = Math.max(0, totalPendingFeeStudents - dues15 - dues30);
-
+  // 7. Student Fee Collection & Dues
+  // NOTE: Fee portal is currently under active development.
+  // Return null values so that dashboards reflect that the fee portal is not completed yet,
+  // avoiding hard-coded or approximated estimations.
   const feeCollectionAndDues = {
-    percentage: feeCollectionPct,
-    collectedAmount: `₹ ${collectedFeeAmountInLakhs} L`,
-    totalAmount: `${totalFeeAmountInLakhs} L`,
+    percentage: null as number | null,
+    collectedAmount: null as string | null,
+    totalAmount: null as string | null,
+    statusText: "Fee portal integration pending",
     pendingDues: [
       {
         label: "> 15 Days",
-        studentsCount: dues15,
-        amount: `₹ ${((dues15 * avgFeePerStudent) / 100000).toFixed(1)} L`,
+        studentsCount: null as number | null,
+        amount: null as string | null,
         color: "text-amber-500",
         bg: "bg-amber-50",
       },
       {
         label: "> 30 Days",
-        studentsCount: dues30,
-        amount: `₹ ${((dues30 * avgFeePerStudent) / 100000).toFixed(1)} L`,
+        studentsCount: null as number | null,
+        amount: null as string | null,
         color: "text-orange-500",
         bg: "bg-orange-50",
       },
       {
         label: "> 60 Days",
-        studentsCount: dues60,
-        amount: `₹ ${((dues60 * avgFeePerStudent) / 100000).toFixed(1)} L`,
+        studentsCount: null as number | null,
+        amount: null as string | null,
         color: "text-red-500",
         bg: "bg-red-50",
       },
@@ -456,8 +665,18 @@ export async function getPrincipalDashboardData(
     total_entries: number;
   };
 
+  type StudentMidFailRow = RowDataPacket & {
+    branch_id: number;
+    student_db_id: number;
+    failed_int1: number;
+    failed_int2: number;
+  };
+
   let internalMarksStats: InternalMarksRow[] = [];
   const submittedMarksBranchSet = new Set<number>();
+  const failedInt1Map = new Map<number, number>();
+  const failedInt2Map = new Map<number, number>();
+  const failedBothMap = new Map<number, number>();
 
   if (activeBranchIds.length > 0) {
     try {
@@ -465,8 +684,8 @@ export async function getPrincipalDashboardData(
         `
         SELECT 
           ims.branch_id,
-          SUM(CASE WHEN ime.marks_obtained >= 14 THEN 1 ELSE 0 END) as passed_entries,
-          SUM(CASE WHEN ime.marks_obtained < 14 THEN 1 ELSE 0 END) as failed_entries,
+          SUM(CASE WHEN ime.marks_obtained >= (ime.max_marks * 0.4) THEN 1 ELSE 0 END) as passed_entries,
+          SUM(CASE WHEN ime.marks_obtained < (ime.max_marks * 0.4) THEN 1 ELSE 0 END) as failed_entries,
           COUNT(ime.id) as total_entries
         FROM ap_internal_marks_submissions ims
         JOIN ap_internal_marks_entries ime ON ime.submission_id = ims.id
@@ -489,6 +708,30 @@ export async function getPrincipalDashboardData(
       for (const r of submittedRows) {
         submittedMarksBranchSet.add(r.branch_id);
       }
+
+      // Query real student-level failed internal assessments per branch
+      const studentMidFailRows = await queryAcademic<StudentMidFailRow[]>(
+        `
+        SELECT 
+          ims.branch_id,
+          ime.student_db_id,
+          SUM(CASE WHEN (ims.semester_number = 1 OR ims.semester_number IS NULL) AND ime.marks_obtained < (ime.max_marks * 0.4) THEN 1 ELSE 0 END) as failed_int1,
+          SUM(CASE WHEN ims.semester_number = 2 AND ime.marks_obtained < (ime.max_marks * 0.4) THEN 1 ELSE 0 END) as failed_int2
+        FROM ap_internal_marks_submissions ims
+        JOIN ap_internal_marks_entries ime ON ime.submission_id = ims.id
+        WHERE ims.branch_id IN (${branchInSql})
+        GROUP BY ims.branch_id, ime.student_db_id
+        `,
+        activeBranchIds,
+      );
+
+      for (const r of studentMidFailRows) {
+        if (Number(r.failed_int1) > 0) failedInt1Map.set(r.branch_id, (failedInt1Map.get(r.branch_id) || 0) + 1);
+        if (Number(r.failed_int2) > 0) failedInt2Map.set(r.branch_id, (failedInt2Map.get(r.branch_id) || 0) + 1);
+        if (Number(r.failed_int1) > 0 && Number(r.failed_int2) > 0) {
+          failedBothMap.set(r.branch_id, (failedBothMap.get(r.branch_id) || 0) + 1);
+        }
+      }
     } catch {
       internalMarksStats = [];
     }
@@ -497,39 +740,183 @@ export async function getPrincipalDashboardData(
   // Calculate branches with pending internal marks
   const branchesPendingMarksSubmission = scopedBranches.filter((b) => !submittedMarksBranchSet.has(b.id));
 
-  // 9. Department Academic Overview Table (Real Live Values)
-  const departmentOverview = scopedBranches.map((b) => {
+  // 9. Real Subjects Behind Schedule (computed directly from ap_class_sessions)
+  type SubjectBehindSessionRow = RowDataPacket & {
+    subject_id: number;
+    subject_name: string;
+    subject_code: string | null;
+    branch_id: number;
+    faculty_name: string | null;
+    total_scheduled: number;
+    conducted_count: number;
+    cancelled_count: number;
+  };
+
+  let realBehindSessionRows: SubjectBehindSessionRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      realBehindSessionRows = await queryAcademic<SubjectBehindSessionRow[]>(
+        `
+        SELECT 
+          cs.subject_id,
+          cs.subject_name,
+          cs.subject_code,
+          cs.branch_id,
+          sl.display_name as faculty_name,
+          COUNT(cs.id) as total_scheduled,
+          SUM(CASE WHEN cs.status IN ('posted', 'completed') THEN 1 ELSE 0 END) as conducted_count,
+          SUM(CASE WHEN cs.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count
+        FROM ap_class_sessions cs
+        LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
+        WHERE cs.subject_name IS NOT NULL
+          AND cs.branch_id IN (${branchInSql})
+        GROUP BY cs.subject_id, cs.subject_name, cs.subject_code, cs.branch_id, sl.display_name
+        HAVING cancelled_count > 0 OR (total_scheduled > 5 AND conducted_count < (total_scheduled * 0.6))
+        ORDER BY cancelled_count DESC, (conducted_count / total_scheduled) ASC
+        LIMIT 10
+        `,
+        activeBranchIds,
+      );
+    } catch {
+      realBehindSessionRows = [];
+    }
+  }
+
+  const subjectsBehindSchedule: Array<{
+    subject: string;
+    faculty: string;
+    dept: string;
+    delay: string;
+    status: string;
+  }> = [];
+
+  const branchBehindCountMap = new Map<number, number>();
+
+  for (const r of realBehindSessionRows) {
+    const b = scopedBranches.find((br) => br.id === r.branch_id);
+    const dept = b?.code || b?.name || "DEPT";
+    const total = Number(r.total_scheduled || 1);
+    const cancelled = Number(r.cancelled_count || 0);
+    const conducted = Number(r.conducted_count || 0);
+
+    let delayPct = 0;
+    if (cancelled > 0) {
+      delayPct = Math.min(100, Math.max(1, Math.round((cancelled / total) * 100)));
+    } else if (total > 5 && conducted < total * 0.5) {
+      delayPct = Math.min(100, Math.max(1, Math.round(((total * 0.5 - conducted) / total) * 100)));
+    }
+
+    const status = delayPct >= 10 ? "Behind" : "In Progress";
+
+    if (delayPct >= 10 || cancelled > 0) {
+      branchBehindCountMap.set(r.branch_id, (branchBehindCountMap.get(r.branch_id) || 0) + 1);
+    }
+
+    subjectsBehindSchedule.push({
+      subject: r.subject_name,
+      faculty: r.faculty_name || "Assigned Faculty",
+      dept,
+      delay: `${delayPct}%`,
+      status,
+    });
+  }
+
+  // Sort branches by active student enrollment so active academic departments are prioritized
+  const branchesSortedByEnrollment = [...scopedBranches].sort((a, b) => {
+    const aTotal = studentBranchStats.find((s) => s.branch_id === a.id)?.total_students || 0;
+    const bTotal = studentBranchStats.find((s) => s.branch_id === b.id)?.total_students || 0;
+    return bTotal - aTotal;
+  });
+
+  const activeEnrolledBranches = branchesSortedByEnrollment.filter(
+    (b) => (studentBranchStats.find((s) => s.branch_id === b.id)?.total_students || 0) > 0,
+  );
+  const branchesForCards = activeEnrolledBranches.length > 0 ? activeEnrolledBranches : branchesSortedByEnrollment;
+
+  const ROMAN_YEARS: Record<number, string> = { 1: "I", 2: "II", 3: "III", 4: "IV" };
+
+  // 10. Department Academic Overview Table (Real Live Values with Year Breakdown & Batches)
+  const departmentOverview = branchesSortedByEnrollment.map((b) => {
     const sStat = studentBranchStats.find((s) => s.branch_id === b.id);
     const mStat = internalMarksStats.find((m) => m.branch_id === b.id);
 
-    const bSessions = todaySessions.filter((s) => s.branch_id === b.id);
-    const bPosted = bSessions.filter((s) => s.status === "posted" || s.status === "completed").length;
-    const bTotal = bSessions.length;
-    const bFacAtt = bTotal > 0 ? Math.round((bPosted / bTotal) * 100) : 92;
+    const sAttVal = sStat?.avg_att != null ? Number(sStat.avg_att) : null;
+    const sAttStr = sAttVal != null ? `${Math.round(sAttVal)}%` : "null";
 
-    const sAttVal = sStat?.avg_att ? Number(sStat.avg_att) : 70.0;
-    const sAttStr = `${Math.round(sAttVal)}%`;
+    // Faculty/Staff Attendance for branch based on classes conducted/posted in semester window
+    const facAttVal = branchFacultyAttMap.has(b.id) ? branchFacultyAttMap.get(b.id)! : null;
+    const facAttStr = facAttVal != null ? `${facAttVal}%` : "null";
 
-    let passPctStr = "85% / 80%";
-    if (mStat && mStat.total_entries > 0) {
+    let passPctStr = "null";
+    // Only report internal marks pass percentage if substantial marks have been entered (> 20 entries)
+    // to avoid displaying a false 100% on a few sample test entries.
+    if (mStat && Number(mStat.total_entries) >= 20) {
       const p = Math.round((Number(mStat.passed_entries) / Number(mStat.total_entries)) * 100);
-      passPctStr = `${p}% / ${Math.max(0, p - 4)}%`;
+      passPctStr = `${p}%`;
     }
 
-    const bCancelled = bSessions.filter((s) => s.status === "cancelled").length;
+    const behindCount = branchBehindCountMap.get(b.id) || 0;
     const riskCount = lowAttendanceMap.get(b.id) || 0;
-    const behindCount = bCancelled > 0 ? bCancelled : Math.floor((b.id % 3) + 1);
+
+    // Resolve Year & Batch breakdown for this branch
+    const bYears = yearStatsRows.filter((y) => y.branch_id === b.id && y.current_year != null);
+    const activeYearsList = bYears.map((y) => ROMAN_YEARS[y.current_year] || String(y.current_year));
+    const allBatches = Array.from(
+      new Set(
+        bYears
+          .flatMap((y) => (y.batches ? y.batches.split(",").map((s) => s.trim()) : []))
+          .filter(Boolean)
+      )
+    ).join(", ");
+
+    const yearBreakdown = bYears.map((y) => {
+      const yrNum = y.current_year;
+      const yearLabel = `Year ${ROMAN_YEARS[yrNum] || yrNum}`;
+      const yrBatches = y.batches || "";
+      const yrAttVal = y.avg_att != null ? Math.round(Number(y.avg_att)) : null;
+      const yrAttStr = yrAttVal != null ? `${yrAttVal}%` : "null";
+
+      const facRow = yearFacultyRows.find((f) => f.branch_id === b.id && f.year_of_study === yrNum);
+      let yrFacStr = "null";
+      if (facRow && Number(facRow.total_classes) > 0) {
+        const facPosted = Number(facRow.faculty_who_posted || 0);
+        const facTotal = Number(facRow.total_faculty || 0);
+        const pct = facTotal > 0 ? Math.round((facPosted / facTotal) * 100) : 0;
+        yrFacStr = `${pct}%`;
+      }
+
+      const yrRisk = yearRiskRows.find((r) => r.branch_id === b.id && r.current_year === yrNum)?.below_65_count || 0;
+      const yrBehind = yearBehindRows.find((bh) => bh.branch_id === b.id && bh.year_of_study === yrNum)?.behind_count || 0;
+
+      return {
+        year: yrNum,
+        yearLabel,
+        batches: yrBatches,
+        students: Number(y.total_students || 0),
+        studentAttendance: yrAttStr,
+        facultyAttendance: yrFacStr,
+        internalPassPct: "null",
+        subjectsBehind: yrBehind,
+        riskStudents: yrRisk,
+      };
+    });
 
     return {
       department: b.code || b.name,
+      departmentName: b.name,
+      branchId: b.id,
+      years: activeYearsList,
+      batches: allBatches,
       studentAttendance: sAttStr,
-      facultyAttendance: `${bFacAtt}%`,
+      facultyAttendance: facAttStr,
       internalPassPct: passPctStr,
       subjectsBehind: behindCount,
       riskStudents: riskCount,
-      isStudentAttGood: sAttVal >= 75,
-      isFacultyAttGood: bFacAtt >= 90,
+      totalStudents: Number(sStat?.total_students || 0),
+      isStudentAttGood: sAttVal != null ? sAttVal >= 75 : false,
+      isFacultyAttGood: facAttVal != null ? facAttVal >= 80 : false,
       hasBehindRisk: behindCount >= 3,
+      yearBreakdown,
     };
   });
 
@@ -538,59 +925,44 @@ export async function getPrincipalDashboardData(
   const totalBelow65InScope = Array.from(lowAttendanceMap.values()).reduce((sum, count) => sum + count, 0);
   const branchesWithRiskCount = Array.from(lowAttendanceMap.values()).filter((c) => c > 0).length;
 
+  const validAvgAtts = studentBranchStats.map((s) => s.avg_att).filter((v): v is number => v != null);
   const avgStudentAttendance =
-    studentBranchStats.length > 0
-      ? Math.round(
-          studentBranchStats.reduce((sum, s) => sum + Number(s.avg_att || 0), 0) / studentBranchStats.length,
-        )
-      : 70;
+    validAvgAtts.length > 0
+      ? Math.round(validAvgAtts.reduce((sum, v) => sum + Number(v), 0) / validAvgAtts.length)
+      : 0;
 
-  // 10. Subjects Behind Schedule (computed from real scoped faculty and branches)
-  type SubjectBehindRow = {
-    subject: string;
-    faculty: string;
-    dept: string;
-    delay: string;
-    status: string;
-  };
-
-  const subjectsBehindSchedule: SubjectBehindRow[] = [];
-  const delaySubjects = scopedFaculties.slice(0, 4);
-  for (let i = 0; i < delaySubjects.length; i++) {
-    const item = delaySubjects[i];
-    const b = scopedBranches.find((br) => br.id === item.branch_id);
-    const delayPercent = 12 + ((i * 3 + item.staff_link_id) % 15);
-    subjectsBehindSchedule.push({
-      subject: item.subject_name || "Engineering Subject",
-      faculty: item.display_name || "Faculty Member",
-      dept: b?.code || b?.name || "DEPT",
-      delay: `${delayPercent}%`,
-      status: "Behind",
-    });
-  }
-
-  // 11. Student Attendance Section Wise Bar Chart Data
+  // 11. Student Attendance Section Wise Bar Chart Data (Actual Section Counts)
   const sectionColors = ["#10b981", "#14b8a6", "#eab308", "#f97316", "#3b82f6", "#8b5cf6"];
-  const sectionAttendance = scopedBranches.slice(0, 4).map((b, idx) => {
+  const sectionAttendance = branchesForCards.slice(0, 5).map((b, idx) => {
     const sStat = studentBranchStats.find((s) => s.branch_id === b.id);
-    const attVal = sStat?.avg_att ? Math.round(Number(sStat.avg_att)) : 70 - idx * 2;
-    const estSections = Math.max(1, Math.round(Number(sStat?.total_students || 60) / 45));
+    const attVal = sStat?.avg_att != null ? Math.round(Number(sStat.avg_att)) : null;
+    const realSections = Math.max(
+      Number(sStat?.distinct_sections || 0),
+      branchSecCountMap.get(b.id) || 0,
+      1,
+    );
 
     return {
       department: b.code || b.name,
-      sections: estSections,
-      attendance: attVal,
+      sections: realSections,
+      attendance: attVal != null ? attVal : 0,
       fill: sectionColors[idx % sectionColors.length],
-      label: `${attVal}%`,
+      label: attVal != null ? `${attVal}%` : "0%",
     };
   });
 
   // 12. Students at Risk (Department Wise) Table Data (Pure Live Data)
-  const studentsAtRiskDeptWise = scopedBranches.slice(0, 5).map((b) => {
+  const branchesSortedByRisk = [...branchesForCards].sort((a, b) => {
+    const aRisk = (lowAttendanceMap.get(a.id) || 0) + (failedBothMap.get(a.id) || 0);
+    const bRisk = (lowAttendanceMap.get(b.id) || 0) + (failedBothMap.get(b.id) || 0);
+    return bRisk - aRisk;
+  });
+
+  const studentsAtRiskDeptWise = branchesSortedByRisk.slice(0, 8).map((b) => {
     const below65 = lowAttendanceMap.get(b.id) || 0;
-    const failed1 = Math.round(below65 * 0.8);
-    const failed2 = Math.round(below65 * 0.65);
-    const failedBoth = Math.max(0, Math.round(below65 * 0.35));
+    const failed1 = failedInt1Map.get(b.id) || 0;
+    const failed2 = failedInt2Map.get(b.id) || 0;
+    const failedBoth = failedBothMap.get(b.id) || 0;
 
     return {
       department: b.code || b.name,
@@ -639,22 +1011,7 @@ export async function getPrincipalDashboardData(
     // Keep empty if query fails
   }
 
-  if (upcomingDeadlines.length === 0) {
-    upcomingDeadlines = [
-      {
-        day: "18",
-        month: "Oct",
-        title: "Semester Practical Examinations",
-        subtitle: scopedBranches.slice(0, 2).map((b) => b.code || b.name).join(", ") || "All Departments",
-      },
-      {
-        day: "26",
-        month: "Oct",
-        title: "End Semester Examinations",
-        subtitle: "Autonomous Exam Cell",
-      },
-    ];
-  }
+
 
   // 14. DYNAMIC PRIORITIES GENERATION (PURE LIVE SYSTEM DATA)
   // Each priority is constructed dynamically from real metrics in the user's scope.
@@ -695,15 +1052,18 @@ export async function getPrincipalDashboardData(
   }
 
   // Priority 2: Departments with Subjects Behind Schedule (>10% delay)
+  const delayedBranchIds = Array.from(branchBehindCountMap.entries())
+    .filter(([_, count]) => count > 0)
+    .map(([bId]) => bId);
   const delayedDeptNames = scopedBranches
-    .filter((b) => (b.id % 3) === 0 || branchCancelledMap.has(b.id))
-    .map((b) => b.code || b.name)
-    .slice(0, 3);
+    .filter((b) => delayedBranchIds.includes(b.id))
+    .map((b) => b.code || b.name);
+  const totalSubjectsBehind = subjectsBehindSchedule.filter((s) => s.status === "Behind").length;
 
-  if (delayedDeptNames.length > 0) {
+  if (totalSubjectsBehind > 0) {
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${delayedDeptNames.length} department${delayedDeptNames.length > 1 ? "s have" : " has"} subjects behind schedule (>10% delay) (${delayedDeptNames.join(", ")})`,
+      text: `${totalSubjectsBehind} subject${totalSubjectsBehind > 1 ? "s are" : " is"} behind schedule across ${delayedDeptNames.length} department${delayedDeptNames.length > 1 ? "s" : ""}${delayedDeptNames.length > 0 ? ` (${delayedDeptNames.join(", ")})` : ""}`,
       badgeColor: "bg-rose-500 text-white",
       href: "/timetables",
       category: "schedule",
@@ -737,12 +1097,24 @@ export async function getPrincipalDashboardData(
     });
   }
 
-  // Priority 4: Students Flagged for Academic Mentoring
-  const estFailedBoth = Math.round(totalBelow65InScope * 0.35);
-  if (estFailedBoth > 0) {
+  // Priority 4: Students Flagged for Academic Mentoring (Real DB internal marks)
+  const totalFailedBoth = Array.from(failedBothMap.values()).reduce((sum, count) => sum + count, 0);
+  const totalFailedInt1 = Array.from(failedInt1Map.values()).reduce((sum, count) => sum + count, 0);
+  const totalFailedInt2 = Array.from(failedInt2Map.values()).reduce((sum, count) => sum + count, 0);
+
+  if (totalFailedBoth > 0) {
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${estFailedBoth} students flagged for academic mentoring based on internal evaluations`,
+      text: `${totalFailedBoth} students flagged for academic mentoring based on double internal exam failures`,
+      badgeColor: "bg-orange-500 text-white",
+      href: "/internal-marks",
+      category: "marks",
+    });
+  } else if (totalFailedInt1 > 0 || totalFailedInt2 > 0) {
+    const singleFailTotal = totalFailedInt1 + totalFailedInt2;
+    dynamicPriorities.push({
+      id: priorityId++,
+      text: `${singleFailTotal} student marks entries flagged with internal exam failures requiring mentoring`,
       badgeColor: "bg-orange-500 text-white",
       href: "/internal-marks",
       category: "marks",
@@ -750,31 +1122,14 @@ export async function getPrincipalDashboardData(
   } else {
     dynamicPriorities.push({
       id: priorityId++,
-      text: `No students currently flagged with double internal exam failures`,
+      text: `No students currently flagged with internal exam failures`,
       badgeColor: "bg-slate-700 text-white",
       href: "/internal-marks",
       category: "marks",
     });
   }
 
-  // Priority 5: Fee Clearance & Dues (Live from student_db.students)
-  if (totalPendingFeeStudents > 0) {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `${totalPendingFeeStudents} students have fee clearance pending across ${scopedBranches.length} departments (₹ ${((totalPendingFeeStudents * avgFeePerStudent) / 100000).toFixed(1)} L)`,
-      badgeColor: "bg-blue-600 text-white",
-      href: "/reports",
-      category: "fee",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `All student fee clearances are up to date`,
-      badgeColor: "bg-emerald-600 text-white",
-      href: "/reports",
-      category: "fee",
-    });
-  }
+  // Priority: Fee Clearance & Dues — Skipped while fee portal is under active development
 
   // Priority 6: Faculty Leave / OD Requests Pending Approval (Live from ap_requests)
   if (pendingRequestsCount > 0 || facultyLeaveCount > 0) {
@@ -867,6 +1222,76 @@ export async function getPrincipalDashboardData(
     },
   };
 
+  // Compute dynamic trends for KPIs
+  let studentTrendStr = "— 0%";
+  let studentTrendPos = true;
+  if (activeBranchIds.length > 0) {
+    try {
+      const [prevStuRow] = await queryStudent<(RowDataPacket & { prev_avg: number | null })[]>(
+        `
+        SELECT 
+          ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / NULLIF(COUNT(ar.id), 0), 1) as prev_avg
+        FROM attendance_records ar
+        JOIN students s ON s.id = ar.student_id
+        WHERE s.branch_id IN (${branchInSql})
+          AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
+          AND ar.attendance_date < ?
+        GROUP BY ar.attendance_date
+        ORDER BY ar.attendance_date DESC
+        LIMIT 1
+        `,
+        [...activeBranchIds, selectedDateStr],
+      );
+      if (prevStuRow && prevStuRow.prev_avg != null) {
+        const diff = Math.round((avgStudentAttendance - Number(prevStuRow.prev_avg)) * 10) / 10;
+        if (diff > 0) {
+          studentTrendStr = `↑ ${diff}%`;
+          studentTrendPos = true;
+        } else if (diff < 0) {
+          studentTrendStr = `↓ ${Math.abs(diff)}%`;
+          studentTrendPos = false;
+        }
+      }
+    } catch {
+      // keep dynamic default
+    }
+  }
+
+  let facultyTrendStr = "— 0%";
+  let facultyTrendPos = true;
+  if (activeBranchIds.length > 0) {
+    try {
+      const [prevFacRow] = await queryAcademic<(RowDataPacket & { prev_scheduled: number; prev_present: number })[]>(
+        `
+        SELECT 
+          COUNT(DISTINCT cs.faculty_staff_link_id) as prev_scheduled,
+          COUNT(DISTINCT CASE WHEN cs.status IN ('posted', 'completed') THEN cs.faculty_staff_link_id ELSE NULL END) as prev_present
+        FROM ap_class_sessions cs
+        WHERE cs.branch_id IN (${branchInSql})
+          AND cs.session_date < ?
+          AND cs.faculty_staff_link_id IS NOT NULL
+        GROUP BY cs.session_date
+        ORDER BY cs.session_date DESC
+        LIMIT 1
+        `,
+        [...activeBranchIds, selectedDateStr],
+      );
+      if (prevFacRow && Number(prevFacRow.prev_scheduled) > 0) {
+        const prevPct = Math.round((Number(prevFacRow.prev_present) / Number(prevFacRow.prev_scheduled)) * 100);
+        const diff = facultyAttPct - prevPct;
+        if (diff > 0) {
+          facultyTrendStr = `↑ ${diff}%`;
+          facultyTrendPos = true;
+        } else if (diff < 0) {
+          facultyTrendStr = `↓ ${Math.abs(diff)}%`;
+          facultyTrendPos = false;
+        }
+      }
+    } catch {
+      // keep dynamic default
+    }
+  }
+
   return {
     meta: {
       roleTitle,
@@ -881,32 +1306,32 @@ export async function getPrincipalDashboardData(
     kpis: {
       studentAttendance: {
         value: `${avgStudentAttendance}%`,
-        trend: "↑ 1%",
-        trendPositive: true,
+        trend: studentTrendStr,
+        trendPositive: studentTrendPos,
         subtext: `${postedSessionsCount} of ${todaySessions.length || scheduledSessionsCount} classes posted`,
       },
       facultyAttendance: {
         value: `${facultyAttPct}%`,
-        trend: "↑ 1%",
-        trendPositive: true,
+        trend: facultyTrendStr,
+        trendPositive: facultyTrendPos,
         subtext: `Present: ${livePresent} | Leave: ${liveLeave} | Absent: ${liveAbsent}`,
       },
       studentsAtRisk: {
         value: `${totalBelow65InScope}`,
         subtext1: "< 65% attendance",
-        subtext2: `Failed I: ${Math.round(totalBelow65InScope * 0.8)} | Failed II: ${Math.round(totalBelow65InScope * 0.65)}`,
+        subtext2: `Failed I: ${totalFailedInt1} | Failed II: ${totalFailedInt2}`,
       },
       subjectsBehindSchedule: {
-        value: `${delayedDeptNames.length}`,
-        subtext: ">10% delay",
+        value: `${totalSubjectsBehind}`,
+        subtext: delayedDeptNames.length > 0 ? `${delayedDeptNames.length} dept${delayedDeptNames.length > 1 ? "s" : ""} affected` : "All on schedule",
       },
       feeCollection: {
-        value: `${feeCollectionAndDues.percentage}%`,
-        subtext: `${feeCollectionAndDues.collectedAmount} / ${feeCollectionAndDues.totalAmount}`,
+        value: "null",
+        subtext: "Fee portal integration pending",
       },
       placement: {
-        value: "64%",
-        subtext: `${Math.round(totalStudentsInScope * 0.3)} / ${Math.round(totalStudentsInScope * 0.45)} eligible`,
+        value: "null",
+        subtext: "Placement module integration pending",
       },
     },
     departmentOverview,

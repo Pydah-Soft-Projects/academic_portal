@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, Fragment } from "react";
 import Link from "next/link";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -17,6 +17,7 @@ import {
   Clock,
   Calendar,
   ChevronRight,
+  ChevronDown,
   ArrowUpRight,
   TrendingUp,
   FileText,
@@ -80,7 +81,7 @@ export type PrincipalDashboardData = {
       subtext: string;
     };
     feeCollection: {
-      value: string;
+      value: string | null;
       subtext: string;
     };
     placement: {
@@ -90,14 +91,30 @@ export type PrincipalDashboardData = {
   };
   departmentOverview: Array<{
     department: string;
+    departmentName?: string;
+    branchId?: number;
+    years?: string[];
+    batches?: string;
     studentAttendance: string;
     facultyAttendance: string;
     internalPassPct: string;
     subjectsBehind: number;
     riskStudents: number;
+    totalStudents?: number;
     isStudentAttGood?: boolean;
     isFacultyAttGood?: boolean;
     hasBehindRisk?: boolean;
+    yearBreakdown?: Array<{
+      year: number;
+      yearLabel: string;
+      batches: string;
+      students: number;
+      studentAttendance: string;
+      facultyAttendance: string;
+      internalPassPct: string;
+      subjectsBehind: number;
+      riskStudents: number;
+    }>;
   }>;
   priorities: Array<{
     id: number;
@@ -145,13 +162,14 @@ export type PrincipalDashboardData = {
     };
   };
   feeCollectionAndDues: {
-    percentage: number;
-    collectedAmount: string;
-    totalAmount: string;
+    percentage: number | null;
+    collectedAmount: string | null;
+    totalAmount: string | null;
+    statusText?: string | null;
     pendingDues: Array<{
       label: string;
-      studentsCount: number;
-      amount: string;
+      studentsCount: number | null;
+      amount: string | null;
       color: string;
       bg: string;
     }>;
@@ -184,6 +202,8 @@ export function PrincipalDashboard({
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [selectedPriority, setSelectedPriority] = useState<any | null>(null);
   const [approvalTab, setApprovalTab] = useState<"approvals" | "deadlines">("approvals");
+  const [overviewYearFilter, setOverviewYearFilter] = useState<number | "all">("all");
+  const [expandedDepts, setExpandedDepts] = useState<Record<string, boolean>>({});
 
   // Determine effective role title
   const isVp =
@@ -372,11 +392,16 @@ export function PrincipalDashboard({
             <div className="w-9 h-9 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
               <IndianRupee className="h-5 w-5" />
             </div>
+            {(current.kpis.feeCollection.value === null || current.kpis.feeCollection.value === "null") && (
+              <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+                Pending
+              </span>
+            )}
           </div>
           <span className="text-xs font-medium text-slate-500 block">Fee Collection</span>
           <div className="flex items-baseline gap-2 mt-1">
             <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-              {current.kpis.feeCollection.value}
+              {current.kpis.feeCollection.value != null ? current.kpis.feeCollection.value : "null"}
             </span>
           </div>
           <span className="text-[11px] text-slate-400 mt-1 block">
@@ -390,11 +415,16 @@ export function PrincipalDashboard({
             <div className="w-9 h-9 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
               <Briefcase className="h-5 w-5" />
             </div>
+            {(current.kpis.placement.value === null || current.kpis.placement.value === "null") && (
+              <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+                Pending
+              </span>
+            )}
           </div>
           <span className="text-xs font-medium text-slate-500 block">Placement (Eligible)</span>
           <div className="flex items-baseline gap-2 mt-1">
             <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-              {current.kpis.placement.value}
+              {current.kpis.placement.value != null ? current.kpis.placement.value : "null"}
             </span>
           </div>
           <span className="text-[11px] text-slate-400 mt-1 block">
@@ -410,20 +440,72 @@ export function PrincipalDashboard({
         {/* Left: Department Academic Overview (7 cols) */}
         <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
           <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
               <div className="flex items-center gap-2">
                 <BarChart3 className="h-5 w-5 text-blue-600" />
-                <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
-                  Department Academic Overview
-                </h2>
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold text-slate-900 tracking-tight">
+                    Department Academic Overview
+                  </h2>
+                  <span className="text-[11px] text-slate-400 block">
+                    Semester metrics across academic years &amp; batches
+                  </span>
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setActiveModal("dept_overview")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
-              >
-                View All &gt;
-              </button>
+
+              {/* Year Filter Pills, Expand All, & View All */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allExpanded = current.departmentOverview.every(
+                      (d) => expandedDepts[d.department]
+                    );
+                    const next: Record<string, boolean> = {};
+                    current.departmentOverview.forEach((d) => {
+                      next[d.department] = !allExpanded;
+                    });
+                    setExpandedDepts(next);
+                  }}
+                  className="text-[11px] font-semibold text-slate-500 hover:text-blue-600 px-2 py-0.5 rounded-md border border-slate-200/80 hover:border-blue-200 bg-white hover:bg-slate-50 transition cursor-pointer shadow-2xs"
+                  title="Toggle all department year breakdowns"
+                >
+                  {current.departmentOverview.every((d) => expandedDepts[d.department])
+                    ? "Collapse All"
+                    : "Expand All"}
+                </button>
+
+                <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg text-xs font-semibold">
+                  {[
+                    { label: "All Years", value: "all" },
+                    { label: "I Yr", value: 1 },
+                    { label: "II Yr", value: 2 },
+                    { label: "III Yr", value: 3 },
+                    { label: "IV Yr", value: 4 },
+                  ].map((tab) => (
+                    <button
+                      key={tab.label}
+                      type="button"
+                      onClick={() => setOverviewYearFilter(tab.value as any)}
+                      className={`px-2 py-0.5 rounded-md transition-all cursor-pointer text-[11px] ${
+                        overviewYearFilter === tab.value
+                          ? "bg-white text-blue-700 shadow-xs font-bold"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveModal("dept_overview")}
+                  className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer ml-1"
+                >
+                  View All &gt;
+                </button>
+              </div>
             </div>
 
             {/* Table */}
@@ -431,7 +513,7 @@ export function PrincipalDashboard({
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="text-slate-400 border-b border-slate-100 font-medium">
-                    <th className="py-2.5 font-medium">Department</th>
+                    <th className="py-2.5 font-medium">Department / Years</th>
                     <th className="py-2.5 font-medium">Student Attendance</th>
                     <th className="py-2.5 font-medium">Faculty Attendance</th>
                     <th className="py-2.5 font-medium">Internal Pass % (I / II)</th>
@@ -440,40 +522,220 @@ export function PrincipalDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100/70">
-                  {current.departmentOverview.map((row) => (
-                    <tr key={row.department} className="hover:bg-slate-50/60 transition-colors">
-                      <td className="py-2.5 font-bold text-slate-800">{row.department}</td>
-                      <td className="py-2.5">
-                        <span
-                          className={`font-bold ${
-                            parseInt(row.studentAttendance) < 80
-                              ? "text-amber-600"
-                              : "text-emerald-600"
+                  {current.departmentOverview.map((row) => {
+                    const isExpanded = Boolean(expandedDepts[row.department]);
+                    const hasYears = Boolean(row.yearBreakdown && row.yearBreakdown.length > 0);
+
+                    // When filtered by specific year (e.g. Year 2)
+                    const yearData =
+                      overviewYearFilter !== "all"
+                        ? row.yearBreakdown?.find((y) => y.year === overviewYearFilter)
+                        : null;
+
+                    const displayStuAtt = yearData ? yearData.studentAttendance : row.studentAttendance;
+                    const displayFacAtt = yearData ? yearData.facultyAttendance : row.facultyAttendance;
+                    const displayPassPct = yearData ? yearData.internalPassPct : row.internalPassPct;
+                    const displayBehind = yearData ? yearData.subjectsBehind : row.subjectsBehind;
+                    const displayRisk = yearData ? yearData.riskStudents : row.riskStudents;
+
+                    const toggleExpand = () => {
+                      if (hasYears) {
+                        setExpandedDepts((prev) => ({
+                          ...prev,
+                          [row.department]: !prev[row.department],
+                        }));
+                      }
+                    };
+
+                    return (
+                      <Fragment key={row.department}>
+                        <tr
+                          onClick={toggleExpand}
+                          className={`transition-colors group cursor-pointer ${
+                            isExpanded ? "bg-blue-50/30 hover:bg-blue-50/50" : "hover:bg-slate-50/70"
                           }`}
+                          title={
+                            hasYears
+                              ? isExpanded
+                                ? "Click to collapse year breakdown"
+                                : "Click to drop down year breakdown"
+                              : undefined
+                          }
                         >
-                          {row.studentAttendance}
-                        </span>
-                      </td>
-                      <td className="py-2.5 font-semibold text-slate-700">
-                        <span className={parseInt(row.facultyAttendance) >= 94 ? "text-emerald-600 font-bold" : ""}>
-                          {row.facultyAttendance}
-                        </span>
-                      </td>
-                      <td className="py-2.5 font-medium text-slate-600">{row.internalPassPct}</td>
-                      <td className="py-2.5 text-center">
-                        <span
-                          className={`font-bold ${
-                            row.subjectsBehind >= 3 ? "text-rose-600" : "text-slate-700"
-                          }`}
-                        >
-                          {row.subjectsBehind}
-                        </span>
-                      </td>
-                      <td className="py-2.5 text-center font-bold text-rose-600">
-                        {row.riskStudents}
-                      </td>
-                    </tr>
-                  ))}
+                          <td className="py-2.5 pr-2">
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleExpand();
+                                }}
+                                className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md transition-all text-left cursor-pointer group/dept ${
+                                  isExpanded
+                                    ? "bg-blue-100/80 text-blue-800 font-bold ring-1 ring-blue-300/60"
+                                    : "hover:bg-slate-100 text-slate-800 font-bold"
+                                }`}
+                              >
+                                <span className="text-xs sm:text-sm group-hover/dept:text-blue-600 transition-colors">
+                                  {row.department}
+                                </span>
+                                {hasYears && (
+                                  <ChevronDown
+                                    className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                                      isExpanded
+                                        ? "rotate-180 text-blue-600"
+                                        : "text-slate-400 group-hover/dept:text-blue-600"
+                                    }`}
+                                  />
+                                )}
+                              </button>
+                            </div>
+                            {row.years && row.years.length > 0 ? (
+                              <div className="flex items-center gap-1 mt-0.5 flex-wrap pl-1.5">
+                                <span className="text-[10px] text-slate-500 font-medium">
+                                  {overviewYearFilter === "all"
+                                    ? `Yrs: ${row.years.join(", ")}`
+                                    : `Yr ${overviewYearFilter}`}
+                                </span>
+                                {row.batches && (
+                                  <span className="text-[10px] text-slate-400">
+                                    · Batches: {row.batches}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="pl-1.5 mt-0.5">
+                                <span className="text-[10px] text-slate-400 italic">
+                                  No active regular batches
+                                </span>
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Student Attendance */}
+                          <td className="py-2.5">
+                            <span
+                              className={`font-bold ${
+                                displayStuAtt === "null" || isNaN(parseInt(displayStuAtt))
+                                  ? "text-slate-400 font-normal"
+                                  : parseInt(displayStuAtt) < 65
+                                  ? "text-rose-600"
+                                  : parseInt(displayStuAtt) < 75
+                                  ? "text-amber-600"
+                                  : "text-emerald-600"
+                              }`}
+                            >
+                              {displayStuAtt === "null" ? "—" : displayStuAtt}
+                            </span>
+                          </td>
+
+                          {/* Faculty Attendance */}
+                          <td className="py-2.5 font-semibold text-slate-700">
+                            <span
+                              className={
+                                displayFacAtt === "null" || isNaN(parseInt(displayFacAtt))
+                                  ? "text-slate-400 font-normal"
+                                  : parseInt(displayFacAtt) >= 80
+                                  ? "text-emerald-600 font-bold"
+                                  : ""
+                              }
+                            >
+                              {displayFacAtt === "null" ? "—" : displayFacAtt}
+                            </span>
+                          </td>
+
+                          {/* Internal Pass % */}
+                          <td className="py-2.5 font-medium text-slate-600">
+                            {displayPassPct === "null" ? (
+                              <span className="text-slate-400 font-normal italic text-[11px]">
+                                —
+                              </span>
+                            ) : (
+                              <span className="font-bold text-slate-800">{displayPassPct}</span>
+                            )}
+                          </td>
+
+                          {/* Subjects Behind */}
+                          <td className="py-2.5 text-center">
+                            <span
+                              className={`font-bold ${
+                                displayBehind >= 3 ? "text-rose-600" : "text-slate-700"
+                              }`}
+                            >
+                              {displayBehind}
+                            </span>
+                          </td>
+
+                          {/* Risk Students */}
+                          <td className="py-2.5 text-center font-bold text-rose-600">
+                            {displayRisk}
+                          </td>
+                        </tr>
+
+                        {/* Expandable Year-wise Breakdown Sub-Rows */}
+                        {isExpanded && row.yearBreakdown && (
+                          row.yearBreakdown.map((yr) => (
+                            <tr
+                              key={`${row.department}-yr-${yr.year}`}
+                              className={`text-[11px] border-l-2 border-l-blue-500 transition-colors ${
+                                overviewYearFilter === yr.year
+                                  ? "bg-blue-50/80 font-medium"
+                                  : "bg-slate-50/70 hover:bg-slate-100/60"
+                              }`}
+                            >
+                              <td className="py-2 pl-7 pr-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-slate-800">
+                                    {yr.yearLabel}
+                                  </span>
+                                  {yr.batches && (
+                                    <span className="text-[10px] text-slate-400">
+                                      ({yr.batches})
+                                    </span>
+                                  )}
+                                  <span className="text-[10px] bg-slate-200/70 text-slate-600 px-1.5 py-0.2 rounded font-medium">
+                                    {yr.students} students
+                                  </span>
+                                </div>
+                              </td>
+
+                              <td className="py-2">
+                                <span
+                                  className={`font-semibold ${
+                                    yr.studentAttendance === "null" || isNaN(parseInt(yr.studentAttendance))
+                                      ? "text-slate-400 font-normal"
+                                      : parseInt(yr.studentAttendance) < 65
+                                      ? "text-rose-600"
+                                      : parseInt(yr.studentAttendance) < 75
+                                      ? "text-amber-600"
+                                      : "text-emerald-600"
+                                  }`}
+                                >
+                                  {yr.studentAttendance === "null" ? "—" : yr.studentAttendance}
+                                </span>
+                              </td>
+
+                              <td className="py-2 font-medium text-slate-600">
+                                {yr.facultyAttendance === "null" ? "—" : yr.facultyAttendance}
+                              </td>
+
+                              <td className="py-2 text-slate-400 italic text-[10px]">
+                                {yr.internalPassPct === "null" ? "—" : yr.internalPassPct}
+                              </td>
+
+                              <td className="py-2 text-center font-medium text-slate-700">
+                                {yr.subjectsBehind}
+                              </td>
+
+                              <td className="py-2 text-center font-bold text-rose-600">
+                                {yr.riskStudents}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -623,15 +885,23 @@ export function PrincipalDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100/60">
-                  {current.studentsAtRiskDeptWise.map((r) => (
-                    <tr key={r.department} className="hover:bg-slate-50/50">
-                      <td className="py-2 font-bold text-slate-800">{r.department}</td>
-                      <td className="py-2 text-center font-bold text-rose-600">{r.below65Attendance}</td>
-                      <td className="py-2 text-center text-slate-600">{r.failedInternal1}</td>
-                      <td className="py-2 text-center text-slate-600">{r.failedInternal2}</td>
-                      <td className="py-2 text-center font-bold text-rose-600">{r.failedBoth}</td>
+                  {current.studentsAtRiskDeptWise.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-slate-400 font-medium">
+                        No departments currently have students flagged at risk
+                      </td>
                     </tr>
-                  ))}
+                  ) : (
+                    current.studentsAtRiskDeptWise.map((r) => (
+                      <tr key={r.department} className="hover:bg-slate-50/50">
+                        <td className="py-2 font-bold text-slate-800">{r.department}</td>
+                        <td className="py-2 text-center font-bold text-rose-600">{r.below65Attendance}</td>
+                        <td className="py-2 text-center text-slate-600">{r.failedInternal1}</td>
+                        <td className="py-2 text-center text-slate-600">{r.failedInternal2}</td>
+                        <td className="py-2 text-center font-bold text-rose-600">{r.failedBoth}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -669,19 +939,27 @@ export function PrincipalDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100/60">
-                  {current.subjectsBehindSchedule.map((s, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/50">
-                      <td className="py-2 font-semibold text-slate-800">{s.subject}</td>
-                      <td className="py-2 text-slate-600">{s.faculty}</td>
-                      <td className="py-2 font-medium text-slate-700">{s.dept}</td>
-                      <td className="py-2 text-center font-bold text-rose-600">{s.delay}</td>
-                      <td className="py-2 text-center">
-                        <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                          {s.status}
-                        </span>
+                  {current.subjectsBehindSchedule.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-slate-400 font-medium">
+                        All subjects on track with scheduled syllabus delivery
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    current.subjectsBehindSchedule.map((s, idx) => (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="py-2 font-semibold text-slate-800">{s.subject}</td>
+                        <td className="py-2 text-slate-600">{s.faculty}</td>
+                        <td className="py-2 font-medium text-slate-700">{s.dept}</td>
+                        <td className="py-2 text-center font-bold text-rose-600">{s.delay}</td>
+                        <td className="py-2 text-center">
+                          <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                            {s.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -828,8 +1106,12 @@ export function PrincipalDashboard({
                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   />
                   <path
-                    className="text-emerald-500"
-                    strokeDasharray={`${current.feeCollectionAndDues.percentage}, 100`}
+                    className={current.feeCollectionAndDues.percentage != null ? "text-emerald-500" : "text-slate-200"}
+                    strokeDasharray={
+                      current.feeCollectionAndDues.percentage != null
+                        ? `${current.feeCollectionAndDues.percentage}, 100`
+                        : "0, 100"
+                    }
                     strokeWidth="3.5"
                     strokeLinecap="round"
                     stroke="currentColor"
@@ -837,47 +1119,55 @@ export function PrincipalDashboard({
                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   />
                 </svg>
-                <span className="absolute font-black text-sm text-slate-800">
-                  {current.feeCollectionAndDues.percentage}%
+                <span className="absolute font-black text-xs sm:text-sm text-slate-700">
+                  {current.feeCollectionAndDues.percentage != null ? `${current.feeCollectionAndDues.percentage}%` : "null"}
                 </span>
               </div>
 
               <div>
                 <span className="text-[11px] font-medium text-slate-500 block">Collected</span>
                 <span className="text-xl font-extrabold text-slate-900 tracking-tight block">
-                  {current.feeCollectionAndDues.collectedAmount}
+                  {current.feeCollectionAndDues.collectedAmount != null
+                    ? current.feeCollectionAndDues.collectedAmount
+                    : "null"}
                 </span>
                 <span className="text-xs text-slate-400 block">
-                  of {current.feeCollectionAndDues.totalAmount}
+                  {current.feeCollectionAndDues.totalAmount != null
+                    ? `of ${current.feeCollectionAndDues.totalAmount}`
+                    : "of null"}
                 </span>
               </div>
             </div>
 
             {/* Pending Dues Section */}
             <div className="mt-4 pt-3 border-t border-slate-100">
-              <span className="text-[11px] font-semibold text-slate-600 block mb-2">
-                Pending Dues (No. of Students)
-              </span>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-semibold text-slate-600 block">
+                  Pending Dues (No. of Students)
+                </span>
+                <span className="text-[10px] font-medium text-slate-400">
+                  Fee portal pending
+                </span>
+              </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 {current.feeCollectionAndDues.pendingDues.map((due) => (
                   <div key={due.label} className={`${due.bg} p-2 rounded-lg border border-slate-100`}>
                     <span className="text-[10px] text-slate-500 block">{due.label}</span>
                     <span className={`text-sm font-extrabold block ${due.color}`}>
-                      {due.studentsCount}
+                      {due.studentsCount != null ? due.studentsCount : "null"}
                     </span>
-                    <span className="text-[10px] text-slate-500 font-medium block">{due.amount}</span>
+                    <span className="text-[10px] text-slate-500 font-medium block">
+                      {due.amount != null ? due.amount : "null"}
+                    </span>
                   </div>
                 ))}
               </div>
             </div>
 
             <div className="mt-4 flex justify-end">
-              <Link
-                href="/reports"
-                className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:text-blue-700"
-              >
-                View Fee Due Report &rarr;
-              </Link>
+              <span className="text-[11px] text-slate-400 italic">
+                Fee portal module integration pending
+              </span>
             </div>
           </div>
         </div>
@@ -1016,11 +1306,35 @@ export function PrincipalDashboard({
               )}
 
               {activeModal === "dept_overview" && (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto space-y-2">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                    <span className="text-xs text-slate-500 font-medium">
+                      Click any department to drop down year-wise metrics
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const allExpanded = current.departmentOverview.every(
+                          (d) => expandedDepts[d.department]
+                        );
+                        const next: Record<string, boolean> = {};
+                        current.departmentOverview.forEach((d) => {
+                          next[d.department] = !allExpanded;
+                        });
+                        setExpandedDepts(next);
+                      }}
+                      className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 px-2 py-0.5 rounded border border-blue-200 bg-blue-50/50 hover:bg-blue-50 transition cursor-pointer"
+                    >
+                      {current.departmentOverview.every((d) => expandedDepts[d.department])
+                        ? "Collapse All"
+                        : "Expand All"}
+                    </button>
+                  </div>
+
                   <table className="w-full text-xs text-left">
                     <thead>
-                      <tr className="border-b border-slate-200 text-slate-500">
-                        <th className="py-2">Department</th>
+                      <tr className="border-b border-slate-200 text-slate-500 font-medium">
+                        <th className="py-2">Department / Years</th>
                         <th className="py-2">Student Attendance</th>
                         <th className="py-2">Faculty Attendance</th>
                         <th className="py-2">Internal Pass %</th>
@@ -1029,16 +1343,136 @@ export function PrincipalDashboard({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {current.departmentOverview.map((row) => (
-                        <tr key={row.department}>
-                          <td className="py-2.5 font-bold text-slate-800">{row.department}</td>
-                          <td className="py-2.5 font-bold text-emerald-600">{row.studentAttendance}</td>
-                          <td className="py-2.5 font-semibold text-slate-700">{row.facultyAttendance}</td>
-                          <td className="py-2.5 text-slate-600">{row.internalPassPct}</td>
-                          <td className="py-2.5 text-center font-bold text-rose-600">{row.subjectsBehind}</td>
-                          <td className="py-2.5 text-center font-bold text-rose-600">{row.riskStudents}</td>
-                        </tr>
-                      ))}
+                      {current.departmentOverview.map((row) => {
+                        const isExpanded = Boolean(expandedDepts[row.department]);
+                        const hasYears = Boolean(row.yearBreakdown && row.yearBreakdown.length > 0);
+                        const toggleExpand = () => {
+                          if (hasYears) {
+                            setExpandedDepts((prev) => ({
+                              ...prev,
+                              [row.department]: !prev[row.department],
+                            }));
+                          }
+                        };
+
+                        return (
+                          <Fragment key={row.department}>
+                            <tr
+                              onClick={toggleExpand}
+                              className={`transition-colors group cursor-pointer ${
+                                isExpanded ? "bg-blue-50/30 hover:bg-blue-50/50" : "hover:bg-slate-50/70"
+                              }`}
+                              title={
+                                hasYears
+                                  ? isExpanded
+                                    ? "Click to collapse year breakdown"
+                                    : "Click to drop down year breakdown"
+                                  : undefined
+                              }
+                            >
+                              <td className="py-2.5 font-bold text-slate-800">
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      toggleExpand();
+                                    }}
+                                    className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-md transition-all text-left cursor-pointer group/dept ${
+                                      isExpanded
+                                        ? "bg-blue-100/80 text-blue-800 font-bold ring-1 ring-blue-300/60"
+                                        : "hover:bg-slate-100 text-slate-800 font-bold"
+                                    }`}
+                                  >
+                                    <span className="text-xs sm:text-sm group-hover/dept:text-blue-600 transition-colors">
+                                      {row.department}
+                                    </span>
+                                    {hasYears && (
+                                      <ChevronDown
+                                        className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                                          isExpanded
+                                            ? "rotate-180 text-blue-600"
+                                            : "text-slate-400 group-hover/dept:text-blue-600"
+                                        }`}
+                                      />
+                                    )}
+                                  </button>
+                                </div>
+                                {row.years && row.years.length > 0 ? (
+                                  <div className="flex items-center gap-1 mt-0.5 flex-wrap pl-1.5">
+                                    <span className="text-[10px] text-slate-500 font-medium">
+                                      Yrs: {row.years.join(", ")}
+                                    </span>
+                                    {row.batches && (
+                                      <span className="text-[10px] text-slate-400">
+                                        · Batches: {row.batches}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="pl-1.5 mt-0.5">
+                                    <span className="text-[10px] text-slate-400 italic">
+                                      No active regular batches
+                                    </span>
+                                  </div>
+                                )}
+                              </td>
+                              <td className="py-2.5 font-bold text-emerald-600">
+                                {row.studentAttendance === "null" ? "—" : row.studentAttendance}
+                              </td>
+                              <td className="py-2.5 font-semibold text-slate-700">
+                                {row.facultyAttendance === "null" ? "—" : row.facultyAttendance}
+                              </td>
+                              <td className="py-2.5 text-slate-600">
+                                {row.internalPassPct === "null" ? "—" : row.internalPassPct}
+                              </td>
+                              <td className="py-2.5 text-center font-bold text-rose-600">{row.subjectsBehind}</td>
+                              <td className="py-2.5 text-center font-bold text-rose-600">{row.riskStudents}</td>
+                            </tr>
+
+                            {/* Modal Child Breakdown Rows */}
+                            {isExpanded && row.yearBreakdown && (
+                              row.yearBreakdown.map((yr) => (
+                                <tr
+                                  key={`${row.department}-modal-yr-${yr.year}`}
+                                  className="bg-slate-50/70 text-[11px] border-l-2 border-l-blue-500 hover:bg-slate-100/60 transition-colors"
+                                >
+                                  <td className="py-2 pl-7 pr-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-bold text-slate-800">
+                                        {yr.yearLabel}
+                                      </span>
+                                      {yr.batches && (
+                                        <span className="text-[10px] text-slate-400">
+                                          ({yr.batches})
+                                        </span>
+                                      )}
+                                      <span className="text-[10px] bg-slate-200/70 text-slate-600 px-1.5 py-0.2 rounded font-medium">
+                                        {yr.students} students
+                                      </span>
+                                    </div>
+                                  </td>
+                                  <td className="py-2 font-semibold text-emerald-600">
+                                    {yr.studentAttendance === "null" ? "—" : yr.studentAttendance}
+                                  </td>
+                                  <td className="py-2 font-medium text-slate-600">
+                                    {yr.facultyAttendance === "null" ? "—" : yr.facultyAttendance}
+                                  </td>
+                                  <td className="py-2 text-slate-400 italic text-[10px]">
+                                    {yr.internalPassPct === "null" ? "—" : yr.internalPassPct}
+                                  </td>
+                                  <td className="py-2 text-center font-medium text-slate-700">
+                                    {yr.subjectsBehind}
+                                  </td>
+                                  <td className="py-2 text-center font-bold text-rose-600">
+                                    {yr.riskStudents}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </Fragment>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1046,47 +1480,70 @@ export function PrincipalDashboard({
 
               {activeModal === "subjects_behind" && (
                 <div className="space-y-3">
-                  {current.subjectsBehindSchedule.map((s, i) => (
-                    <div key={i} className="p-3 bg-slate-50 rounded-xl flex items-center justify-between">
-                      <div>
-                        <span className="font-bold text-xs text-slate-900 block">{s.subject}</span>
-                        <span className="text-[11px] text-slate-500 block">
-                          Faculty: {s.faculty} | Dept: {s.dept}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-xs font-bold text-rose-600 block">Delay: {s.delay}</span>
-                        <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                          {s.status}
-                        </span>
-                      </div>
+                  {current.subjectsBehindSchedule.length === 0 ? (
+                    <div className="p-8 text-center text-slate-400 font-medium bg-slate-50 rounded-xl">
+                      All subjects on track with scheduled syllabus delivery
                     </div>
-                  ))}
+                  ) : (
+                    current.subjectsBehindSchedule.map((s, i) => (
+                      <div key={i} className="p-3 bg-slate-50 rounded-xl flex items-center justify-between">
+                        <div>
+                          <span className="font-bold text-xs text-slate-900 block">{s.subject}</span>
+                          <span className="text-[11px] text-slate-500 block">
+                            Faculty: {s.faculty} | Dept: {s.dept}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-bold text-rose-600 block">Delay: {s.delay}</span>
+                          <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                            {s.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
 
               {activeModal === "fee_dues" && (
                 <div className="space-y-4">
-                  <div className="p-4 bg-emerald-50/60 rounded-xl border border-emerald-100 flex items-center justify-between">
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-amber-800 flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                    <span>
+                      The student fee management portal is currently under active development. Fee metrics are shown as <strong>null</strong> until the fee portal is fully connected.
+                    </span>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
                     <div>
                       <span className="text-xs text-slate-600 block">Total Fee Target</span>
-                      <span className="text-xl font-black text-slate-900">{current.feeCollectionAndDues.totalAmount}</span>
+                      <span className="text-xl font-black text-slate-900">
+                        {current.feeCollectionAndDues.totalAmount != null ? current.feeCollectionAndDues.totalAmount : "null"}
+                      </span>
                     </div>
                     <div>
                       <span className="text-xs text-slate-600 block">Total Collected</span>
-                      <span className="text-xl font-black text-emerald-600">{current.feeCollectionAndDues.collectedAmount}</span>
+                      <span className="text-xl font-black text-emerald-600">
+                        {current.feeCollectionAndDues.collectedAmount != null ? current.feeCollectionAndDues.collectedAmount : "null"}
+                      </span>
                     </div>
                     <div>
                       <span className="text-xs text-slate-600 block">Collection Rate</span>
-                      <span className="text-xl font-black text-slate-900">{current.feeCollectionAndDues.percentage}%</span>
+                      <span className="text-xl font-black text-slate-900">
+                        {current.feeCollectionAndDues.percentage != null ? `${current.feeCollectionAndDues.percentage}%` : "null"}
+                      </span>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3">
                     {current.feeCollectionAndDues.pendingDues.map((d) => (
                       <div key={d.label} className={`${d.bg} p-3 rounded-xl border border-slate-200 text-center`}>
                         <span className="text-xs text-slate-600 block font-medium">{d.label}</span>
-                        <span className={`text-lg font-black block ${d.color}`}>{d.studentsCount} Students</span>
-                        <span className="text-xs font-bold text-slate-700">{d.amount}</span>
+                        <span className={`text-lg font-black block ${d.color}`}>
+                          {d.studentsCount != null ? `${d.studentsCount} Students` : "null"}
+                        </span>
+                        <span className="text-xs font-bold text-slate-700">
+                          {d.amount != null ? d.amount : "null"}
+                        </span>
                       </div>
                     ))}
                   </div>
