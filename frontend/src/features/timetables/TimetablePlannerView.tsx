@@ -6,7 +6,21 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
-import { ArrowUpDown, Building2, Check, FlaskConical, Layers, Plus, Printer, Search, UserCheck, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  ArrowUpDown,
+  Building2,
+  Check,
+  FlaskConical,
+  Layers,
+  Plus,
+  Printer,
+  Search,
+  ShieldAlert,
+  UserCheck,
+  Users,
+} from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/cn";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
@@ -15,6 +29,10 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { apiFetch } from "@/lib/api";
 import { TimingEditorDrawer } from "@/features/timetables/TimingEditorDrawer";
 import { CombineSectionsModal } from "@/features/timetables/CombineSectionsModal";
+import {
+  TimetableValidationModal,
+  type ReviewPayload,
+} from "@/features/timetables/TimetableValidationModal";
 import { CollegeTimetablesOverview } from "@/features/timetables/CollegeTimetablesOverview";
 import { AssignClassTeacherModal } from "@/features/class-teacher/AssignClassTeacherModal";
 import {
@@ -151,20 +169,6 @@ type PeriodMode = "subject" | "special";
 
 const SPECIAL_PERIOD_SUGGESTIONS = ["CRT", "Games", "Library", "Seminar", "Mentor", "Self Study"];
 const BATCH_SUGGESTIONS = ["Batch 1", "Batch 2"];
-
-type ReviewPayload = {
-  ok: boolean;
-  assignedCount: number;
-  unassignedSlots: string[];
-  sectionClashes: string[];
-  facultyClashes: string[];
-  roomClashes: string[];
-  warnings: string[];
-  unchanged?: boolean;
-  unchangedFromPublishedPlanId?: number | null;
-  unchangedFromPublishedVersion?: number | null;
-  message?: string | null;
-};
 
 function assignmentSignature(assignments: LocalAssignment[]): string {
   return JSON.stringify(
@@ -1143,6 +1147,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   const [combineOpen, setCombineOpen] = useState(false);
   const [labModalOpen, setLabModalOpen] = useState(false);
   const [selectedPeriodSlotIds, setSelectedPeriodSlotIds] = useState<number[]>([]);
+  const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
   const [assignTeacherOpen, setAssignTeacherOpen] = useState(false);
   const [classTeacher, setClassTeacher] = useState<PlannerResponse["classTeacher"]>(null);
 
@@ -1181,6 +1186,11 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     filters.branchId === "all" || !masters
       ? null
       : masters.branches.find((b) => b.id === filters.branchId) ?? null;
+
+  const selectedCourse =
+    filters.courseId === "all" || !masters
+      ? null
+      : masters.courses.find((c) => c.id === filters.courseId) ?? null;
 
   const selectedCollege =
     filters.collegeId === "all" || !masters
@@ -1926,9 +1936,12 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     };
   };
 
-  const saveDraft = async (overrideAssignments?: LocalAssignment[]) => {
+  const saveDraft = async (
+    overrideAssignments?: LocalAssignment[],
+    options?: { skipReload?: boolean },
+  ): Promise<{ planId?: number; unchanged?: boolean; versionNo?: number } | null> => {
     const body = scopeBody(overrideAssignments);
-    if (!body) return;
+    if (!body) return null;
     setBusy(true);
     setError(null);
     setInfo(null);
@@ -1945,35 +1958,47 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           `Timetable is already published (plan #${data.planId}, version ${data.versionNo ?? "—"}) with no changes.`,
         );
       }
-      await loadPlanner();
+      if (!options?.skipReload) {
+        await loadPlanner();
+      }
+      return data;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Save draft failed");
+      const msg = err instanceof Error ? err.message : "Save draft failed";
+      setError(msg);
+      if (options?.skipReload) {
+        throw err;
+      }
+      return null;
     } finally {
-      setBusy(false);
+      if (!options?.skipReload) {
+        setBusy(false);
+      }
     }
   };
 
   const runReview = async () => {
-    await saveDraft();
-    const planId = planner?.context.planId;
-    // reload to get plan id after save
-    const body = scopeBody();
-    if (!body) return;
     setBusy(true);
+    setError(null);
+    setInfo(null);
     try {
-      const plannerRes = await apiFetch(`/timetables/planner${query}`, {
-        cache: "no-store",
-      });
-      const latest = (await plannerRes.json()) as PlannerResponse;
-      const id = latest.context.planId ?? planId;
-      if (!id) throw new Error("Save draft first");
-      const response = await apiFetch(`/timetables/${id}/review`, {
+      const draftResult = await saveDraft(undefined, { skipReload: true });
+      const planId = draftResult?.planId || planner?.context.planId;
+      if (!planId) throw new Error("Save draft first");
+      const response = await apiFetch(`/timetables/${planId}/review`, {
         method: "POST",
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || "Review failed");
-      setReview(data.review as ReviewPayload);
-      await loadPlanner();
+      const rev = data.review as ReviewPayload;
+      setReview(rev);
+      if (
+        !rev.ok ||
+        (rev.facultyClashes && rev.facultyClashes.length > 0) ||
+        (rev.sectionClashes && rev.sectionClashes.length > 0) ||
+        (rev.unassignedSlots && rev.unassignedSlots.length > 0)
+      ) {
+        setIsValidationModalOpen(true);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Review failed");
     } finally {
@@ -1988,26 +2013,77 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       );
       return;
     }
+
+    // 1. Instant client-side check for unassigned class slots (0 ms response time)
+    if (planner?.days && planner?.slotsByDay) {
+      const isAssigned = (a: LocalAssignment) => {
+        if ((a.customLabel ?? "").trim()) return true;
+        return Boolean(a.subjectId && (a.hrmsEmployeeId || a.facultyName));
+      };
+
+      const clientUnassigned: string[] = [];
+      for (const day of planner.days) {
+        const daySlots = (planner.slotsByDay[day] ?? []).filter((s) => !isNonClassTimingSlot(s));
+        const dayCode = (DAY_LABEL_TO_CODE[day] ?? day).toUpperCase();
+        for (const slot of daySlots) {
+          const hasAssignment = assignments.some(
+            (a) =>
+              (DAY_LABEL_TO_CODE[a.dayOfWeek] ?? a.dayOfWeek).toUpperCase() === dayCode &&
+              a.timingSlotId === slot.id &&
+              isAssigned(a),
+          );
+          if (!hasAssignment) {
+            clientUnassigned.push(
+              `${day} ${timingSlotDisplayLabel(slot)} (${String(slot.startTime).slice(0, 5)}-${String(slot.endTime).slice(0, 5)})`,
+            );
+          }
+        }
+      }
+
+      if (clientUnassigned.length > 0) {
+        const clientReview: ReviewPayload = {
+          ok: false,
+          assignedCount: assignments.length,
+          unassignedSlots: clientUnassigned,
+          sectionClashes: [],
+          facultyClashes: [],
+          facultyClashDetails: [],
+          roomClashes: [],
+          warnings: [],
+          message: `Cannot publish: ${clientUnassigned.length} period slot(s) are unassigned or missing faculty. Please assign all class periods before publishing.`,
+        };
+        setReview(clientReview);
+        setIsValidationModalOpen(true);
+        setError("Publish blocked: timetable has unassigned period slots");
+        return;
+      }
+    }
+
     setBusy(true);
     setError(null);
     setInfo(null);
     try {
-      await saveDraft();
-      const plannerRes = await apiFetch(`/timetables/planner${query}`, {
-        cache: "no-store",
-      });
-      const latest = (await plannerRes.json()) as PlannerResponse;
-      const id = latest.context.planId;
-      if (!id) throw new Error("No draft plan to publish");
-      const response = await apiFetch(`/timetables/${id}/publish`, {
+      // 2. Fast draft save without redundant planner reload
+      const draftResult = await saveDraft(undefined, { skipReload: true });
+      const planId = draftResult?.planId || planner?.context.planId;
+      if (!planId) throw new Error("No draft plan to publish");
+
+      // 3. Immediately call publish (backend validates on step 1 in ~20ms)
+      const response = await apiFetch(`/timetables/${planId}/publish`, {
         method: "POST",
       });
       const data = await response.json();
       if (!response.ok) {
-        if (data.review) setReview(data.review as ReviewPayload);
+        if (data.review) {
+          setReview(data.review as ReviewPayload);
+          setIsValidationModalOpen(true);
+        }
         throw new Error(data.message || "Publish failed");
       }
       setReview(data.review as ReviewPayload);
+      setIsValidationModalOpen(false);
+      setInfo(`Timetable plan #${planId} published successfully (Version ${data.versionNo ?? 1}).`);
+      // 4. Reload planner once after successful publish
       await loadPlanner();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Publish failed");
@@ -3064,7 +3140,28 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
 
           {review ? (
             <Card className="mt-4">
-              <h3 className="mb-3 text-base font-semibold text-navy-900">Timetable Review</h3>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2.5">
+                <div>
+                  <h3 className="text-base font-semibold text-navy-900">Timetable Review</h3>
+                  <p className="text-xs text-slate-500">
+                    Live schedule validation, workload distribution, and clash checks.
+                  </p>
+                </div>
+                {review.facultyClashes.length > 0 ||
+                review.sectionClashes.length > 0 ||
+                review.unassignedSlots.length > 0 ||
+                review.warnings.length > 0 ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setIsValidationModalOpen(true)}
+                    className="border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 text-xs shadow-2xs font-semibold"
+                  >
+                    <ShieldAlert className="mr-1.5 h-3.5 w-3.5 text-rose-600" />
+                    Open Detailed Clash Report Dialog
+                  </Button>
+                ) : null}
+              </div>
               {review.unchanged ? (
                 <div className="mb-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-navy-900">
                   {review.message ??
@@ -3099,14 +3196,35 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                   </ul>
                 </div>
                 <div>
-                  <p className="font-medium text-navy-900">Faculty Clashes</p>
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium text-navy-900">Faculty Clashes</p>
+                    {review.facultyClashes.length > 0 ? (
+                      <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-700">
+                        {review.facultyClashes.length} Critical
+                      </span>
+                    ) : null}
+                  </div>
                   <ul className="mt-1 list-disc pl-4 text-slate-600">
                     {review.facultyClashes.length === 0 ? (
                       <li>None</li>
                     ) : (
-                      review.facultyClashes.map((item) => <li key={item}>{item}</li>)
+                      review.facultyClashes.map((item) => (
+                        <li key={item} className="text-rose-950 font-medium leading-relaxed">
+                          {item}
+                        </li>
+                      ))
                     )}
                   </ul>
+                  {review.facultyClashes.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsValidationModalOpen(true)}
+                      className="mt-2 text-xs font-semibold text-rose-600 hover:text-rose-800 underline underline-offset-2 flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>View breakdown with faculty profiles & hours in dialog</span>
+                      <ArrowRight className="h-3 w-3" />
+                    </button>
+                  ) : null}
                 </div>
                 <div>
                   <p className="font-medium text-navy-900">Room Clashes</p>
@@ -3224,6 +3342,23 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           setInfo(
             `Assigned ${teacher.facultyName} as Class Teacher for Section ${planner?.context.section}.`
           );
+        }}
+      />
+
+      <TimetableValidationModal
+        isOpen={isValidationModalOpen}
+        onClose={() => setIsValidationModalOpen(false)}
+        review={review}
+        context={{
+          collegeName: selectedCollege?.name || planner?.context?.college,
+          courseName: selectedCourse?.name,
+          branchName: selectedBranch?.name || planner?.context?.branch,
+          section: filters.section,
+          batch: filters.batch !== "all" ? filters.batch : planner?.context?.batch,
+          year: filters.year !== "all" ? filters.year : planner?.context?.year,
+          semester: filters.semester !== "all" ? filters.semester : planner?.context?.semester,
+          academicYear: filters.academicYear || planner?.context?.academicYear,
+          planId: planner?.context.planId ?? null,
         }}
       />
     </div>

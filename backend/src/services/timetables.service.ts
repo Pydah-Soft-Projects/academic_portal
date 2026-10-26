@@ -94,6 +94,8 @@ type EntryRow = RowDataPacket & {
   custom_label: string | null;
   faculty_name?: string | null;
   faculty_hrms_id?: string | null;
+  faculty_employee_code?: string | null;
+  faculty_department_name?: string | null;
 };
 
 export type AssignmentInput = {
@@ -721,6 +723,13 @@ async function refreshEntrySubjectSnapshots(
   let refreshed = 0;
   for (const row of rows) {
     const ems = emsMap.get(Number(row.subject_id))!;
+    if (
+      row.subject_code === ems.code &&
+      row.subject_name === ems.name &&
+      row.subject_type_snapshot === ems.type
+    ) {
+      continue;
+    }
     await exec(
       `
       UPDATE ap_timetable_entries
@@ -802,7 +811,9 @@ async function loadEntries(planId: number) {
     SELECT
       e.*,
       sl.display_name AS faculty_name,
-      sl.hrms_employee_id AS faculty_hrms_id
+      sl.hrms_employee_id AS faculty_hrms_id,
+      sl.employee_code AS faculty_employee_code,
+      sl.department_name AS faculty_department_name
     FROM ap_timetable_entries e
     LEFT JOIN ap_staff_link sl ON sl.id = e.faculty_staff_link_id
     WHERE e.plan_id = ?
@@ -1361,6 +1372,34 @@ async function resolveFacultyLink(
   });
 }
 
+type FacultyClashItem = {
+  facultyLinkId: number;
+  facultyName: string;
+  facultyEmpCode?: string | null;
+  departmentName?: string | null;
+  dayOfWeek: string;
+  dayLabel: string;
+  startTime: string;
+  endTime: string;
+  slotLabel?: string | null;
+  currentSubject?: string | null;
+  currentSubjectCode?: string | null;
+  currentCustomLabel?: string | null;
+  conflictingPlanId?: number | null;
+  conflictingPlanLabel?: string | null;
+  conflictingBranch?: string | null;
+  conflictingCourse?: string | null;
+  conflictingSection?: string | null;
+  conflictingSemester?: number | null;
+  conflictingSubject?: string | null;
+  conflictingSubjectCode?: string | null;
+  conflictingTimeSlot?: string | null;
+  existingHours?: number | null;
+  existingSlotsCount?: number | null;
+  isParallelWarning?: boolean;
+  message: string;
+};
+
 export async function validatePlanAssignments(
   plan: PlanRow,
   entries: EntryRow[],
@@ -1370,6 +1409,7 @@ export async function validatePlanAssignments(
   const warnings: string[] = [];
   const sectionClashes: string[] = [];
   const facultyClashes: string[] = [];
+  const facultyClashDetails: FacultyClashItem[] = [];
   const unassigned: string[] = [];
 
   if (!plan.timing_template_id) {
@@ -1379,6 +1419,7 @@ export async function validatePlanAssignments(
       unassignedSlots: unassigned,
       sectionClashes: ["Plan has no timing template"],
       facultyClashes,
+      facultyClashDetails,
       roomClashes: [] as string[],
       warnings,
     };
@@ -1395,43 +1436,6 @@ export async function validatePlanAssignments(
     entriesBySlot.set(key, list);
   }
 
-  for (const [key, slotEntries] of entriesBySlot.entries()) {
-    if (slotEntries.length > 1) {
-      const seenBatches = new Set<string>();
-      const seenFaculty = new Set<number>();
-      for (const entry of slotEntries) {
-        if (entry.faculty_staff_link_id) {
-          if (seenFaculty.has(entry.faculty_staff_link_id)) {
-            const [day, slotId] = key.split(":");
-            facultyClashes.push(
-              `Faculty clash: same faculty assigned multiple times on ${DAY_CODE_TO_LABEL[day as DayCode] ?? day} slot ${slotId}`,
-            );
-          }
-          seenFaculty.add(entry.faculty_staff_link_id);
-        }
-        const batch = (entry.batch_label ?? "").trim().toLowerCase();
-        if (batch) {
-          if (seenBatches.has(batch)) {
-            const [day, slotId] = key.split(":");
-            sectionClashes.push(
-              `Duplicate batch classification "${entry.batch_label}" on ${DAY_CODE_TO_LABEL[day as DayCode] ?? day} slot ${slotId}`,
-            );
-          }
-          seenBatches.add(batch);
-        }
-      }
-    }
-  }
-
-  for (const slot of classSlots) {
-    const key = `${slot.dayOfWeek}:${slot.id}`;
-    const slotEntries = entriesBySlot.get(key) ?? [];
-    const hasAssigned = slotEntries.some((e) => isAssignedEntry(e));
-    if (!hasAssigned) {
-      unassigned.push(`${slot.dayLabel} ${slot.label} (${slot.startTime}-${slot.endTime})`);
-    }
-  }
-
   // Helper to parse HH:MM into minutes for overlap comparison
   const parseTimeToMinutes = (t: string | null | undefined): number => {
     if (!t) return 0;
@@ -1441,13 +1445,103 @@ export async function validatePlanAssignments(
     return h * 60 + m;
   };
 
-  // Faculty clashes across published plans sharing same college timing window
+  // 1. In-memory check: intra-slot duplicate faculty or duplicate batches
+  type IntraFacultyClash = {
+    facultyLinkId: number;
+    day: string;
+    slotIdStr: string;
+    sub1: string;
+    sub1Code: string | null;
+    sub2: string;
+    sub2Code: string | null;
+    timeRange: string;
+    slotLabel: string;
+    startTime: string;
+    endTime: string;
+    customLabel: string | null;
+    entryFacultyName: string | null;
+    entryFacultyHrms: string | null;
+  };
+  const intraFacultyClashes: IntraFacultyClash[] = [];
+
+  for (const [key, slotEntries] of entriesBySlot.entries()) {
+    if (slotEntries.length > 1) {
+      const seenBatches = new Set<string>();
+      const seenFaculty = new Map<number, EntryRow>();
+      for (const entry of slotEntries) {
+        if (entry.faculty_staff_link_id) {
+          const prevEntry = seenFaculty.get(entry.faculty_staff_link_id);
+          if (prevEntry) {
+            const [day, slotIdStr] = key.split(":");
+            const slot = slots.find((s) => s.id === Number(slotIdStr));
+            const timeRange = slot
+              ? `${String(slot.startTime).slice(0, 5)}-${String(slot.endTime).slice(0, 5)}`
+              : `slot ${slotIdStr}`;
+            const sub1 = prevEntry.subject_name || prevEntry.custom_label || "Class 1";
+            const sub2 = entry.subject_name || entry.custom_label || "Class 2";
+            intraFacultyClashes.push({
+              facultyLinkId: entry.faculty_staff_link_id,
+              day,
+              slotIdStr,
+              sub1,
+              sub1Code: prevEntry.subject_code || null,
+              sub2,
+              sub2Code: entry.subject_code || null,
+              timeRange,
+              slotLabel: slot?.label ?? `Slot ${slotIdStr}`,
+              startTime: slot?.startTime ? String(slot.startTime).slice(0, 5) : "",
+              endTime: slot?.endTime ? String(slot.endTime).slice(0, 5) : "",
+              customLabel: entry.custom_label || null,
+              entryFacultyName: entry.faculty_name || null,
+              entryFacultyHrms: entry.faculty_hrms_id || null,
+            });
+          } else {
+            seenFaculty.set(entry.faculty_staff_link_id, entry);
+          }
+        }
+        const batch = (entry.batch_label ?? "").trim().toLowerCase();
+        if (batch) {
+          if (seenBatches.has(batch)) {
+            const [day, slotId] = key.split(":");
+            const slot = slots.find((s) => s.id === Number(slotId));
+            const slotDesc = slot
+              ? `${slot.label} (${String(slot.startTime).slice(0, 5)}-${String(slot.endTime).slice(0, 5)})`
+              : `slot ${slotId}`;
+            sectionClashes.push(
+              `Duplicate batch classification "${entry.batch_label}" on ${DAY_CODE_TO_LABEL[day as DayCode] ?? day} (${slotDesc})`,
+            );
+          }
+          seenBatches.add(batch);
+        }
+      }
+    }
+  }
+
+  // 2. In-memory check: unassigned class slots
+  for (const slot of classSlots) {
+    const key = `${slot.dayOfWeek}:${slot.id}`;
+    const slotEntries = entriesBySlot.get(key) ?? [];
+    const hasAssigned = slotEntries.some((e) => isAssignedEntry(e));
+    if (!hasAssigned) {
+      unassigned.push(`${slot.dayLabel} ${slot.label} (${slot.startTime}-${slot.endTime})`);
+    }
+  }
+
+  // 3. Local faculty assignments
   const localFacultyAssignments: Array<{
     facultyLinkId: number;
     dayOfWeek: DayCode;
     startMin: number;
     endMin: number;
-    label: string;
+    startTime: string;
+    endTime: string;
+    slotId: number;
+    slotLabel: string;
+    subjectName?: string | null;
+    subjectCode?: string | null;
+    customLabel?: string | null;
+    batchLabel?: string | null;
+    entryType?: string;
   }> = [];
 
   for (const entry of entries) {
@@ -1460,100 +1554,323 @@ export async function validatePlanAssignments(
       dayOfWeek: entry.day_of_week,
       startMin: parseTimeToMinutes(slot.startTime),
       endMin: parseTimeToMinutes(slot.endTime),
-      label: `${DAY_CODE_TO_LABEL[entry.day_of_week]} ${slot.label}`,
+      startTime: String(slot.startTime).slice(0, 5),
+      endTime: String(slot.endTime).slice(0, 5),
+      slotId: slot.id,
+      slotLabel: slot.label,
+      subjectName: entry.subject_name,
+      subjectCode: entry.subject_code,
+      customLabel: entry.custom_label,
+      batchLabel: entry.batch_label,
+      entryType: entry.entry_type,
     });
   }
 
-  if (entries.some((e) => e.faculty_staff_link_id)) {
-    const facultyIds = [
-      ...new Set(
-        entries
-          .map((e) => e.faculty_staff_link_id)
-          .filter((id): id is number => Boolean(id)),
-      ),
-    ];
-    if (facultyIds.length) {
-      const otherEntries = await queryAcademic<
-        (EntryRow & {
-          other_plan_id: number;
-          other_section: string | null;
-          other_branch: number;
-          tpl_id: number;
-          slot_start: string;
-          slot_end: string;
-          slot_day: DayCode;
-        })[]
-      >(
-        `
-        SELECT
-          e.*,
-          p.id AS other_plan_id,
-          p.section_name AS other_section,
-          p.branch_id AS other_branch,
-          p.timing_template_id AS tpl_id,
-          s.start_time AS slot_start,
-          s.end_time AS slot_end,
-          s.day_of_week AS slot_day
-        FROM ap_timetable_entries e
-        INNER JOIN ap_timetable_plans p ON p.id = e.plan_id
-        INNER JOIN ap_timing_template_slots s
-          ON s.id = COALESCE(e.timing_slot_id, e.period_slot_id)
-        WHERE e.faculty_staff_link_id IN (${facultyIds.map(() => "?").join(",")})
-          AND p.id <> ?
-          AND p.college_id = ?
-          AND p.status = 'published'
-          AND NOT (
-            p.academic_year_label = ?
-            AND p.college_id = ?
-            AND p.course_id = ?
-            AND p.branch_id = ?
-            AND p.batch = ?
-            AND p.semester_number = ?
-            AND ((? IS NULL AND (p.section_name IS NULL OR p.section_name = '')) OR p.section_name = ?)
-          )
-        `,
-        [
-          ...facultyIds,
-          plan.id,
-          plan.college_id,
-          plan.academic_year_label,
-          plan.college_id,
-          plan.course_id,
-          plan.branch_id,
-          plan.batch,
-          plan.semester_number,
-          plan.section_name,
-          plan.section_name,
-        ],
-      );
+  // 4. Cross-plan clashes check with lean query
+  type RawCrossClash = {
+    other: {
+      id: number;
+      faculty_staff_link_id: number;
+      subject_name: string | null;
+      custom_label: string | null;
+      subject_code: string | null;
+      other_plan_id: number;
+      other_academic_year: string;
+      other_course_id: number;
+      other_branch_id: number;
+      other_year: number | null;
+      other_semester: number | null;
+      other_section: string | null;
+      slot_label: string;
+      slot_start: string;
+      slot_end: string;
+      slot_day: DayCode;
+    };
+    local: (typeof localFacultyAssignments)[number];
+    isParallel: boolean;
+  };
+  const rawCrossClashes: RawCrossClash[] = [];
 
-      const clashMessages = new Set<string>();
-      for (const other of otherEntries) {
-        const otherStartMin = parseTimeToMinutes(other.slot_start);
-        const otherEndMin = parseTimeToMinutes(other.slot_end);
-        for (const local of localFacultyAssignments) {
-          if (
-            local.facultyLinkId === other.faculty_staff_link_id &&
-            local.dayOfWeek === other.slot_day &&
-            otherStartMin < local.endMin &&
-            local.startMin < otherEndMin
-          ) {
-            const isCrossSectionParallel =
-              (other.other_section != null &&
-                plan.section_name != null &&
-                other.other_section.trim().toLowerCase() !== plan.section_name.trim().toLowerCase()) ||
-              Boolean(plan.notes?.includes("Combined"));
-            const msg = `same staff on ${DAY_CODE_TO_LABEL[other.slot_day]} ${String(other.slot_start).slice(0, 5)}-${String(other.slot_end).slice(0, 5)} (parallel in plan #${other.other_plan_id}${other.other_section ? ` · Section ${other.other_section}` : ""})`;
-            if (isCrossSectionParallel) {
-              warnings.push(`Combined/Parallel class: ${msg}`);
-            } else {
-              clashMessages.add(`Faculty clash: ${msg}`);
-            }
-          }
+  const facultyIds = [
+    ...new Set(localFacultyAssignments.map((a) => a.facultyLinkId)),
+  ];
+
+  if (facultyIds.length > 0) {
+    const otherEntries = await queryAcademic<
+      (RowDataPacket & RawCrossClash["other"])[]
+    >(
+      `
+      SELECT
+        e.id,
+        e.faculty_staff_link_id,
+        e.subject_name,
+        e.custom_label,
+        e.subject_code,
+        p.id AS other_plan_id,
+        p.academic_year_label AS other_academic_year,
+        p.course_id AS other_course_id,
+        p.branch_id AS other_branch_id,
+        p.year_of_study AS other_year,
+        p.semester_number AS other_semester,
+        p.section_name AS other_section,
+        s.label AS slot_label,
+        s.start_time AS slot_start,
+        s.end_time AS slot_end,
+        s.day_of_week AS slot_day
+      FROM ap_timetable_entries e
+      INNER JOIN ap_timetable_plans p ON p.id = e.plan_id
+      INNER JOIN ap_timing_template_slots s
+        ON s.id = COALESCE(e.timing_slot_id, e.period_slot_id)
+      WHERE e.faculty_staff_link_id IN (${facultyIds.map(() => "?").join(",")})
+        AND p.id <> ?
+        AND p.college_id = ?
+        AND p.status = 'published'
+        AND NOT (
+          p.academic_year_label = ?
+          AND p.college_id = ?
+          AND p.course_id = ?
+          AND p.branch_id = ?
+          AND p.batch = ?
+          AND p.semester_number = ?
+          AND ((? IS NULL AND (p.section_name IS NULL OR p.section_name = '')) OR p.section_name = ?)
+        )
+      `,
+      [
+        ...facultyIds,
+        plan.id,
+        plan.college_id,
+        plan.academic_year_label,
+        plan.college_id,
+        plan.course_id,
+        plan.branch_id,
+        plan.batch,
+        plan.semester_number,
+        plan.section_name,
+        plan.section_name,
+      ],
+    );
+
+    for (const other of otherEntries) {
+      const otherStartMin = parseTimeToMinutes(other.slot_start);
+      const otherEndMin = parseTimeToMinutes(other.slot_end);
+      for (const local of localFacultyAssignments) {
+        if (
+          local.facultyLinkId === other.faculty_staff_link_id &&
+          local.dayOfWeek === other.slot_day &&
+          otherStartMin < local.endMin &&
+          local.startMin < otherEndMin
+        ) {
+          const isCrossSectionParallel =
+            (other.other_section != null &&
+              plan.section_name != null &&
+              other.other_section.trim().toLowerCase() !== plan.section_name.trim().toLowerCase()) ||
+            Boolean(plan.notes?.includes("Combined"));
+          rawCrossClashes.push({ other, local, isParallel: isCrossSectionParallel });
         }
       }
-      facultyClashes.push(...clashMessages);
     }
+  }
+
+  // 5. If ANY clashes exist, fetch rich metadata ONLY for the conflicting items (parallel & fast)
+  const clashFacultyIds = new Set<number>([
+    ...intraFacultyClashes.map((c) => c.facultyLinkId),
+    ...rawCrossClashes.map((c) => c.other.faculty_staff_link_id),
+  ]);
+
+  if (clashFacultyIds.size > 0) {
+    const targetFacultyIds = [...clashFacultyIds];
+    const targetBranchIds = [
+      ...new Set(rawCrossClashes.map((c) => Number(c.other.other_branch_id)).filter((id) => id > 0)),
+    ];
+    const targetCourseIds = [
+      ...new Set(rawCrossClashes.map((c) => Number(c.other.other_course_id)).filter((id) => id > 0)),
+    ];
+
+    const [staffRows, branchRows, courseRows, workloadRows] = await Promise.all([
+      queryAcademic<
+        (RowDataPacket & {
+          id: number;
+          display_name: string;
+          hrms_employee_id: string | null;
+          employee_code: string | null;
+          department_name: string | null;
+        })[]
+      >(
+        `SELECT id, display_name, hrms_employee_id, employee_code, department_name
+         FROM ap_staff_link WHERE id IN (${targetFacultyIds.map(() => "?").join(",")})`,
+        targetFacultyIds,
+      ).catch(() => []),
+      targetBranchIds.length > 0
+        ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
+            `SELECT id, name FROM course_branches WHERE id IN (${targetBranchIds.map(() => "?").join(",")})`,
+            targetBranchIds,
+          ).catch(() => [])
+        : Promise.resolve([]),
+      targetCourseIds.length > 0
+        ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
+            `SELECT id, name FROM courses WHERE id IN (${targetCourseIds.map(() => "?").join(",")})`,
+            targetCourseIds,
+          ).catch(() => [])
+        : Promise.resolve([]),
+      queryAcademic<
+        (RowDataPacket & {
+          faculty_staff_link_id: number;
+          start_time: string;
+          end_time: string;
+        })[]
+      >(
+        `SELECT e.faculty_staff_link_id, s.start_time, s.end_time
+         FROM ap_timetable_entries e
+         INNER JOIN ap_timetable_plans p ON p.id = e.plan_id
+         INNER JOIN ap_timing_template_slots s ON s.id = COALESCE(e.timing_slot_id, e.period_slot_id)
+         WHERE e.faculty_staff_link_id IN (${targetFacultyIds.map(() => "?").join(",")})
+           AND p.college_id = ?
+           AND p.status = 'published'`,
+        [...targetFacultyIds, plan.college_id],
+      ).catch(() => []),
+    ]);
+
+    const staffMap = new Map<number, (typeof staffRows)[number]>();
+    for (const s of staffRows) staffMap.set(Number(s.id), s);
+
+    const branchNameMap = new Map<number, string>();
+    for (const b of branchRows) branchNameMap.set(Number(b.id), b.name);
+
+    const courseNameMap = new Map<number, string>();
+    for (const c of courseRows) courseNameMap.set(Number(c.id), c.name);
+
+    const workloadMap = new Map<number, { publishedSlots: number; publishedHours: number }>();
+    for (const row of workloadRows) {
+      const fid = Number(row.faculty_staff_link_id);
+      const cur = workloadMap.get(fid) ?? { publishedSlots: 0, publishedHours: 0 };
+      const durMin = Math.max(0, parseTimeToMinutes(row.end_time) - parseTimeToMinutes(row.start_time));
+      cur.publishedSlots += 1;
+      cur.publishedHours += durMin / 60;
+      workloadMap.set(fid, cur);
+    }
+    for (const [, data] of workloadMap.entries()) {
+      data.publishedHours = Math.round(data.publishedHours * 10) / 10;
+    }
+
+    // Format intra-plan clashes
+    for (const c of intraFacultyClashes) {
+      const staff = staffMap.get(c.facultyLinkId);
+      const facName = staff?.display_name || c.entryFacultyName || `Faculty #${c.facultyLinkId}`;
+      const facCode = staff?.employee_code || staff?.hrms_employee_id || c.entryFacultyHrms || "";
+      const facLabel = facCode ? `${facName} (${facCode})` : facName;
+      const dayLabel = DAY_CODE_TO_LABEL[c.day as DayCode] ?? c.day;
+      const wl = workloadMap.get(c.facultyLinkId);
+      const wlDesc =
+        wl && wl.publishedHours > 0
+          ? ` · Existing Load: ${wl.publishedHours} hrs/wk (${wl.publishedSlots} classes)`
+          : "";
+
+      const clashMsg = `Faculty clash: ${facLabel} is assigned multiple times on ${dayLabel} ${c.timeRange} (${c.sub1} & ${c.sub2})${wlDesc}`;
+      facultyClashes.push(clashMsg);
+      facultyClashDetails.push({
+        facultyLinkId: c.facultyLinkId,
+        facultyName: facName,
+        facultyEmpCode: facCode || null,
+        departmentName: staff?.department_name || null,
+        dayOfWeek: c.day,
+        dayLabel,
+        startTime: c.startTime,
+        endTime: c.endTime,
+        slotLabel: c.slotLabel,
+        currentSubject: c.sub2,
+        currentSubjectCode: c.sub2Code,
+        currentCustomLabel: c.customLabel,
+        conflictingPlanId: plan.id,
+        conflictingPlanLabel: `Current Plan #${plan.id} (Slot duplicate)`,
+        conflictingSubject: c.sub1,
+        conflictingSubjectCode: c.sub1Code,
+        conflictingTimeSlot: c.timeRange,
+        existingHours: wl?.publishedHours ?? null,
+        existingSlotsCount: wl?.publishedSlots ?? null,
+        isParallelWarning: false,
+        message: clashMsg,
+      });
+    }
+
+    // Format cross-plan clashes
+    const clashMessages = new Set<string>();
+    for (const { other, local, isParallel } of rawCrossClashes) {
+      const staff = staffMap.get(other.faculty_staff_link_id);
+      const facName = staff?.display_name || `Faculty #${other.faculty_staff_link_id}`;
+      const facCode = staff?.employee_code || staff?.hrms_employee_id || "";
+      const facDept = staff?.department_name || "";
+      const facLabel = facCode ? `${facName} (${facCode})` : facName;
+      const dayLabel = DAY_CODE_TO_LABEL[other.slot_day] ?? other.slot_day;
+      const otherTime = `${String(other.slot_start).slice(0, 5)}-${String(other.slot_end).slice(0, 5)}`;
+      const branchName = branchNameMap.get(Number(other.other_branch_id));
+      const courseName = courseNameMap.get(Number(other.other_course_id));
+      const programDesc = [courseName, branchName].filter(Boolean).join(" · ");
+      const otherBranch = programDesc
+        ? ` · ${programDesc}`
+        : other.other_branch_id
+          ? ` · Branch #${other.other_branch_id}`
+          : "";
+      const otherSec = other.other_section ? ` · Section ${other.other_section}` : "";
+      const otherSem = other.other_semester ? ` · Sem ${other.other_semester}` : "";
+      const otherPlanDesc = `Plan #${other.other_plan_id}${otherBranch}${otherSec}${otherSem}`;
+      const otherSub =
+        other.subject_name || other.custom_label
+          ? ` · Subject: "${other.subject_name || other.custom_label}"`
+          : "";
+      const localSub =
+        local.subjectName || local.customLabel
+          ? ` [Attempting: "${local.subjectName || local.customLabel}"]`
+          : "";
+
+      const wl = workloadMap.get(other.faculty_staff_link_id);
+      const wlDesc =
+        wl && wl.publishedHours > 0
+          ? ` · Existing Load: ${wl.publishedHours} hrs/wk (${wl.publishedSlots} classes)`
+          : "";
+
+      const detailItem: FacultyClashItem = {
+        facultyLinkId: other.faculty_staff_link_id,
+        facultyName: facName,
+        facultyEmpCode: facCode || null,
+        departmentName: facDept || null,
+        dayOfWeek: other.slot_day,
+        dayLabel,
+        startTime: String(other.slot_start).slice(0, 5),
+        endTime: String(other.slot_end).slice(0, 5),
+        slotLabel: other.slot_label ?? null,
+        currentSubject: local.subjectName || local.customLabel || null,
+        currentSubjectCode: local.subjectCode || null,
+        currentCustomLabel: local.customLabel || null,
+        conflictingPlanId: other.other_plan_id,
+        conflictingPlanLabel: otherPlanDesc,
+        conflictingBranch: branchName || null,
+        conflictingCourse: courseName || null,
+        conflictingSection: other.other_section || null,
+        conflictingSemester: other.other_semester || null,
+        conflictingSubject: other.subject_name || other.custom_label || null,
+        conflictingSubjectCode: other.subject_code || null,
+        conflictingTimeSlot: otherTime,
+        existingHours: wl?.publishedHours ?? null,
+        existingSlotsCount: wl?.publishedSlots ?? null,
+        isParallelWarning: isParallel,
+        message: "",
+      };
+
+      if (isParallel) {
+        const warnMsg = `Combined/Parallel class: ${facLabel} on ${dayLabel} ${otherTime} (parallel in ${otherPlanDesc}${otherSub})${wlDesc}`;
+        detailItem.message = warnMsg;
+        warnings.push(warnMsg);
+        facultyClashDetails.push(detailItem);
+      } else {
+        const clashMsg = `Faculty clash: ${facLabel} is already assigned on ${dayLabel} ${otherTime} in ${otherPlanDesc}${otherSub}${localSub}${wlDesc}`;
+        detailItem.message = clashMsg;
+        if (!clashMessages.has(clashMsg)) {
+          clashMessages.add(clashMsg);
+          facultyClashDetails.push(detailItem);
+        }
+      }
+    }
+    facultyClashes.push(...clashMessages);
   }
 
   for (const entry of entries) {
@@ -1584,6 +1901,7 @@ export async function validatePlanAssignments(
     unassignedSlots: unassigned,
     sectionClashes,
     facultyClashes,
+    facultyClashDetails,
     roomClashes: [] as string[],
     warnings,
     unchanged: publishComparison.unchanged,
@@ -1676,8 +1994,11 @@ export async function saveTimetableDraft(input: {
         if (staffKey) {
           if (seenStaff.has(staffKey)) {
             const [day, slotId] = key.split(":");
+            const facLabel = a.facultyName
+              ? `${a.facultyName}${a.hrmsEmployeeId ? ` (${a.hrmsEmployeeId})` : ""}`
+              : "faculty member";
             throw new Error(
-              `Faculty clash: same faculty assigned multiple times in the same slot on ${DAY_CODE_TO_LABEL[day as DayCode] ?? day} (slot ${slotId})`,
+              `Faculty clash: ${facLabel} is assigned multiple times in the same slot on ${DAY_CODE_TO_LABEL[day as DayCode] ?? day} (slot ${slotId})`,
             );
           }
           seenStaff.add(staffKey);
@@ -2037,9 +2358,7 @@ export async function publishTimetablePlan(
     throw new Error(`Cannot publish plan in status ${plan.status}`);
   }
 
-  // Freeze current EMS subject labels into entry snapshots before publish
-  const snapshotRefresh = await refreshEntrySubjectSnapshots(planId);
-
+  // 1. Validate FIRST: fast failure in milliseconds without unnecessary writes
   const entries = await loadEntries(planId);
   const review = await validatePlanAssignments(plan, entries, {
     requireComplete: true,
@@ -2057,20 +2376,28 @@ export async function publishTimetablePlan(
     throw err;
   }
 
-  // Ensure all faculty assigned in the timetable have active user profiles with 'staff' role
-  for (const entry of entries) {
-    if (entry.faculty_staff_link_id) {
-      try {
-        await ensureStaffUserForSubjectAssignment({
-          facultyStaffLinkId: entry.faculty_staff_link_id,
-          collegeId: plan.college_id,
-          branchId: plan.branch_id,
-          actorUserId: options?.actorUserId,
-          ipAddress: options?.ipAddress,
-        });
-      } catch (err) {
-        console.warn("Could not ensure staff user profile on publish for entry faculty", entry.faculty_staff_link_id, err);
-      }
+  // 2. Only after validation succeeds: freeze current EMS subject labels into entry snapshots
+  const snapshotRefresh = await refreshEntrySubjectSnapshots(planId);
+
+  // 3. Ensure staff user profiles for unique faculty only (once per faculty, not per slot)
+  const uniqueFacultyIds = [
+    ...new Set(
+      entries
+        .map((e) => e.faculty_staff_link_id)
+        .filter((id): id is number => typeof id === "number" && id > 0),
+    ),
+  ];
+  for (const facultyId of uniqueFacultyIds) {
+    try {
+      await ensureStaffUserForSubjectAssignment({
+        facultyStaffLinkId: facultyId,
+        collegeId: plan.college_id,
+        branchId: plan.branch_id,
+        actorUserId: options?.actorUserId,
+        ipAddress: options?.ipAddress,
+      });
+    } catch (err) {
+      console.warn("Could not ensure staff user profile on publish for faculty", facultyId, err);
     }
   }
 
