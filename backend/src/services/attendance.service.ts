@@ -196,10 +196,12 @@ function mergeSessionCards(
       continue;
     }
 
-    const subKey =
-      card.subjectId != null
+    const codeKey = (card.subjectCode || "").toLowerCase().trim();
+    const subKey = codeKey
+      ? `code_${codeKey}`
+      : card.subjectId != null
         ? `id_${card.subjectId}`
-        : `code_${(card.subjectCode || card.subjectName || "").toLowerCase().trim()}`;
+        : `name_${(card.subjectName || "").toLowerCase().trim()}`;
     const branchKey = card.branchId != null ? String(card.branchId) : "";
     const key = `${card.date}|${card.startTime}|${card.endTime || ""}|${card.facultyStaffLinkId}|${subKey}|${branchKey}`;
 
@@ -296,6 +298,11 @@ export async function listAttendanceSessions(filters: AttendanceListFilters) {
       facultyStaffLinkId: filters.facultyStaffLinkId,
       includeFacultyStaffLinkId: filters.includeFacultyStaffLinkId,
     });
+  } else if (!filters.startDate) {
+    try {
+      const { applyDailyTimetableOverridesForDate } = await import("./today-timetable.service.js");
+      await applyDailyTimetableOverridesForDate(date);
+    } catch {}
   }
 
   const where = [
@@ -688,7 +695,10 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
     row.branch_id,
   ];
 
-  if (row.subject_id != null) {
+  if (row.subject_id != null && row.subject_code) {
+    where.push("(cs.subject_id = ? OR cs.subject_code = ?)");
+    params.push(row.subject_id, row.subject_code);
+  } else if (row.subject_id != null) {
     where.push("cs.subject_id = ?");
     params.push(row.subject_id);
   } else if (row.subject_code) {

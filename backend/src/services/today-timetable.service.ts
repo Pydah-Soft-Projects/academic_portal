@@ -40,7 +40,7 @@ export type RecordPeriodOverrideInput = {
   newFacultyName?: string | null;
 
   remarks?: string | null;
-  changeType?: "PERIOD_CHANGE" | "REVERTED_TO_MASTER";
+  changeType?: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
   actorUserId?: number | null;
   actorName?: string | null;
 };
@@ -83,7 +83,7 @@ export type DailyActivityRow = {
   newSubjectName: string | null;
   newFacultyHrmsId: string | null;
   newFacultyName: string | null;
-  changeType: "PERIOD_CHANGE" | "REVERTED_TO_MASTER";
+  changeType: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
   remarks: string | null;
   changedByUserId: number | null;
   changedByName: string | null;
@@ -161,7 +161,7 @@ type ActivityDbRow = RowDataPacket & {
   new_subject_name: string | null;
   new_faculty_hrms_id: string | null;
   new_faculty_name: string | null;
-  change_type: "PERIOD_CHANGE" | "REVERTED_TO_MASTER";
+  change_type: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
   remarks: string | null;
   changed_by_user_id: number | null;
   changed_by_name: string | null;
@@ -296,6 +296,146 @@ export async function getDailyTimetableData(filters: DailyTimetableFilter) {
 }
 
 /**
+ * Synchronize all daily timetable activities / overrides for a given date into ap_class_sessions.
+ * This ensures:
+ * 1. Assigned faculty, subject, and status reflect the latest daily timetable changes.
+ * 2. Classes appear immediately on staff's "My Timetable" and "Attendance Posting".
+ * 3. Combined sections (or single section reassignments) correctly load students on staff attendance posting.
+ */
+export async function applyDailyTimetableOverridesForDate(timetableDate: string) {
+  await ensureDailyTimetableTable();
+
+  const activities = await queryAcademic<ActivityDbRow[]>(
+    `
+    SELECT *
+    FROM ap_daily_timetable_activities
+    WHERE timetable_date = ?
+    ORDER BY id ASC
+    `,
+    [timetableDate],
+  );
+
+  if (!activities || activities.length === 0) {
+    return;
+  }
+
+  // Deduplicate activities by unique slot so the latest activity for each slot is applied
+  const activeBySlot = new Map<string, ActivityDbRow>();
+  for (const act of activities) {
+    const b = (act.batch || "").trim().toLowerCase();
+    const s = (act.section_name || "").trim().toLowerCase();
+    const key = `${act.college_id}_${act.branch_id}_${act.semester}_${b}_${s}_${act.timing_slot_id}`;
+    activeBySlot.set(key, act);
+  }
+
+  for (const act of activeBySlot.values()) {
+    const changeType = act.change_type || "PERIOD_CHANGE";
+
+    if (changeType === "HOLIDAY") {
+      const secName = act.section_name && act.section_name !== "all" ? act.section_name : null;
+      await executeAcademic(
+        `
+        UPDATE ap_class_sessions cs
+        JOIN ap_timetable_plans p ON p.id = cs.plan_id
+        SET cs.status = 'holiday'
+        WHERE cs.session_date = ?
+          AND (cs.timing_slot_id = ? OR cs.period_slot_id = ?)
+          AND cs.college_id = ?
+          AND cs.branch_id = ?
+          AND cs.semester_number = ?
+          AND (? IS NULL OR p.batch = ? OR p.batch = CONCAT('Batch ', ?) OR p.batch = REPLACE(?, 'Batch ', ''))
+          AND (? IS NULL OR cs.section_name = ? OR cs.section_name = CONCAT('Section ', ?) OR cs.section_name = REPLACE(?, 'Section ', ''))
+          AND cs.status <> 'posted'
+        `,
+        [
+          timetableDate,
+          act.timing_slot_id,
+          act.timing_slot_id,
+          act.college_id,
+          act.branch_id,
+          act.semester,
+          act.batch ? act.batch : null,
+          act.batch ? act.batch : null,
+          act.batch ? act.batch : null,
+          act.batch ? act.batch : null,
+          secName,
+          secName,
+          secName,
+          secName,
+        ],
+      );
+      continue;
+    }
+
+    const isRevert = changeType === "REVERTED_TO_MASTER";
+    const targetHrmsId = isRevert ? act.master_faculty_hrms_id : act.new_faculty_hrms_id;
+    const targetFacName = isRevert ? act.master_faculty_name : act.new_faculty_name;
+    const targetSubjectId = isRevert ? act.master_subject_id : act.new_subject_id;
+    const targetSubjectCode = isRevert ? act.master_subject_code : act.new_subject_code;
+    const targetSubjectName = isRevert ? act.master_subject_name : act.new_subject_name;
+
+    let targetStaffLinkId: number | null = null;
+    if (targetHrmsId) {
+      const staffRows = await queryAcademic<(RowDataPacket & { id: number })[]>(
+        `SELECT id FROM ap_staff_link WHERE hrms_employee_id = ? LIMIT 1`,
+        [targetHrmsId],
+      );
+      if (staffRows[0]) {
+        targetStaffLinkId = Number(staffRows[0].id);
+      } else {
+        const insertRes = await executeAcademic(
+          `INSERT INTO ap_staff_link (hrms_employee_id, display_name) VALUES (?, ?)`,
+          [targetHrmsId, targetFacName ?? null],
+        );
+        targetStaffLinkId = Number(insertRes.insertId);
+      }
+    }
+
+    const secName = act.section_name && act.section_name !== "all" ? act.section_name : null;
+
+    await executeAcademic(
+      `
+      UPDATE ap_class_sessions cs
+      JOIN ap_timetable_plans p ON p.id = cs.plan_id
+      SET cs.faculty_staff_link_id = ?,
+          cs.subject_id = ?,
+          cs.subject_code = COALESCE(?, cs.subject_code),
+          cs.subject_name = COALESCE(?, cs.subject_name),
+          cs.status = IF(cs.status = 'posted', cs.status, 'scheduled')
+      WHERE cs.session_date = ?
+        AND (cs.timing_slot_id = ? OR cs.period_slot_id = ?)
+        AND cs.college_id = ?
+        AND cs.branch_id = ?
+        AND cs.semester_number = ?
+        AND (? IS NULL OR p.batch = ? OR p.batch = CONCAT('Batch ', ?) OR p.batch = REPLACE(?, 'Batch ', ''))
+        AND (? IS NULL OR cs.section_name = ? OR cs.section_name = CONCAT('Section ', ?) OR cs.section_name = REPLACE(?, 'Section ', ''))
+        AND cs.status <> 'posted'
+      `,
+      [
+        targetStaffLinkId,
+        targetSubjectId ?? null,
+        targetSubjectCode ?? null,
+        targetSubjectName ?? null,
+        timetableDate,
+        act.timing_slot_id,
+        act.timing_slot_id,
+        act.college_id,
+        act.branch_id,
+        act.semester,
+        act.batch ? act.batch : null,
+        act.batch ? act.batch : null,
+        act.batch ? act.batch : null,
+        act.batch ? act.batch : null,
+        secName,
+        secName,
+        secName,
+        secName,
+      ],
+    );
+  }
+}
+
+/**
  * Record a change or reversion for today's timetable.
  * NEVER modifies master timetable entries! Master timetable remains the permanent comparison benchmark.
  */
@@ -365,32 +505,6 @@ export async function recordDailyTimetableChange(input: RecordPeriodOverrideInpu
 
   // Synchronize the override directly with ap_class_sessions so the assigned staff sees the class immediately
   try {
-    let targetStaffLinkId: number | null = null;
-    const targetHrmsId =
-      changeType === "REVERTED_TO_MASTER"
-        ? input.masterFacultyHrmsId
-        : input.newFacultyHrmsId;
-    const targetFacName =
-      changeType === "REVERTED_TO_MASTER"
-        ? input.masterFacultyName
-        : input.newFacultyName;
-
-    if (targetHrmsId) {
-      const staffRows = await queryAcademic<(RowDataPacket & { id: number })[]>(
-        `SELECT id FROM ap_staff_link WHERE hrms_employee_id = ? LIMIT 1`,
-        [targetHrmsId],
-      );
-      if (staffRows[0]) {
-        targetStaffLinkId = Number(staffRows[0].id);
-      } else {
-        const insertRes = await executeAcademic(
-          `INSERT INTO ap_staff_link (hrms_employee_id, display_name) VALUES (?, ?)`,
-          [targetHrmsId, targetFacName ?? null],
-        );
-        targetStaffLinkId = Number(insertRes.insertId);
-      }
-    }
-
     // Ensure sessions exist for this date before attempting update
     try {
       await ensureSessionsForDate(input.timetableDate, {
@@ -406,52 +520,7 @@ export async function recordDailyTimetableChange(input: RecordPeriodOverrideInpu
       console.warn("Could not ensure sessions before applying daily override:", ensureErr);
     }
 
-    const targetSubjectId =
-      changeType === "REVERTED_TO_MASTER" ? input.masterSubjectId : input.newSubjectId;
-    const targetSubjectCode =
-      changeType === "REVERTED_TO_MASTER" ? input.masterSubjectCode : input.newSubjectCode;
-    const targetSubjectName =
-      changeType === "REVERTED_TO_MASTER" ? input.masterSubjectName : input.newSubjectName;
-    const secName =
-      input.sectionName && input.sectionName !== "all" ? input.sectionName : null;
-
-    await executeAcademic(
-      `
-      UPDATE ap_class_sessions
-      SET faculty_staff_link_id = ?,
-          subject_id = COALESCE(?, subject_id),
-          subject_code = COALESCE(?, subject_code),
-          subject_name = COALESCE(?, subject_name),
-          status = IF(status = 'posted', status, 'scheduled')
-      WHERE session_date = ?
-        AND (timing_slot_id = ? OR period_slot_id = ?)
-        AND college_id = ?
-        AND branch_id = ?
-        AND semester_number = ?
-        AND (? IS NULL OR batch_label = ? OR batch_label = CONCAT('Batch ', ?))
-        AND (? IS NULL OR section_name = ? OR section_name = CONCAT('Section ', ?) OR section_name = REPLACE(?, 'Section ', ''))
-        AND status <> 'posted'
-      `,
-      [
-        targetStaffLinkId,
-        targetSubjectId ?? null,
-        targetSubjectCode ?? null,
-        targetSubjectName ?? null,
-        input.timetableDate,
-        input.timingSlotId,
-        input.timingSlotId,
-        input.collegeId,
-        input.branchId,
-        input.semester,
-        input.batch ? input.batch : null,
-        input.batch ? input.batch : null,
-        input.batch ? input.batch : null,
-        secName,
-        secName,
-        secName,
-        secName,
-      ],
-    );
+    await applyDailyTimetableOverridesForDate(input.timetableDate);
   } catch (syncErr) {
     console.warn("Could not synchronize daily timetable override to ap_class_sessions:", syncErr);
   }
@@ -2768,6 +2837,12 @@ export async function declareDailyTimetableHoliday(input: DeclareDailyHolidayInp
       );
       affectedSlotsCount++;
     }
+  }
+
+  try {
+    await applyDailyTimetableOverridesForDate(input.timetableDate);
+  } catch (holidaySyncErr) {
+    console.warn("Could not sync daily holiday to class sessions:", holidaySyncErr);
   }
 
   // Also if FULL_DAY holiday, sync with custom_holidays in student DB so calendar also reflects it

@@ -569,9 +569,13 @@ export async function listPublishedPlanIds(filters: {
 
   if (filters.facultyStaffLinkId != null) {
     where.push(
-      "id IN (SELECT DISTINCT plan_id FROM ap_timetable_entries WHERE faculty_staff_link_id = ?)",
+      "(id IN (SELECT DISTINCT plan_id FROM ap_timetable_entries WHERE faculty_staff_link_id = ?) " +
+      "OR id IN (SELECT DISTINCT p2.id FROM ap_timetable_plans p2 " +
+      "   JOIN ap_daily_timetable_activities dta ON dta.college_id = p2.college_id AND dta.branch_id = p2.branch_id AND dta.semester = p2.semester_number " +
+      "   JOIN ap_staff_link sl ON sl.hrms_employee_id = dta.new_faculty_hrms_id " +
+      "   WHERE sl.id = ?))",
     );
-    params.push(filters.facultyStaffLinkId);
+    params.push(filters.facultyStaffLinkId, filters.facultyStaffLinkId);
   } else if (filters.includeFacultyStaffLinkId != null) {
     const scopeClauses: string[] = [];
     const scopeParams: unknown[] = [];
@@ -695,6 +699,14 @@ export async function ensureSessionsForDate(
         error: error instanceof Error ? error.message : "Failed to generate",
       });
     }
+  }
+
+  // Reapply active daily timetable activities / overrides for this date so master values never overwrite daily assignments
+  try {
+    const { applyDailyTimetableOverridesForDate } = await import("./today-timetable.service.js");
+    await applyDailyTimetableOverridesForDate(date);
+  } catch (overrideErr) {
+    console.warn("Could not apply daily timetable overrides after ensuring sessions:", overrideErr);
   }
 
   return {
