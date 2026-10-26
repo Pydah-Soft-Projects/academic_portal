@@ -979,18 +979,47 @@ export async function getPrincipalDashboardData(
     name: string;
     type: string;
     examinationStartDate: string | null;
+    course?: string | null;
+    branch?: string | null;
+    semester?: number | null;
+    yearOfStudy?: number | null;
   };
+
+  function formatExamTitle(ex: {
+    name: string;
+    course?: string | null;
+    yearOfStudy?: number | null;
+    semester?: number | null;
+    type?: string | null;
+  }): string {
+    const ROMAN: Record<number, string> = { 1: "I", 2: "II", 3: "III", 4: "IV" };
+    const yrStr = ex.yearOfStudy ? ROMAN[ex.yearOfStudy] || String(ex.yearOfStudy) : "";
+    const semStr = ex.semester ? ROMAN[ex.semester] || String(ex.semester) : "";
+    const semPart = yrStr && semStr ? `${yrStr}-${semStr}` : yrStr || semStr || "";
+
+    let typeStr = "";
+    if (ex.type) {
+      const t = ex.type.toLowerCase();
+      if (t === "supply") typeStr = "Supplementary";
+      else if (t === "regular") typeStr = "Regular";
+      else typeStr = ex.type.charAt(0).toUpperCase() + ex.type.slice(1);
+    }
+
+    const coursePart = ex.course || "B.Tech";
+    const parts = [coursePart, semPart, typeStr ? `${typeStr} Exams` : "Exams"].filter(Boolean).join(" ");
+    return parts ? `${parts} (${ex.name})` : ex.name;
+  }
 
   let upcomingDeadlines: Array<{ day: string; month: string; title: string; subtitle: string }> = [];
 
   try {
     const liveExams = await queryExam<ExamRow[]>(
       `
-      SELECT id, name, type, examinationStartDate
+      SELECT id, name, type, examinationStartDate, course, branch, semester, yearOfStudy
       FROM exams
       WHERE status IN ('approved', 'published') AND examinationStartDate >= CURDATE()
       ORDER BY examinationStartDate ASC
-      LIMIT 3
+      LIMIT 5
       `,
     );
 
@@ -1002,8 +1031,8 @@ export async function getPrincipalDashboardData(
         return {
           day,
           month,
-          title: ex.name,
-          subtitle: `Type: ${ex.type} Examination`,
+          title: formatExamTitle(ex),
+          subtitle: `${ex.branch ? `${ex.branch} · ` : ""}${ex.type ? `${ex.type.toUpperCase()} Examination` : "Examination"}`,
         };
       });
     }
@@ -1011,21 +1040,76 @@ export async function getPrincipalDashboardData(
     // Keep empty if query fails
   }
 
-
-
   // 14. DYNAMIC PRIORITIES GENERATION (PURE LIVE SYSTEM DATA)
   // Each priority is constructed dynamically from real metrics in the user's scope.
+  // Only actionable, urgent operational priorities are included (no zero-count filler).
   const dynamicPriorities: Array<{
     id: number;
     text: string;
     badgeColor: string;
     href: string;
     category: string;
+    urgency?: "Urgent" | "Action" | "Review" | "Warning" | "Notice" | "Optimal";
   }> = [];
 
   let priorityId = 1;
 
-  // Priority 1: Classes Requiring Adjustment / Cancellations Today
+  // Priority 1: Attendance Submission Compliance (Live Class Sessions Awaiting Attendance Posting)
+  const unpostedTodaySessions = todaySessions.filter(
+    (s) => s.status === "scheduled" || (!s.post_id && s.status !== "cancelled"),
+  );
+  const unpostedBranchIds = Array.from(new Set(unpostedTodaySessions.map((s) => s.branch_id)));
+  const unpostedDeptCodes = scopedBranches
+    .filter((b) => unpostedBranchIds.includes(b.id))
+    .map((b) => b.code || b.name);
+
+  if (unpostedTodaySessions.length > 0) {
+    const deptDetail =
+      unpostedDeptCodes.length <= 4 && unpostedDeptCodes.length > 0
+        ? ` (${unpostedDeptCodes.join(", ")})`
+        : ` across ${unpostedDeptCodes.length} departments`;
+    dynamicPriorities.push({
+      id: priorityId++,
+      text: `${unpostedTodaySessions.length} class session${unpostedTodaySessions.length > 1 ? "s" : ""} today awaiting attendance submission${deptDetail}`,
+      badgeColor: "bg-red-500 text-white",
+      href: "/attendance-posting",
+      category: "attendance_posting",
+      urgency: "Urgent",
+    });
+  } else if (todaySessions.length === 0 && activeBranchIds.length > 0) {
+    // Check if there are unposted class sessions from the past 7 days across scoped departments
+    try {
+      const pastUnpostedRows = await queryAcademic<
+        (RowDataPacket & { cnt: number; branch_cnt: number })[]
+      >(
+        `
+        SELECT COUNT(*) as cnt, COUNT(DISTINCT branch_id) as branch_cnt
+        FROM ap_class_sessions
+        WHERE status = 'scheduled'
+          AND session_date < CURDATE()
+          AND session_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+          AND branch_id IN (${branchInSql})
+        `,
+        activeBranchIds,
+      );
+      const pastCnt = Number(pastUnpostedRows[0]?.cnt || 0);
+      const pastBranches = Number(pastUnpostedRows[0]?.branch_cnt || 0);
+      if (pastCnt > 0) {
+        dynamicPriorities.push({
+          id: priorityId++,
+          text: `${pastCnt} class sessions from the past 7 days pending attendance submission across ${pastBranches} departments`,
+          badgeColor: "bg-rose-500 text-white",
+          href: "/attendance-posting",
+          category: "attendance_posting",
+          urgency: "Action",
+        });
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  // Priority 2: Classes Requiring Adjustment / Cancellations Today
   const cancelledBranchesList: string[] = [];
   branchCancelledMap.forEach((cnt, bId) => {
     const b = scopedBranches.find((br) => br.id === bId);
@@ -1036,22 +1120,28 @@ export async function getPrincipalDashboardData(
   if (cancelledSessionsCount > 0 || totalClassesAffected > 0) {
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${totalClassesAffected} class${totalClassesAffected > 1 ? "es" : ""} require adjustment due to faculty absence/cancellation${cancelledBreakdown ? ` (${cancelledBreakdown})` : ""}`,
-      badgeColor: "bg-red-500 text-white",
+      text: `${totalClassesAffected} class${totalClassesAffected > 1 ? "es" : ""} require adjustment or substitution due to faculty absence${cancelledBreakdown ? ` (${cancelledBreakdown})` : ""}`,
+      badgeColor: "bg-rose-500 text-white",
       href: "/faculty-substitution",
       category: "adjustment",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `All ${todaySessions.length > 0 ? todaySessions.length : "scheduled"} classes have active faculty assignments today`,
-      badgeColor: "bg-emerald-600 text-white",
-      href: "/faculty-substitution",
-      category: "adjustment",
+      urgency: "Urgent",
     });
   }
 
-  // Priority 2: Departments with Subjects Behind Schedule (>10% delay)
+  // Priority 3: Pending Approvals / Requests (Live from ap_requests)
+  const totalPendingLeaves = Math.max(pendingRequestsCount, facultyLeaveCount);
+  if (totalPendingLeaves > 0) {
+    dynamicPriorities.push({
+      id: priorityId++,
+      text: `${totalPendingLeaves} administrative / faculty request${totalPendingLeaves > 1 ? "s" : ""} pending review and approval`,
+      badgeColor: "bg-blue-600 text-white",
+      href: "/requests",
+      category: "leave",
+      urgency: "Action",
+    });
+  }
+
+  // Priority 4: Departments with Subjects Behind Schedule (>10% delay)
   const delayedBranchIds = Array.from(branchBehindCountMap.entries())
     .filter(([_, count]) => count > 0)
     .map(([bId]) => bId);
@@ -1061,43 +1151,50 @@ export async function getPrincipalDashboardData(
   const totalSubjectsBehind = subjectsBehindSchedule.filter((s) => s.status === "Behind").length;
 
   if (totalSubjectsBehind > 0) {
+    const deptDetail =
+      delayedDeptNames.length <= 4 && delayedDeptNames.length > 0
+        ? ` (${delayedDeptNames.join(", ")})`
+        : ` across ${delayedDeptNames.length} departments`;
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${totalSubjectsBehind} subject${totalSubjectsBehind > 1 ? "s are" : " is"} behind schedule across ${delayedDeptNames.length} department${delayedDeptNames.length > 1 ? "s" : ""}${delayedDeptNames.length > 0 ? ` (${delayedDeptNames.join(", ")})` : ""}`,
-      badgeColor: "bg-rose-500 text-white",
+      text: `${totalSubjectsBehind} subject${totalSubjectsBehind > 1 ? "s are" : " is"} behind syllabus schedule${deptDetail}`,
+      badgeColor: "bg-orange-500 text-white",
       href: "/timetables",
       category: "schedule",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `Syllabus delivery is on track across all ${scopedBranches.length} scoped departments`,
-      badgeColor: "bg-emerald-600 text-white",
-      href: "/timetables",
-      category: "schedule",
+      urgency: "Review",
     });
   }
 
-  // Priority 3: Students Below 65% Attendance Threshold (Pure Live Count)
+  // Priority 5: Students Below 65% Attendance Threshold (Pure Live Count - Regular Students)
   if (totalBelow65InScope > 0) {
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${totalBelow65InScope} students across ${branchesWithRiskCount || scopedBranches.length} branches fell below 65% attendance threshold`,
+      text: `${totalBelow65InScope} regular students below 65% attendance threshold across ${branchesWithRiskCount || scopedBranches.length} departments`,
       badgeColor: "bg-amber-500 text-white",
       href: "/mentoring-risks",
       category: "attendance",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `All students meet the 65% minimum attendance requirement`,
-      badgeColor: "bg-emerald-600 text-white",
-      href: "/mentoring-risks",
-      category: "attendance",
+      urgency: "Warning",
     });
   }
 
-  // Priority 4: Students Flagged for Academic Mentoring (Real DB internal marks)
+  // Priority 6: Internal Marks Submission Pending (Live from ap_internal_marks_submissions)
+  if (branchesPendingMarksSubmission.length > 0) {
+    const pendingDeptCodes = branchesPendingMarksSubmission.map((b) => b.code || b.name);
+    const deptDetail =
+      pendingDeptCodes.length <= 4 && pendingDeptCodes.length > 0
+        ? ` (${pendingDeptCodes.join(", ")})`
+        : "";
+    dynamicPriorities.push({
+      id: priorityId++,
+      text: `${branchesPendingMarksSubmission.length} department${branchesPendingMarksSubmission.length > 1 ? "s have" : " has"} internal marks submission pending${deptDetail}`,
+      badgeColor: "bg-indigo-600 text-white",
+      href: "/internal-marks",
+      category: "marks_pending",
+      urgency: "Action",
+    });
+  }
+
+  // Priority 7: Students Flagged for Academic Mentoring (Real DB internal marks)
   const totalFailedBoth = Array.from(failedBothMap.values()).reduce((sum, count) => sum + count, 0);
   const totalFailedInt1 = Array.from(failedInt1Map.values()).reduce((sum, count) => sum + count, 0);
   const totalFailedInt2 = Array.from(failedInt2Map.values()).reduce((sum, count) => sum + count, 0);
@@ -1106,86 +1203,50 @@ export async function getPrincipalDashboardData(
     dynamicPriorities.push({
       id: priorityId++,
       text: `${totalFailedBoth} students flagged for academic mentoring based on double internal exam failures`,
-      badgeColor: "bg-orange-500 text-white",
+      badgeColor: "bg-purple-600 text-white",
       href: "/internal-marks",
       category: "marks",
+      urgency: "Review",
     });
   } else if (totalFailedInt1 > 0 || totalFailedInt2 > 0) {
     const singleFailTotal = totalFailedInt1 + totalFailedInt2;
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${singleFailTotal} student marks entries flagged with internal exam failures requiring mentoring`,
-      badgeColor: "bg-orange-500 text-white",
+      text: `${singleFailTotal} student internal exam failure entries requiring remedial mentoring`,
+      badgeColor: "bg-purple-600 text-white",
       href: "/internal-marks",
       category: "marks",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `No students currently flagged with internal exam failures`,
-      badgeColor: "bg-slate-700 text-white",
-      href: "/internal-marks",
-      category: "marks",
+      urgency: "Review",
     });
   }
 
-  // Priority: Fee Clearance & Dues — Skipped while fee portal is under active development
-
-  // Priority 6: Faculty Leave / OD Requests Pending Approval (Live from ap_requests)
-  if (pendingRequestsCount > 0 || facultyLeaveCount > 0) {
-    const totalPendingLeaves = Math.max(pendingRequestsCount, facultyLeaveCount);
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `${totalPendingLeaves} faculty leave / substitution request${totalPendingLeaves > 1 ? "s" : ""} pending approval`,
-      badgeColor: "bg-blue-600 text-white",
-      href: "/requests",
-      category: "leave",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `0 pending faculty leave or substitution requests requiring review`,
-      badgeColor: "bg-slate-700 text-white",
-      href: "/requests",
-      category: "leave",
-    });
-  }
-
-  // Priority 7: Internal Marks Submission Pending (Live from ap_internal_marks_submissions)
-  if (branchesPendingMarksSubmission.length > 0) {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `${branchesPendingMarksSubmission.length} department${branchesPendingMarksSubmission.length > 1 ? "s have" : " has"} internal marks entry pending submission`,
-      badgeColor: "bg-blue-600 text-white",
-      href: "/internal-marks",
-      category: "marks_pending",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `Internal marks submissions completed for all scoped departments`,
-      badgeColor: "bg-emerald-600 text-white",
-      href: "/internal-marks",
-      category: "marks_pending",
-    });
-  }
-
-  // Priority 8: Upcoming Exam Deadline (Live from examination_portal.exams)
+  // Priority 8: Upcoming Exam Deadlines (Live from examination_portal.exams)
   if (upcomingDeadlines.length > 0) {
+    const seenTitles = new Set<string>();
+    for (const ex of upcomingDeadlines) {
+      if (seenTitles.has(ex.title)) continue;
+      seenTitles.add(ex.title);
+      dynamicPriorities.push({
+        id: priorityId++,
+        text: `${ex.title} commencing ${ex.day} ${ex.month}`,
+        badgeColor: "bg-slate-800 text-white",
+        href: "/examinations",
+        category: "deadline",
+        urgency: "Notice",
+      });
+      if (seenTitles.size >= 2) break;
+    }
+  }
+
+  // Priority 9: Optimal All-Clear Fallback (Only if zero actionable priorities exist)
+  if (dynamicPriorities.length === 0) {
     dynamicPriorities.push({
       id: priorityId++,
-      text: `${upcomingDeadlines[0].title} (${upcomingDeadlines[0].day} ${upcomingDeadlines[0].month}) approaching`,
-      badgeColor: "bg-slate-800 text-white",
-      href: "/examinations",
-      category: "deadline",
-    });
-  } else {
-    dynamicPriorities.push({
-      id: priorityId++,
-      text: `No university examinations scheduled in the next 14 days`,
-      badgeColor: "bg-slate-700 text-white",
-      href: "/examinations",
-      category: "deadline",
+      text: "All academic operations, attendance submissions, and syllabus schedules are on track today",
+      badgeColor: "bg-emerald-600 text-white",
+      href: "/timetables",
+      category: "optimal",
+      urgency: "Optimal",
     });
   }
 

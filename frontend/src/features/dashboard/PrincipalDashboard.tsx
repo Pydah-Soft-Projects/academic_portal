@@ -122,6 +122,7 @@ export type PrincipalDashboardData = {
     badgeColor: string;
     href: string;
     category: string;
+    urgency?: "Urgent" | "Action" | "Review" | "Warning" | "Notice" | "Optimal" | string;
   }>;
   sectionAttendance: Array<{
     department: string;
@@ -763,25 +764,48 @@ export function PrincipalDashboard({
               </button>
             </div>
 
-            {/* List of 8 items */}
-            <div className="mt-2.5 space-y-1.5">
+            {/* List of priority action items */}
+            <div className="mt-2.5 space-y-2">
               {current.priorities.map((item) => (
                 <Link
                   key={item.id}
                   href={item.href}
-                  className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-50 transition-colors group cursor-pointer"
+                  className="flex items-start justify-between p-2 rounded-lg hover:bg-slate-50 transition-colors group cursor-pointer border border-transparent hover:border-slate-200/80"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-start gap-2.5 min-w-0 pr-1">
                     <span
-                      className={`w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${item.badgeColor}`}
+                      className={`w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-black shrink-0 mt-0.5 shadow-2xs ${item.badgeColor}`}
                     >
                       {item.id}
                     </span>
-                    <span className="text-xs text-slate-800 font-medium group-hover:text-blue-600 transition-colors line-clamp-1">
-                      {item.text}
-                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        {item.urgency && (
+                          <span
+                            className={`text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.2 rounded shrink-0 ${
+                              item.urgency === "Urgent"
+                                ? "bg-red-100 text-red-700"
+                                : item.urgency === "Action"
+                                ? "bg-rose-100 text-rose-700"
+                                : item.urgency === "Warning"
+                                ? "bg-amber-100 text-amber-700"
+                                : item.urgency === "Review"
+                                ? "bg-orange-100 text-orange-700"
+                                : item.urgency === "Optimal"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : "bg-slate-100 text-slate-700"
+                            }`}
+                          >
+                            {item.urgency}
+                          </span>
+                        )}
+                        <span className="text-xs text-slate-800 font-semibold group-hover:text-blue-600 transition-colors leading-snug">
+                          {item.text}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all shrink-0 ml-1" />
+                  <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all shrink-0 mt-0.5 ml-1" />
                 </Link>
               ))}
             </div>
@@ -1281,25 +1305,57 @@ export function PrincipalDashboard({
 
             <div className="py-4">
               {activeModal === "priorities" && (
-                <div className="space-y-2">
+                <div className="space-y-2.5">
+                  <div className="text-xs text-slate-500 mb-2">
+                    Action items requiring principal or vice-principal attention, ordered by operational urgency:
+                  </div>
                   {current.priorities.map((item) => (
                     <Link
                       key={item.id}
                       href={item.href}
                       onClick={() => setActiveModal(null)}
-                      className="flex items-center justify-between p-3 rounded-xl border border-slate-200/80 hover:border-blue-500 hover:bg-blue-50/20 transition-all group"
+                      className="flex items-start justify-between p-3.5 rounded-xl border border-slate-200/90 hover:border-blue-500 hover:bg-blue-50/20 transition-all group cursor-pointer"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-start gap-3 min-w-0 pr-2">
                         <span
-                          className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${item.badgeColor}`}
+                          className={`w-6 h-6 rounded-md flex items-center justify-center text-xs font-black shrink-0 mt-0.5 shadow-2xs ${item.badgeColor}`}
                         >
                           {item.id}
                         </span>
-                        <span className="text-xs sm:text-sm font-semibold text-slate-800 group-hover:text-blue-600">
-                          {item.text}
-                        </span>
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            {item.urgency && (
+                              <span
+                                className={`text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded ${
+                                  item.urgency === "Urgent"
+                                    ? "bg-red-100 text-red-700"
+                                    : item.urgency === "Action"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : item.urgency === "Warning"
+                                    ? "bg-amber-100 text-amber-700"
+                                    : item.urgency === "Review"
+                                    ? "bg-orange-100 text-orange-700"
+                                    : item.urgency === "Optimal"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-slate-100 text-slate-700"
+                                }`}
+                              >
+                                {item.urgency}
+                              </span>
+                            )}
+                            <span className="text-[11px] text-slate-400 capitalize">
+                              Category: {item.category.replace(/_/g, " ")}
+                            </span>
+                          </div>
+                          <span className="text-xs sm:text-sm font-semibold text-slate-900 group-hover:text-blue-600 transition-colors leading-relaxed block">
+                            {item.text}
+                          </span>
+                        </div>
                       </div>
-                      <ExternalLink className="h-4 w-4 text-slate-400 group-hover:text-blue-600 shrink-0" />
+                      <div className="flex items-center gap-1 text-xs font-semibold text-blue-600 shrink-0 mt-1 group-hover:translate-x-0.5 transition-transform">
+                        <span>Open</span>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </div>
                     </Link>
                   ))}
                 </div>
