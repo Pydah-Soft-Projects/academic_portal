@@ -569,35 +569,31 @@ export async function getHodDashboardData(
   };
 
   let riskRows: RiskRow[] = [];
-  try {
-    riskRows = await queryAcademic<RiskRow[]>(
+  try {    riskRows = await queryStudent<RiskRow[]>(
       `
       SELECT
-        p.year_of_study as current_year,
-        COALESCE(NULLIF(TRIM(cs.section_name), ''), 'A') as section,
-        COUNT(DISTINCT CASE WHEN att.pct < 65 THEN att.student_db_id END) as low_att_count
-      FROM ap_class_sessions cs
-      JOIN ap_timetable_plans p ON p.id = cs.plan_id
+        s.current_year,
+        COALESCE(NULLIF(TRIM(s.section), ''), 'A') as section,
+        COUNT(DISTINCT CASE WHEN low.pct < 65 THEN s.id END) as low_att_count
+      FROM students s
       LEFT JOIN (
         SELECT
-          aps.student_db_id,
-          cs2.branch_id,
-          ROUND(
-            SUM(CASE WHEN aps.status = 'present' THEN 1 ELSE 0 END) * 100.0 /
-            NULLIF(SUM(CASE WHEN aps.status IN ('present', 'absent') THEN 1 ELSE 0 END), 0),
-            1
-          ) as pct
-        FROM ap_attendance_post_students aps
-        INNER JOIN ap_attendance_posts ap ON ap.id = aps.attendance_post_id
-        INNER JOIN ap_class_sessions cs2 ON cs2.id = ap.class_session_id
-        WHERE cs2.branch_id = ?
-          AND cs2.session_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
-        GROUP BY aps.student_db_id, cs2.branch_id
-      ) att ON att.branch_id = cs.branch_id
-      WHERE cs.branch_id = ?
-        AND cs.status NOT IN ('cancelled', 'holiday')
-      GROUP BY p.year_of_study, section
-      ORDER BY p.year_of_study ASC, section ASC
+          ar.student_id,
+          ROUND(SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as pct
+        FROM attendance_records ar
+        JOIN students st ON st.id = ar.student_id
+        WHERE st.branch_id = ?
+          AND LOWER(TRIM(COALESCE(st.student_status, ''))) = 'regular'
+          AND ar.attendance_date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+        GROUP BY ar.student_id
+      ) low ON low.student_id = s.id
+      WHERE s.branch_id = ?
+        AND s.current_year IS NOT NULL
+        AND s.current_year >= 2
+        AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
+      GROUP BY s.current_year, section
+      HAVING COUNT(DISTINCT s.id) >= 5
+      ORDER BY s.current_year ASC, section ASC
       `,
       [activeBranchId, activeBranchId],
     );
@@ -632,7 +628,7 @@ export async function getHodDashboardData(
     examFailRows = [];
   }
 
-  const sectionsAtRisk: HodDashboardData["sectionsAtRisk"] = riskRows.slice(0, 8).map((r, idx) => {
+  const sectionsAtRisk: HodDashboardData["sectionsAtRisk"] = riskRows.map((r, idx) => {
     const yr = ROMAN_YEARS[r.current_year] || String(r.current_year);
     const secLabel = `${yr} - ${r.section}`;
 

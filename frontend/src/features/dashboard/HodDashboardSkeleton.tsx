@@ -25,38 +25,7 @@ export function HodDashboardSkeleton({ className }: HodDashboardSkeletonProps) {
       aria-label="Loading HOD dashboard…"
       className={cn("space-y-4 pb-12 font-sans antialiased portal-fade-in select-none text-slate-800", className)}
     >
-      {/* ─────────────────────────────────────────────────────────────
-          TOP BAR: Title (Left) | Branch Filter, Refresh, Date, Profile (Right)
-      ────────────────────────────────────────────────────────────── */}
-      <div className="hidden sm:flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3.5 bg-white p-3.5 sm:p-4 rounded-2xl border border-blue-100 shadow-xs">
-        {/* Left: Clean Heading & Subtitle */}
-        <div className="flex items-center gap-3">
-          <Skeleton className="w-10 h-10 rounded-xl shrink-0" />
-          <div className="space-y-1">
-            <Skeleton className="h-6 w-44 rounded-lg" />
-            <Skeleton className="h-3 w-56 rounded" variant="subtle" />
-          </div>
-        </div>
 
-        {/* Right: Branch Filter, Refresh, Date, Profile */}
-        <div className="flex flex-wrap items-center gap-2.5 sm:gap-3 self-start lg:self-auto">
-          {/* Branch Filter Dropdown Skeleton */}
-          <Skeleton className="h-9 w-48 sm:w-56 rounded-xl" />
-          {/* Refresh Button Skeleton */}
-          <Skeleton className="h-9 w-9 rounded-xl" />
-          {/* Calendar Date Indicator Skeleton */}
-          <Skeleton className="h-9 w-36 rounded-xl" />
-
-          {/* User Profile Skeleton */}
-          <div className="flex items-center gap-2.5 pl-2 border-l border-slate-200">
-            <Skeleton className="w-9 h-9 rounded-full ring-2 ring-blue-100 shrink-0" variant="circular" />
-            <div className="space-y-1 hidden sm:block">
-              <Skeleton className="h-3.5 w-24 sm:w-28 rounded" />
-              <Skeleton className="h-2.5 w-16 sm:w-20 rounded" variant="subtle" />
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* ─────────────────────────────────────────────────────────────
           ROW 1: Student Attendance (Left) + Today's Priorities (Right)

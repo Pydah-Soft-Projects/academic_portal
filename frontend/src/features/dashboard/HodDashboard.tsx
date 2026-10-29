@@ -171,6 +171,10 @@ export function HodDashboard({
     link?: string;
   } | null>(null);
 
+  const activeBranchId =
+    filters.branchId != null && filters.branchId !== "all"
+      ? Number(filters.branchId)
+      : selectedBranchId;
   const activeAY = propAY || filters.academicYear;
   const activeDate = propDate || filters.date;
 
@@ -182,12 +186,14 @@ export function HodDashboard({
 
       try {
         const params = new URLSearchParams();
-        if (selectedBranchId != null) {
-          params.set("branchId", String(selectedBranchId));
+        if (activeBranchId != null) {
+          params.set("branchId", String(activeBranchId));
         } else if (selectedDeptName && selectedDeptName !== "all") {
           params.set("departmentName", selectedDeptName);
         }
         if (activeAY) params.set("academicYear", activeAY);
+        if (filters.startDate) params.set("startDate", filters.startDate);
+        if (filters.endDate) params.set("endDate", filters.endDate);
         if (activeDate) params.set("date", activeDate);
 
         const res = await apiFetch(`/hod/dashboard?${params.toString()}`);
@@ -212,7 +218,7 @@ export function HodDashboard({
         setRefreshing(false);
       }
     },
-    [selectedBranchId, selectedDeptName, activeAY, activeDate],
+    [activeBranchId, selectedDeptName, activeAY, activeDate, filters.startDate, filters.endDate],
   );
 
   useEffect(() => {
@@ -286,87 +292,7 @@ export function HodDashboard({
 
   return (
     <div className="space-y-4 pb-12 font-sans text-slate-800">
-      {/* ─────────────────────────────────────────────────────────────
-          TOP BAR: Title (Left) | Branch Filter, Refresh, Date, Profile (Right)
-      ────────────────────────────────────────────────────────────── */}
-      <div className="hidden sm:flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 sm:gap-3.5 bg-white p-3 sm:p-4 rounded-2xl border border-blue-100 shadow-xs">
-        {/* Left: Clean Heading & Subtitle */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
-          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center shrink-0 shadow-2xs">
-            <LayoutDashboard className="w-4 h-4 sm:w-5 sm:h-5" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="text-lg sm:text-2xl font-black text-blue-700 tracking-tight leading-tight truncate">
-              HOD Dashboard
-            </h1>
-            <p className="text-[11px] sm:text-xs font-medium text-slate-500 truncate">
-              Department Academic & Operational Intelligence
-            </p>
-          </div>
-        </div>
 
-        {/* Right: Branch Filter Dropdown, Refresh, Date, Profile */}
-        <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 w-full lg:w-auto justify-between sm:justify-start">
-          {/* Branch Filter Dropdown */}
-          <div className="relative flex-1 sm:flex-initial min-w-[170px] sm:min-w-0">
-            <Building2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-400 pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 z-10" />
-            <select
-              value={selectedBranchId != null ? String(selectedBranchId) : selectedDeptName}
-              onChange={(e) => {
-                const val = e.target.value;
-                const asNum = Number(val);
-                setLoading(true);
-                if (!isNaN(asNum) && asNum > 0) {
-                  setSelectedBranchId(asNum);
-                  const matched = departments.find((d) => d.id === asNum);
-                  if (matched) setSelectedDeptName(matched.name);
-                } else {
-                  setSelectedDeptName(val);
-                }
-              }}
-              className="w-full sm:w-auto appearance-none bg-slate-50 hover:bg-slate-100/80 border border-slate-200/90 text-slate-800 text-xs sm:text-sm font-semibold rounded-xl pl-8 sm:pl-9 pr-7 sm:pr-8 py-1.5 sm:py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 transition cursor-pointer max-w-full sm:max-w-xs truncate shadow-2xs"
-            >
-              {departments.length > 0 ? (
-                departments.map((dept) => (
-                  <option key={dept.id} value={dept.id}>
-                    {dept.label}
-                  </option>
-                ))
-              ) : (
-                <option value={selectedDeptName}>{displayDept}</option>
-              )}
-            </select>
-            <ChevronDown className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-500 pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2" />
-          </div>
-
-          {/* Refresh Button */}
-          <button
-            onClick={() => loadData(true)}
-            disabled={refreshing || isStatsLoading}
-            title="Refresh live data"
-            className="p-1.5 sm:p-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition cursor-pointer shadow-2xs shrink-0"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${refreshing || isStatsLoading ? "animate-spin text-blue-600" : ""}`} />
-          </button>
-
-          {/* Calendar Date Indicator */}
-          <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm font-semibold text-slate-700 bg-slate-50 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl border border-slate-200/80 shadow-2xs shrink-0">
-            <Calendar className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-blue-600" />
-            <span className="whitespace-nowrap text-[11px] sm:text-xs md:text-sm">{displayDate}</span>
-          </div>
-
-          {/* User Profile */}
-          <div className="flex items-center gap-2 pl-1.5 sm:pl-2 border-l border-slate-200 shrink-0">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-linear-to-tr from-blue-700 to-indigo-600 text-white flex items-center justify-center font-bold text-xs ring-2 ring-blue-100 shadow-2xs shrink-0">
-              {initials}
-            </div>
-            <div className="leading-tight hidden md:block">
-              <p className="text-xs sm:text-sm font-bold text-slate-900 truncate max-w-[140px]">{displayName}</p>
-              <p className="text-[11px] font-medium text-slate-500">{displayRole}</p>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {error ? (
         <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-700 flex items-center gap-2">

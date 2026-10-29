@@ -6,7 +6,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { breadcrumbsForPath } from "@/lib/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { isTeachingStaffOnly, isPrincipalOrVpUser } from "@/lib/teaching-scope";
+import { isTeachingStaffOnly, isPrincipalOrVpUser, isHodUser } from "@/lib/teaching-scope";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { useLoading } from "@/context/LoadingContext";
 import { FacultyAvatar } from "@/components/ui/FacultyAvatar";
@@ -38,6 +38,10 @@ export function TopHeader({ onMenuClick }: Props) {
     return allColleges.filter((c) => cIds.includes(c.id));
   }, [masters?.colleges, authorization?.scope]);
   const hasMultipleColleges = isPrincipal && accessibleColleges.length >= 2;
+  const isHod = isHodUser(authorization);
+  const accessibleBranches = useMemo(() => {
+    return masters?.branches ?? [];
+  }, [masters?.branches]);
 
   const currentAY =
     filters.academicYear ||
@@ -120,6 +124,35 @@ export function TopHeader({ onMenuClick }: Props) {
                       {c.name || c.code}
                     </option>
                   ))}
+                </select>
+                <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-slate-400 pointer-events-none" />
+              </div>
+            )}
+
+            {/* Branch Filter Dropdown (Shifted to left side of date range for HOD) */}
+            {isHod && accessibleBranches.length > 0 && (
+              <div className="relative">
+                <select
+                  value={filters.branchId != null && filters.branchId !== "all" ? String(filters.branchId) : (accessibleBranches[0]?.id ? String(accessibleBranches[0].id) : "all")}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilters({
+                      branchId: val === "all" ? "all" : Number(val),
+                      section: "all",
+                    });
+                  }}
+                  className="appearance-none h-7 sm:h-8 rounded-lg border border-slate-200 bg-slate-50 pl-2 pr-6 text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer max-w-[150px] sm:max-w-[210px] truncate"
+                  title="Select Department / Branch"
+                >
+                  {accessibleBranches.map((b) => {
+                    const course = masters?.courses?.find((c) => c.id === b.courseId);
+                    const label = course ? `${b.name} (${course.code || course.name})` : b.name;
+                    return (
+                      <option key={b.id} value={b.id}>
+                        {label}
+                      </option>
+                    );
+                  })}
                 </select>
                 <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-slate-400 pointer-events-none" />
               </div>
