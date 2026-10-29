@@ -41,6 +41,7 @@ import {
   Cell,
   LabelList,
 } from "recharts";
+import { PrincipalDashboardSkeleton } from "./PrincipalDashboardSkeleton";
 
 export interface PrincipalDashboardProps {
   roleType?: "principal" | "vice_principal" | "admin";
@@ -295,13 +296,8 @@ export function PrincipalDashboard({
 
   const current = data;
 
-  if (loading && !current) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[500px] space-y-4">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
-        <p className="text-sm font-medium text-slate-500">Loading {dashboardTitle}...</p>
-      </div>
-    );
+  if (loading) {
+    return <PrincipalDashboardSkeleton />;
   }
 
   if (error && !current) {
@@ -852,7 +848,7 @@ export function PrincipalDashboard({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         
         {/* Card 1: Student Attendance (Slot Wise) */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between h-[370px]">
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col justify-between h-[285px]">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -871,7 +867,7 @@ export function PrincipalDashboard({
             </div>
 
             {/* Bar Chart */}
-            <div className="h-56 w-full mt-3">
+            <div className="h-44 w-full mt-2">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={(current.slotAttendance || current.sectionAttendance) as any[]}
@@ -931,14 +927,14 @@ export function PrincipalDashboard({
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            <p className="text-[10px] text-slate-400 text-center mt-2 font-medium">
+            <p className="text-[10px] text-slate-400 text-center mt-1 font-medium">
               Click any bar to view detailed slot metrics
             </p>
           </div>
         </div>
 
         {/* Card 2: Students at Risk (Department Wise) */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[370px]">
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col h-[285px]">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-blue-600" />
@@ -990,7 +986,7 @@ export function PrincipalDashboard({
         </div>
 
         {/* Card 3: Subjects Behind Schedule */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[370px]">
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col h-[285px]">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
             <div className="flex items-center gap-2">
               <BookOpen className="h-4 w-4 text-amber-500" />
