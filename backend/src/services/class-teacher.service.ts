@@ -66,6 +66,8 @@ export async function getClassTeacherDashboardData(
     section?: string;
     academicYear?: string;
     date?: string;
+    branchId?: number;
+    collegeId?: number;
   } = {},
 ) {
   // 1. Resolve Staff Link & Profile for the Class Teacher
@@ -104,8 +106,8 @@ export async function getClassTeacherDashboardData(
     [authz.userId],
   );
 
-  let collegeId: number | null = roleRows[0]?.college_id ?? authz.scope.collegeIds?.[0] ?? null;
-  let branchId: number | null = roleRows[0]?.branch_id ?? authz.scope.branchIds?.[0] ?? null;
+  let collegeId: number | null = options.collegeId ?? roleRows[0]?.college_id ?? authz.scope.collegeIds?.[0] ?? null;
+  let branchId: number | null = options.branchId ?? roleRows[0]?.branch_id ?? authz.scope.branchIds?.[0] ?? null;
   let sectionName = options.section || null;
   let academicYear = options.academicYear || null;
   let semester: string | null = null;
@@ -165,7 +167,7 @@ export async function getClassTeacherDashboardData(
 
   // Fallback: If no direct mentor assignments, find students scoped by teacher's branch and section
   if (students.length === 0 && (branchId != null || collegeId != null || sectionName != null)) {
-    const whereParts: string[] = ["(s.student_status = 'Active' OR s.student_status IS NULL)"];
+    const whereParts: string[] = ["(s.student_status = 'Active' OR LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular' OR s.student_status IS NULL)"];
     const params: (string | number)[] = [];
 
     if (branchId != null) {
@@ -642,7 +644,7 @@ export async function getClassTeacherDashboardData(
       semester: semester || "—",
       teacherName: staff?.display_name || authz.roles?.[0]?.label || "Class Teacher",
       departmentName: staff?.department_name || "—",
-      dateFormatted: new Date().toLocaleDateString("en-US", {
+      dateFormatted: (options.date ? new Date(options.date + "T00:00:00") : new Date()).toLocaleDateString("en-US", {
         weekday: "short",
         day: "numeric",
         month: "short",

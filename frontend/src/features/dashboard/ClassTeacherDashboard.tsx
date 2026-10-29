@@ -117,6 +117,19 @@ export function ClassTeacherDashboard({
   date: propDate,
 }: ClassTeacherDashboardProps) {
   const { filters } = useAcademicContext();
+  const { user, authorization, loading: authLoading } = useAuth();
+
+  // 1. Role-based check: firstly verify class_teacher role
+  const ctRole = useMemo(() => {
+    return authorization?.roles?.find(
+      (r) =>
+        r.roleKey === "class_teacher" ||
+        r.roleKey === "mentor" ||
+        r.label.toLowerCase().includes("class teacher")
+    );
+  }, [authorization]);
+
+  const isClassTeacher = Boolean(ctRole);
 
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<ClassTeacherDashboardData | null>(null);
@@ -139,6 +152,8 @@ export function ClassTeacherDashboard({
       if (propSection) qParams.set("section", propSection);
       if (activeAY) qParams.set("academicYear", activeAY);
       if (activeDate) qParams.set("date", activeDate);
+      if (ctRole?.branchId) qParams.set("branchId", String(ctRole.branchId));
+      if (ctRole?.collegeId) qParams.set("collegeId", String(ctRole.collegeId));
 
       const res = await apiFetch(`/class-teacher/dashboard?${qParams.toString()}`);
       if (res.ok) {
@@ -153,40 +168,120 @@ export function ClassTeacherDashboard({
     } finally {
       setLoading(false);
     }
-  }, [propSection, activeAY, activeDate]);
+  }, [propSection, activeAY, activeDate, ctRole?.branchId, ctRole?.collegeId]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
 
+  // Construct activeData with live data or role-derived defaults so the dashboard is properly represented
+  const activeData: ClassTeacherDashboardData = useMemo(() => {
+    const teacherName =
+      data?.meta?.teacherName && data.meta.teacherName !== "—"
+        ? data.meta.teacherName
+        : user?.name || "Class Teacher";
+
+    const sectionName =
+      data?.meta?.sectionName && data.meta.sectionName !== "—"
+        ? data.meta.sectionName
+        : propSection || "—";
+
+    const academicYear =
+      data?.meta?.academicYear && data.meta.academicYear !== "—"
+        ? data.meta.academicYear
+        : activeAY || "—";
+
+    const semester =
+      data?.meta?.semester && data.meta.semester !== "—"
+        ? data.meta.semester
+        : "—";
+
+    const departmentName =
+      data?.meta?.departmentName && data.meta.departmentName !== "—"
+        ? data.meta.departmentName
+        : (user as { department?: string })?.department || "—";
+
+    const dateFormatted =
+      data?.meta?.dateFormatted ||
+      (activeDate ? new Date(activeDate + "T00:00:00") : new Date()).toLocaleDateString("en-US", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+
+    return {
+      meta: {
+        sectionName,
+        academicYear,
+        semester,
+        teacherName,
+        departmentName,
+        dateFormatted,
+        totalStudents: data?.meta?.totalStudents ?? 0,
+      },
+      kpis: data?.kpis || {
+        classAttendance: {
+          percentage: null,
+          present: null,
+          absent: null,
+          late: null,
+        },
+        studentsBelow65Count: null,
+        internal1FailedCount: null,
+        internal2FailedCount: null,
+        failedBothCount: null,
+        feePendingCount: null,
+      },
+      attendanceTrend: data?.attendanceTrend || [],
+      todaysPriorities: data?.todaysPriorities || [],
+      todaysTimetable: data?.todaysTimetable || [],
+      below65Students: data?.below65Students || [],
+      internalPerformance: data?.internalPerformance || null,
+      academicRiskStudents: data?.academicRiskStudents || [],
+      feeStatus: data?.feeStatus || null,
+      continuousAbsentees: data?.continuousAbsentees || [],
+      upcomingNotices: data?.upcomingNotices || [],
+    };
+  }, [data, user, propSection, activeAY]);
+
   // Fee Status Donut Chart Data
   const feeDonutData = useMemo(() => {
-    if (!data?.feeStatus) return [];
+    if (!activeData?.feeStatus) return [];
     return [
-      { name: "Paid", value: data.feeStatus.paid, color: "#10b981" },
-      { name: "Partial", value: data.feeStatus.partial, color: "#94a3b8" },
-      { name: "Pending", value: data.feeStatus.pending, color: "#ef4444" },
+      { name: "Paid", value: activeData.feeStatus.paid, color: "#10b981" },
+      { name: "Partial", value: activeData.feeStatus.partial, color: "#94a3b8" },
+      { name: "Pending", value: activeData.feeStatus.pending, color: "#ef4444" },
     ];
-  }, [data]);
+  }, [activeData]);
 
   // Internal Performance Bar Chart Data
   const internalBarData = useMemo(() => {
-    if (!data?.internalPerformance) return [];
+    if (!activeData?.internalPerformance) return [];
     return [
       {
         name: "Internal I",
-        Passed: data.internalPerformance.internal1.passed,
-        Failed: data.internalPerformance.internal1.failed,
+        Passed: activeData.internalPerformance.internal1.passed,
+        Failed: activeData.internalPerformance.internal1.failed,
       },
       {
         name: "Internal II",
-        Passed: data.internalPerformance.internal2.passed,
-        Failed: data.internalPerformance.internal2.failed,
+        Passed: activeData.internalPerformance.internal2.passed,
+        Failed: activeData.internalPerformance.internal2.failed,
       },
     ];
-  }, [data]);
+  }, [activeData]);
 
-  if (loading && !data) {
+  // Teacher initials for header avatar
+  const teacherInitials = useMemo(() => {
+    const parts = activeData.meta.teacherName.trim().split(/\s+/);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return parts[0]?.slice(0, 2).toUpperCase() || "CT";
+  }, [activeData.meta.teacherName]);
+
+  if ((loading || authLoading) && !data) {
     return (
       <div className="py-24 flex flex-col items-center justify-center space-y-3">
         <div className="h-8 w-8 rounded-full border-3 border-blue-600 border-t-transparent animate-spin" />
@@ -195,14 +290,14 @@ export function ClassTeacherDashboard({
     );
   }
 
-  // If no data returned from database at all
-  if (!data) {
+  // If role check fails (user does not have class teacher role)
+  if (!authLoading && !isClassTeacher && !authorization?.scope?.isGlobal) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
         <AlertTriangle className="h-8 w-8 text-amber-500 mx-auto mb-2" />
-        <h2 className="text-sm font-bold text-slate-800">No Class Scope Assigned</h2>
+        <h2 className="text-sm font-bold text-slate-800">Class Teacher Role Required</h2>
         <p className="text-xs text-slate-500 mt-1">
-          No active student roster or section assignment found for this class teacher.
+          This dashboard requires an assigned Class Teacher role.
         </p>
       </div>
     );
@@ -217,11 +312,11 @@ export function ClassTeacherDashboard({
             Class Teacher Dashboard
           </h1>
           <p className="text-xs text-slate-500 font-medium mt-0.5">
-            <span className="font-semibold text-slate-700">{data.meta.sectionName}</span>
+            <span className="font-semibold text-slate-700">{activeData.meta.sectionName}</span>
             <span className="mx-2 text-slate-300">|</span>
-            <span>{data.meta.academicYear}</span>
+            <span>{activeData.meta.academicYear}</span>
             <span className="mx-2 text-slate-300">|</span>
-            <span>{data.meta.semester}</span>
+            <span>{activeData.meta.semester}</span>
           </p>
         </div>
 
@@ -229,7 +324,7 @@ export function ClassTeacherDashboard({
           {/* Date pill */}
           <div className="hidden sm:inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50/80 text-xs text-slate-700 font-medium shadow-2xs">
             <Calendar className="h-3.5 w-3.5 text-slate-500" />
-            <span>{data.meta.dateFormatted}</span>
+            <span>{activeData.meta.dateFormatted}</span>
           </div>
 
           {/* Notification icon */}
@@ -240,14 +335,14 @@ export function ClassTeacherDashboard({
           {/* User profile */}
           <div className="flex items-center gap-2.5 pl-2 border-l border-slate-200">
             <div className="h-8.5 w-8.5 rounded-full bg-slate-900 text-white flex items-center justify-center text-xs font-bold shadow-xs">
-              CT
+              {teacherInitials}
             </div>
             <div className="text-left">
               <p className="text-xs font-bold text-slate-900 leading-tight">
-                {data.meta.teacherName}
+                {activeData.meta.teacherName}
               </p>
               <p className="text-[10px] text-slate-500 font-medium leading-tight">
-                Class Teacher ({data.meta.sectionName})
+                Class Teacher ({activeData.meta.sectionName})
               </p>
             </div>
           </div>
@@ -262,17 +357,19 @@ export function ClassTeacherDashboard({
             <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
               <Users className="h-4 w-4" />
             </div>
-            <span className="text-xs font-medium text-slate-600">Class Attendance</span>
+            <span className="text-xs font-medium text-slate-600">Class Attendance ({activeData.meta.dateFormatted})</span>
+            </div>
+            <span className="text-[10px] font-semibold text-slate-400">{activeData.meta.dateFormatted}</span>
           </div>
           <div className="mt-2 text-2xl font-black text-emerald-600 tracking-tight">
-            {data.kpis.classAttendance.percentage != null
-              ? `${data.kpis.classAttendance.percentage}%`
+            {activeData.kpis.classAttendance.percentage != null
+              ? `${activeData.kpis.classAttendance.percentage}%`
               : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
-            {data.kpis.classAttendance.present != null
-              ? `${data.kpis.classAttendance.present} Present | ${data.kpis.classAttendance.absent ?? 0} Absent | ${data.kpis.classAttendance.late ?? 0} Late`
-              : "No records today"}
+            {activeData.kpis.classAttendance.present != null
+              ? `${activeData.kpis.classAttendance.present} Present | ${activeData.kpis.classAttendance.absent ?? 0} Absent | ${activeData.kpis.classAttendance.late ?? 0} Late`
+              : `No records for ${activeData.meta.dateFormatted}`}
           </div>
         </div>
 
@@ -285,7 +382,7 @@ export function ClassTeacherDashboard({
             <span className="text-xs font-medium text-slate-600">Students &lt; 65%</span>
           </div>
           <div className="mt-2 text-2xl font-black text-rose-600 tracking-tight">
-            {data.kpis.studentsBelow65Count != null ? data.kpis.studentsBelow65Count : "—"}
+            {activeData.kpis.studentsBelow65Count != null ? activeData.kpis.studentsBelow65Count : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
             (Attendance Risk)
@@ -301,7 +398,7 @@ export function ClassTeacherDashboard({
             <span className="text-xs font-medium text-slate-600">Internal I Failed</span>
           </div>
           <div className="mt-2 text-2xl font-black text-blue-600 tracking-tight">
-            {data.kpis.internal1FailedCount != null ? data.kpis.internal1FailedCount : "—"}
+            {activeData.kpis.internal1FailedCount != null ? activeData.kpis.internal1FailedCount : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
             (Students)
@@ -317,7 +414,7 @@ export function ClassTeacherDashboard({
             <span className="text-xs font-medium text-slate-600">Internal II Failed</span>
           </div>
           <div className="mt-2 text-2xl font-black text-purple-600 tracking-tight">
-            {data.kpis.internal2FailedCount != null ? data.kpis.internal2FailedCount : "—"}
+            {activeData.kpis.internal2FailedCount != null ? activeData.kpis.internal2FailedCount : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
             (Students)
@@ -333,7 +430,7 @@ export function ClassTeacherDashboard({
             <span className="text-xs font-medium text-slate-600 truncate">Failed Both Internals</span>
           </div>
           <div className="mt-2 text-2xl font-black text-amber-600 tracking-tight">
-            {data.kpis.failedBothCount != null ? data.kpis.failedBothCount : "—"}
+            {activeData.kpis.failedBothCount != null ? activeData.kpis.failedBothCount : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
             (Critical Risk)
@@ -342,14 +439,15 @@ export function ClassTeacherDashboard({
 
         {/* KPI 6: Fee Pending */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-2xs">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
             <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
               <IndianRupee className="h-4 w-4" />
             </div>
             <span className="text-xs font-medium text-slate-600">Fee Pending</span>
           </div>
           <div className="mt-2 text-2xl font-black text-emerald-600 tracking-tight">
-            {data.kpis.feePendingCount != null ? data.kpis.feePendingCount : "—"}
+            {activeData.kpis.feePendingCount != null ? activeData.kpis.feePendingCount : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
             (Students)
@@ -362,10 +460,11 @@ export function ClassTeacherDashboard({
         {/* Attendance Trend */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <TrendingUp className="h-4 w-4 text-blue-600" />
               <h2 className="text-xs font-bold text-slate-800">
-                Attendance Trend ({data.meta.sectionName})
+                Attendance Trend ({activeData.meta.sectionName})
               </h2>
             </div>
             <Link
@@ -377,9 +476,9 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="h-48 w-full mt-3">
-            {data.attendanceTrend && data.attendanceTrend.length > 0 ? (
+            {activeData.attendanceTrend && activeData.attendanceTrend.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={data.attendanceTrend} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                <AreaChart data={activeData.attendanceTrend} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
                   <defs>
                     <linearGradient id="attTrendGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
@@ -422,9 +521,13 @@ export function ClassTeacherDashboard({
         {/* Today's Priorities */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 text-rose-500" />
-              <h2 className="text-xs font-bold text-slate-800">Today&apos;s Priorities</h2>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800">Today&apos;s Priorities</h2>
+                <p className="text-[10px] text-slate-400 font-medium">{activeData.meta.dateFormatted}</p>
+              </div>
             </div>
             <Link
               href="/mentoring-risks"
@@ -435,8 +538,8 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="space-y-2 mt-3 min-h-48 flex flex-col justify-center">
-            {data.todaysPriorities && data.todaysPriorities.length > 0 ? (
-              data.todaysPriorities.map((item) => {
+            {activeData.todaysPriorities && activeData.todaysPriorities.length > 0 ? (
+              activeData.todaysPriorities.map((item) => {
                 const badgeColor =
                   item.severity === "critical"
                     ? "bg-rose-500 text-white"
@@ -474,9 +577,13 @@ export function ClassTeacherDashboard({
         {/* Today's Timetable */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <Calendar className="h-4 w-4 text-blue-600" />
-              <h2 className="text-xs font-bold text-slate-800">Today&apos;s Timetable</h2>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800">Today&apos;s Timetable</h2>
+                <p className="text-[10px] text-slate-400 font-medium">{activeData.meta.dateFormatted}</p>
+              </div>
             </div>
             <Link
               href="/today-timetable"
@@ -487,7 +594,7 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="mt-2 divide-y divide-slate-100 min-h-48">
-            {data.todaysTimetable && data.todaysTimetable.length > 0 ? (
+            {activeData.todaysTimetable && activeData.todaysTimetable.length > 0 ? (
               <>
                 <div className="grid grid-cols-12 text-[10px] font-bold text-slate-400 uppercase tracking-wider py-1">
                   <span className="col-span-3">Time</span>
@@ -495,7 +602,7 @@ export function ClassTeacherDashboard({
                   <span className="col-span-3">Faculty</span>
                   <span className="col-span-2 text-right">Status</span>
                 </div>
-                {data.todaysTimetable.map((slot, idx) => {
+                {activeData.todaysTimetable.map((slot, idx) => {
                   const statusPill =
                     slot.status === "Conducted"
                       ? "bg-emerald-50 text-emerald-700"
@@ -537,9 +644,13 @@ export function ClassTeacherDashboard({
         {/* Students Below 65% Attendance */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-blue-600" />
-              <h2 className="text-xs font-bold text-slate-800">Students Below 65% Attendance</h2>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800">Students Below 65% Attendance</h2>
+                <p className="text-[10px] text-slate-400 font-medium">As of {activeData.meta.dateFormatted}</p>
+              </div>
             </div>
             <Link
               href="/mentoring-risks?risk=High"
@@ -550,7 +661,7 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="mt-2 divide-y divide-slate-100 min-h-48">
-            {data.below65Students && data.below65Students.length > 0 ? (
+            {activeData.below65Students && activeData.below65Students.length > 0 ? (
               <>
                 <div className="grid grid-cols-12 text-[10px] font-bold text-slate-400 uppercase tracking-wider py-1">
                   <span className="col-span-1">#</span>
@@ -560,7 +671,7 @@ export function ClassTeacherDashboard({
                   <span className="col-span-3 text-right">Action</span>
                 </div>
 
-                {data.below65Students.map((st, idx) => (
+                {activeData.below65Students.map((st, idx) => (
                   <div key={st.id || idx} className="grid grid-cols-12 items-center text-xs py-2">
                     <span className="col-span-1 text-[11px] text-slate-400">{idx + 1}</span>
                     <span className="col-span-3 font-semibold text-slate-800 text-[11px] truncate">{st.rollNo}</span>
@@ -595,7 +706,8 @@ export function ClassTeacherDashboard({
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
+  
+            <div className="flex items-center gap-2">
                 <TrendingUp className="h-4 w-4 text-blue-600" />
                 <h2 className="text-xs font-bold text-slate-800">Internal Exam Performance</h2>
               </div>
@@ -607,7 +719,7 @@ export function ClassTeacherDashboard({
               </Link>
             </div>
 
-            {data.internalPerformance ? (
+            {activeData.internalPerformance ? (
               <>
                 {/* Legend */}
                 <div className="flex items-center justify-center gap-6 mt-2 text-xs font-medium text-slate-600">
@@ -645,14 +757,15 @@ export function ClassTeacherDashboard({
           </div>
 
           {/* Bottom Card for Failed in Both Internals */}
-          {data.internalPerformance && (
+          {activeData.internalPerformance && (
             <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between bg-rose-50/50 p-2.5 rounded-lg border border-rose-100">
-              <div className="flex items-center gap-2">
+  
+            <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-rose-600" />
                 <div className="text-xs">
                   <span className="text-slate-600 font-medium">Failed in Both Internals: </span>
                   <span className="font-bold text-rose-600">
-                    {data.internalPerformance.failedBothCount} students
+                    {activeData.internalPerformance.failedBothCount} students
                   </span>
                 </div>
               </div>
@@ -669,9 +782,13 @@ export function ClassTeacherDashboard({
         {/* Students at Academic Risk */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <AlertTriangle className="h-4 w-4 text-rose-600" />
-              <h2 className="text-xs font-bold text-slate-800">Students at Academic Risk</h2>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800">Students at Academic Risk</h2>
+                <p className="text-[10px] text-slate-400 font-medium">As of {activeData.meta.dateFormatted}</p>
+              </div>
             </div>
             <Link
               href="/mentoring-risks"
@@ -682,7 +799,7 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="mt-2 divide-y divide-slate-100 min-h-48">
-            {data.academicRiskStudents && data.academicRiskStudents.length > 0 ? (
+            {activeData.academicRiskStudents && activeData.academicRiskStudents.length > 0 ? (
               <>
                 <div className="grid grid-cols-12 text-[10px] font-bold text-slate-400 uppercase tracking-wider py-1">
                   <span className="col-span-1">#</span>
@@ -694,7 +811,7 @@ export function ClassTeacherDashboard({
                   <span className="col-span-1 text-right">Risk</span>
                 </div>
 
-                {data.academicRiskStudents.map((st, idx) => {
+                {activeData.academicRiskStudents.map((st, idx) => {
                   const riskBadge =
                     st.risk === "Critical"
                       ? "bg-rose-100 text-rose-700"
@@ -749,11 +866,15 @@ export function ClassTeacherDashboard({
         {/* Fee Status */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <IndianRupee className="h-4 w-4 text-emerald-600" />
-              <h2 className="text-xs font-bold text-slate-800">
-                Fee Status ({data.meta.sectionName})
-              </h2>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800">
+                  Fee Status ({activeData.meta.sectionName})
+                </h2>
+                <p className="text-[10px] text-slate-400 font-medium">As of {activeData.meta.dateFormatted}</p>
+              </div>
             </div>
             <Link
               href="/students"
@@ -764,7 +885,7 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="min-h-36 flex items-center justify-center">
-            {data.feeStatus ? (
+            {activeData.feeStatus ? (
               <div className="flex items-center justify-between w-full mt-3 gap-4">
                 {/* Donut chart */}
                 <div className="h-36 w-36 relative shrink-0">
@@ -788,7 +909,7 @@ export function ClassTeacherDashboard({
                   {/* Centered label */}
                   <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                     <span className="text-xl font-black text-slate-900 leading-none">
-                      {data.feeStatus.pending}
+                      {activeData.feeStatus.pending}
                     </span>
                     <span className="text-[9px] text-slate-500 font-medium mt-0.5 text-center leading-tight">
                       Students<br />Pending
@@ -803,25 +924,25 @@ export function ClassTeacherDashboard({
                       <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
                       <span className="text-slate-600 font-medium">Paid</span>
                     </div>
-                    <span className="font-bold text-slate-900">{data.feeStatus.paid}</span>
+                    <span className="font-bold text-slate-900">{activeData.feeStatus.paid}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full bg-slate-400" />
                       <span className="text-slate-600 font-medium">Partial</span>
                     </div>
-                    <span className="font-bold text-slate-900">{data.feeStatus.partial}</span>
+                    <span className="font-bold text-slate-900">{activeData.feeStatus.partial}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <span className="h-2.5 w-2.5 rounded-full bg-rose-500" />
                       <span className="text-slate-600 font-medium">Pending</span>
                     </div>
-                    <span className="font-bold text-rose-600">{data.feeStatus.pending}</span>
+                    <span className="font-bold text-rose-600">{activeData.feeStatus.pending}</span>
                   </div>
                   <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
                     <span>Total Students</span>
-                    <span className="font-bold text-slate-800">{data.feeStatus.total}</span>
+                    <span className="font-bold text-slate-800">{activeData.feeStatus.total}</span>
                   </div>
                 </div>
               </div>
@@ -836,9 +957,13 @@ export function ClassTeacherDashboard({
         {/* Continuous Absentees (3+ days) */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-blue-600" />
-              <h2 className="text-xs font-bold text-slate-800">Continuous Absentees (3+ days)</h2>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800">Continuous Absentees (3+ days)</h2>
+                <p className="text-[10px] text-slate-400 font-medium">Tracking up to {activeData.meta.dateFormatted}</p>
+              </div>
             </div>
             <Link
               href="/attendance-analytics"
@@ -849,7 +974,7 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="mt-2 divide-y divide-slate-100 min-h-36">
-            {data.continuousAbsentees && data.continuousAbsentees.length > 0 ? (
+            {activeData.continuousAbsentees && activeData.continuousAbsentees.length > 0 ? (
               <>
                 <div className="grid grid-cols-12 text-[10px] font-bold text-slate-400 uppercase tracking-wider py-1">
                   <span className="col-span-1">#</span>
@@ -859,7 +984,7 @@ export function ClassTeacherDashboard({
                   <span className="col-span-2 text-right">Last Attended</span>
                 </div>
 
-                {data.continuousAbsentees.map((st, idx) => (
+                {activeData.continuousAbsentees.map((st, idx) => (
                   <div key={st.id || idx} className="grid grid-cols-12 items-center text-xs py-2">
                     <span className="col-span-1 text-[11px] text-slate-400">{idx + 1}</span>
                     <span className="col-span-3 font-semibold text-slate-800 text-[11px] truncate">{st.rollNo}</span>
@@ -890,6 +1015,7 @@ export function ClassTeacherDashboard({
         {/* Upcoming Events / Notices */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-4 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+
             <div className="flex items-center gap-2">
               <Bell className="h-4 w-4 text-purple-600" />
               <h2 className="text-xs font-bold text-slate-800">Upcoming Events / Notices</h2>
@@ -903,8 +1029,8 @@ export function ClassTeacherDashboard({
           </div>
 
           <div className="space-y-2.5 mt-2 min-h-36 flex flex-col justify-center">
-            {data.upcomingNotices && data.upcomingNotices.length > 0 ? (
-              data.upcomingNotices.map((notice, idx) => (
+            {activeData.upcomingNotices && activeData.upcomingNotices.length > 0 ? (
+              activeData.upcomingNotices.map((notice, idx) => (
                 <div
                   key={idx}
                   className="flex items-center justify-between p-1.5 rounded-lg hover:bg-slate-50 transition-colors group cursor-pointer"
@@ -942,7 +1068,8 @@ export function ClassTeacherDashboard({
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/80">
-              <div className="flex items-center gap-2">
+  
+            <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center">
                   <PhoneCall className="h-4 w-4" />
                 </div>

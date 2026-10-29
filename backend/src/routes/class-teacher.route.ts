@@ -36,11 +36,15 @@ classTeacherRouter.get("/dashboard", requirePermission("dashboard.view"), async 
     const section = typeof req.query.section === "string" ? req.query.section : undefined;
     const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : undefined;
     const date = typeof req.query.date === "string" ? req.query.date : undefined;
+    const branchId = optionalNumber(req.query.branchId);
+    const collegeId = optionalNumber(req.query.collegeId);
 
     const data = await getClassTeacherDashboardData(getAuthz(req), {
       section,
       academicYear,
       date,
+      branchId,
+      collegeId,
     });
 
     res.json({ data });
