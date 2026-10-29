@@ -62,6 +62,8 @@ function todayIso() {
 
 export type AcademicFilters = {
   date: string;
+  startDate?: string;
+  endDate?: string;
   academicYear: string;
   collegeId: number | "all";
   courseId: number | "all";
@@ -109,8 +111,11 @@ export function computeInitialFilters(
     defaultCollegeId = masters.colleges[0]!.id;
   }
 
+  const today = todayIso();
   const base: AcademicFilters = {
-    date: todayIso(),
+    date: today,
+    startDate: today,
+    endDate: today,
     academicYear: defaultYear,
     collegeId: defaultCollegeId,
     courseId: "all",

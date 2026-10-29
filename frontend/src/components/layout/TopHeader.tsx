@@ -1,11 +1,12 @@
 "use client";
 
+import { useMemo } from "react";
 import { Bell, Menu, Calendar, ChevronDown } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { breadcrumbsForPath } from "@/lib/navigation";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { isTeachingStaffOnly } from "@/lib/teaching-scope";
+import { isTeachingStaffOnly, isPrincipalOrVpUser } from "@/lib/teaching-scope";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { useLoading } from "@/context/LoadingContext";
 import { FacultyAvatar } from "@/components/ui/FacultyAvatar";
@@ -27,6 +28,17 @@ export function TopHeader({ onMenuClick }: Props) {
 
   const isDashboard = pathname === "/dashboard" || pathname.startsWith("/dashboard/");
   const showDateAndScopeControls = isDashboard || teachingStaffOnly;
+  const isPrincipal = isPrincipalOrVpUser(authorization);
+  const accessibleColleges = useMemo(() => {
+    const allColleges = masters?.colleges ?? [];
+    if (!authorization?.scope) return allColleges;
+    if (authorization.scope.isGlobal) return allColleges;
+    const cIds = authorization.scope.collegeIds;
+    if (!cIds || cIds.length === 0) return allColleges;
+    return allColleges.filter((c) => cIds.includes(c.id));
+  }, [masters?.colleges, authorization?.scope]);
+  const hasMultipleColleges = isPrincipal && accessibleColleges.length >= 2;
+
   const currentAY =
     filters.academicYear ||
     masters?.defaults?.academicYear ||
@@ -86,15 +98,59 @@ export function TopHeader({ onMenuClick }: Props) {
         {/* Date, Academic Year, and Semester Controls in Top Header */}
         {showDateAndScopeControls && (
           <div className="order-last sm:order-none w-full sm:w-auto flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-100">
-            {/* Interactive Date Picker */}
-            <div className="flex items-center gap-1 px-1.5 sm:px-2.5 py-0.5 sm:py-1 rounded-lg border border-slate-200 bg-slate-50 text-[10.5px] sm:text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 transition-colors h-7 sm:h-8">
+            {/* College Dropdown (Displayed only if Principal has access to 2 or more colleges) */}
+            {hasMultipleColleges && (
+              <div className="relative">
+                <select
+                  value={filters.collegeId != null && filters.collegeId !== "all" ? String(filters.collegeId) : "all"}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setFilters({
+                      collegeId: val === "all" ? "all" : Number(val),
+                      branchId: "all",
+                      section: "all",
+                    });
+                  }}
+                  className="appearance-none h-7 sm:h-8 rounded-lg border border-slate-200 bg-slate-50 pl-2 pr-6 text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer max-w-[130px] sm:max-w-[180px] truncate"
+                  title="Select College"
+                >
+                  <option value="all">All Colleges</option>
+                  {accessibleColleges.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name || c.code}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-slate-400 pointer-events-none" />
+              </div>
+            )}
+
+            {/* Interactive Date Range Picker */}
+            <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg border border-slate-200 bg-slate-50 text-[10.5px] sm:text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 transition-colors h-7 sm:h-8">
               <Calendar className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-slate-500 shrink-0" />
               <input
                 type="date"
-                value={filters.date}
-                onChange={(e) => setFilters({ date: e.target.value })}
-                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none cursor-pointer w-[92px] sm:w-[115px]"
-                title="Select Date"
+                value={filters.startDate || filters.date}
+                onChange={(e) => {
+                  const newStart = e.target.value;
+                  const newEnd = (filters.endDate && filters.endDate < newStart) ? newStart : (filters.endDate || newStart);
+                  setFilters({ startDate: newStart, endDate: newEnd, date: newStart });
+                }}
+                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none cursor-pointer w-[92px] sm:w-[110px]"
+                title="Start Date"
+              />
+              <span className="text-slate-400 font-normal select-none text-[10px] sm:text-[11px]">to</span>
+              <input
+                type="date"
+                value={filters.endDate || filters.startDate || filters.date}
+                min={filters.startDate || filters.date}
+                onChange={(e) => {
+                  const newEnd = e.target.value;
+                  const newStart = (filters.startDate && filters.startDate > newEnd) ? newEnd : (filters.startDate || newEnd);
+                  setFilters({ startDate: newStart, endDate: newEnd, date: newStart });
+                }}
+                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none cursor-pointer w-[92px] sm:w-[110px]"
+                title="End Date"
               />
             </div>
 

@@ -10,6 +10,8 @@ export type PrincipalDashboardFilters = {
   academicYear?: string;
   semester?: string | number;
   date?: string;
+  startDate?: string;
+  endDate?: string;
 };
 
 export async function getPrincipalDashboardData(
@@ -21,15 +23,24 @@ export async function getPrincipalDashboardData(
   const userInitials = isVp ? "VP" : "P";
   const roleLabel = isVp ? "Vice Principal" : "Principal";
 
-  // Date formatting
+  // Date formatting & range support
   const today = new Date();
-  const selectedDateStr = filters.date || today.toISOString().slice(0, 10);
-  const dateFormatted = new Date(selectedDateStr + "T00:00:00").toLocaleDateString("en-GB", {
-    weekday: "short",
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  const startDateStr = filters.startDate || filters.date || today.toISOString().slice(0, 10);
+  const endDateStr = filters.endDate || filters.startDate || filters.date || today.toISOString().slice(0, 10);
+  const isDateRange = startDateStr !== endDateStr;
+  const selectedDateStr = startDateStr;
+
+  const dateClause = isDateRange ? "cs.session_date BETWEEN ? AND ?" : "cs.session_date = ?";
+  const dateParams = isDateRange ? [startDateStr, endDateStr] : [startDateStr];
+
+  const dateFormatted = isDateRange
+    ? `${new Date(startDateStr + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} - ${new Date(endDateStr + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+    : new Date(startDateStr + "T00:00:00").toLocaleDateString("en-GB", {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
 
   const academicYear = filters.academicYear || "AY 2024-25";
   const semester =
@@ -50,7 +61,7 @@ export async function getPrincipalDashboardData(
   let allowedBranchIds: number[] = [];
   if (filters.branchId) {
     allowedBranchIds = [filters.branchId];
-  } else if (authz.scope.branchIds?.length) {
+  } else if (!filters.collegeId && authz.scope.branchIds?.length) {
     allowedBranchIds = authz.scope.branchIds;
   }
 
@@ -58,15 +69,19 @@ export async function getPrincipalDashboardData(
   let branchWhere = ["(cb.is_active = 1 OR cb.is_active IS NULL)"];
   let branchParams: (number | string)[] = [];
 
+  // Filter by College (always applied when college is specified or user is scoped)
+  if (allowedCollegeIds.length > 0) {
+    branchWhere.push(`c.college_id IN (${allowedCollegeIds.map(() => "?").join(",")})`);
+    branchParams.push(...allowedCollegeIds);
+  }
+
+  // Filter by Branch or Course
   if (allowedBranchIds.length > 0) {
     branchWhere.push(`cb.id IN (${allowedBranchIds.map(() => "?").join(",")})`);
     branchParams.push(...allowedBranchIds);
   } else if (filters.courseId) {
     branchWhere.push("cb.course_id = ?");
     branchParams.push(filters.courseId);
-  } else if (allowedCollegeIds.length > 0) {
-    branchWhere.push(`c.college_id IN (${allowedCollegeIds.map(() => "?").join(",")})`);
-    branchParams.push(...allowedCollegeIds);
   }
 
   const scopedBranches = await queryStudent<
@@ -182,9 +197,9 @@ export async function getPrincipalDashboardData(
         FROM ap_class_sessions cs
         JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
         LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
-        WHERE cs.session_date = ? AND cs.branch_id IN (${branchInSql})
+        WHERE ${dateClause} AND cs.branch_id IN (${branchInSql})
         `,
-        [selectedDateStr, ...activeBranchIds],
+        [...dateParams, ...activeBranchIds],
       );
     } catch {
       todaySessions = [];
@@ -740,7 +755,21 @@ export async function getPrincipalDashboardData(
   // Calculate branches with pending internal marks
   const branchesPendingMarksSubmission = scopedBranches.filter((b) => !submittedMarksBranchSet.has(b.id));
 
-  // 9. Real Subjects Behind Schedule (computed directly from ap_class_sessions)
+  // Sort branches by active student enrollment so active academic departments are prioritized
+  const branchesSortedByEnrollment = [...scopedBranches].sort((a, b) => {
+    const aTotal = studentBranchStats.find((s) => s.branch_id === a.id)?.total_students || 0;
+    const bTotal = studentBranchStats.find((s) => s.branch_id === b.id)?.total_students || 0;
+    return bTotal - aTotal;
+  });
+
+  const activeEnrolledBranches = branchesSortedByEnrollment.filter(
+    (b) => (studentBranchStats.find((s) => s.branch_id === b.id)?.total_students || 0) > 0,
+  );
+  const branchesForCards = activeEnrolledBranches.length > 0 ? activeEnrolledBranches : branchesSortedByEnrollment;
+  const targetBranchIds = branchesForCards.map((b) => b.id);
+  const targetBranchInSql = targetBranchIds.length > 0 ? targetBranchIds.map(() => "?").join(",") : branchInSql;
+
+  // 9. Real Subjects Behind Schedule (computed from active enrolled branches with syllabus pacing till today)
   type SubjectBehindSessionRow = RowDataPacket & {
     subject_id: number;
     subject_name: string;
@@ -748,12 +777,13 @@ export async function getPrincipalDashboardData(
     branch_id: number;
     faculty_name: string | null;
     total_scheduled: number;
+    scheduled_till_today: number;
     conducted_count: number;
     cancelled_count: number;
   };
 
   let realBehindSessionRows: SubjectBehindSessionRow[] = [];
-  if (activeBranchIds.length > 0) {
+  if (targetBranchIds.length > 0) {
     try {
       realBehindSessionRows = await queryAcademic<SubjectBehindSessionRow[]>(
         `
@@ -764,18 +794,19 @@ export async function getPrincipalDashboardData(
           cs.branch_id,
           sl.display_name as faculty_name,
           COUNT(cs.id) as total_scheduled,
+          SUM(CASE WHEN cs.session_date <= ? THEN 1 ELSE 0 END) as scheduled_till_today,
           SUM(CASE WHEN cs.status IN ('posted', 'completed') THEN 1 ELSE 0 END) as conducted_count,
           SUM(CASE WHEN cs.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count
         FROM ap_class_sessions cs
         LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
         WHERE cs.subject_name IS NOT NULL
-          AND cs.branch_id IN (${branchInSql})
+          AND cs.branch_id IN (${targetBranchInSql})
         GROUP BY cs.subject_id, cs.subject_name, cs.subject_code, cs.branch_id, sl.display_name
-        HAVING cancelled_count > 0 OR (total_scheduled > 5 AND conducted_count < (total_scheduled * 0.6))
-        ORDER BY cancelled_count DESC, (conducted_count / total_scheduled) ASC
+        HAVING cancelled_count > 0 OR (scheduled_till_today > 5 AND conducted_count < (scheduled_till_today * 0.6))
+        ORDER BY cancelled_count DESC, scheduled_till_today DESC
         LIMIT 10
         `,
-        activeBranchIds,
+        [selectedDateStr, ...targetBranchIds],
       );
     } catch {
       realBehindSessionRows = [];
@@ -795,61 +826,181 @@ export async function getPrincipalDashboardData(
   for (const r of realBehindSessionRows) {
     const b = scopedBranches.find((br) => br.id === r.branch_id);
     const dept = b?.code || b?.name || "DEPT";
-    const total = Number(r.total_scheduled || 1);
+    const cleanSubjectName = (r.subject_name || "Subject").replace(/^["']|["']$/g, "").trim();
+    const schedTillToday = Number(r.scheduled_till_today || 1);
     const cancelled = Number(r.cancelled_count || 0);
     const conducted = Number(r.conducted_count || 0);
+    const delayClasses = cancelled > 0 ? cancelled : Math.max(0, schedTillToday - conducted);
+    const delayPct = schedTillToday > 0 ? Math.min(100, Math.round((delayClasses / schedTillToday) * 100)) : 0;
 
-    let delayPct = 0;
-    if (cancelled > 0) {
-      delayPct = Math.min(100, Math.max(1, Math.round((cancelled / total) * 100)));
-    } else if (total > 5 && conducted < total * 0.5) {
-      delayPct = Math.min(100, Math.max(1, Math.round(((total * 0.5 - conducted) / total) * 100)));
-    }
+    const status = delayPct >= 10 || delayClasses >= 2 ? "Behind" : "In Progress";
 
-    const status = delayPct >= 10 ? "Behind" : "In Progress";
-
-    if (delayPct >= 10 || cancelled > 0) {
+    if (delayPct >= 10 || delayClasses >= 2) {
       branchBehindCountMap.set(r.branch_id, (branchBehindCountMap.get(r.branch_id) || 0) + 1);
     }
 
     subjectsBehindSchedule.push({
-      subject: r.subject_name,
+      subject: cleanSubjectName,
       faculty: r.faculty_name || "Assigned Faculty",
       dept,
-      delay: `${delayPct}%`,
+      delay: delayClasses > 0 ? `${delayPct}% (${delayClasses} classes)` : `${delayPct}%`,
       status,
     });
   }
 
-  // Sort branches by active student enrollment so active academic departments are prioritized
-  const branchesSortedByEnrollment = [...scopedBranches].sort((a, b) => {
-    const aTotal = studentBranchStats.find((s) => s.branch_id === a.id)?.total_students || 0;
-    const bTotal = studentBranchStats.find((s) => s.branch_id === b.id)?.total_students || 0;
-    return bTotal - aTotal;
-  });
+  // 9b. Today's Student Attendance per Branch and Year Breakdown
+  type TodayBranchAttRow = RowDataPacket & {
+    branch_id: number;
+    year_of_study: number | null;
+    total_sessions: number;
+    posted_sessions: number;
+    total_present: number | null;
+    total_marked: number | null;
+  };
 
-  const activeEnrolledBranches = branchesSortedByEnrollment.filter(
-    (b) => (studentBranchStats.find((s) => s.branch_id === b.id)?.total_students || 0) > 0,
-  );
-  const branchesForCards = activeEnrolledBranches.length > 0 ? activeEnrolledBranches : branchesSortedByEnrollment;
+  const todayBranchAttMap = new Map<number, { total: number; posted: number; present: number; marked: number; pct: number | null }>();
+  const todayYearAttMap = new Map<string, { total: number; posted: number; present: number; marked: number; pct: number | null }>();
+  let overallTodayPresent = 0;
+  let overallTodayMarked = 0;
+  let overallTodayPostedClasses = 0;
+
+  if (activeBranchIds.length > 0) {
+    try {
+      const todayAttRows = await queryAcademic<TodayBranchAttRow[]>(
+        `
+        SELECT 
+          cs.branch_id,
+          COALESCE(tp.year_of_study, 0) as year_of_study,
+          COUNT(cs.id) as total_sessions,
+          SUM(CASE WHEN cs.status IN ('posted', 'completed') OR ap.id IS NOT NULL THEN 1 ELSE 0 END) as posted_sessions,
+          SUM(ap.present_count) as total_present,
+          SUM(ap.present_count + ap.absent_count + ap.od_count + ap.leave_count) as total_marked
+        FROM ap_class_sessions cs
+        LEFT JOIN ap_timetable_plans tp ON tp.id = cs.plan_id
+        LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+        WHERE cs.session_date = ? AND cs.branch_id IN (${branchInSql})
+        GROUP BY cs.branch_id, year_of_study
+        `,
+        [selectedDateStr, ...activeBranchIds],
+      );
+
+      for (const r of todayAttRows) {
+        const bId = r.branch_id;
+        const yr = Number(r.year_of_study || 0);
+        const pres = Number(r.total_present || 0);
+        const marked = Number(r.total_marked || 0);
+        const posted = Number(r.posted_sessions || 0);
+        const total = Number(r.total_sessions || 0);
+
+        overallTodayPresent += pres;
+        overallTodayMarked += marked;
+        overallTodayPostedClasses += posted;
+
+        const bExisting = todayBranchAttMap.get(bId) || { total: 0, posted: 0, present: 0, marked: 0, pct: null };
+        bExisting.total += total;
+        bExisting.posted += posted;
+        bExisting.present += pres;
+        bExisting.marked += marked;
+        if (bExisting.marked > 0) {
+          bExisting.pct = Math.round((bExisting.present / bExisting.marked) * 100);
+        } else if (bExisting.posted === 0 && bExisting.total > 0) {
+          bExisting.pct = 0;
+        }
+        todayBranchAttMap.set(bId, bExisting);
+
+        const yKey = `${bId}_${yr}`;
+        const yExisting = todayYearAttMap.get(yKey) || { total: 0, posted: 0, present: 0, marked: 0, pct: null };
+        yExisting.total += total;
+        yExisting.posted += posted;
+        yExisting.present += pres;
+        yExisting.marked += marked;
+        if (yExisting.marked > 0) {
+          yExisting.pct = Math.round((yExisting.present / yExisting.marked) * 100);
+        } else if (yExisting.posted === 0 && yExisting.total > 0) {
+          yExisting.pct = 0;
+        }
+        todayYearAttMap.set(yKey, yExisting);
+      }
+    } catch {
+      //
+    }
+  }
+
+  // Also check student_database.attendance_records for selectedDateStr (if populated)
+  if (overallTodayMarked === 0 && activeBranchIds.length > 0) {
+    try {
+      const todayDbRecords = await queryStudent<
+        (RowDataPacket & { branch_id: number; present_count: number; total_count: number })[]
+      >(
+        `
+        SELECT 
+          s.branch_id,
+          SUM(CASE WHEN ar.status = 'present' THEN 1 ELSE 0 END) as present_count,
+          COUNT(ar.id) as total_count
+        FROM students s
+        JOIN attendance_records ar ON ar.student_id = s.id AND ar.attendance_date = ?
+        WHERE s.branch_id IN (${branchInSql})
+        GROUP BY s.branch_id
+        `,
+        [selectedDateStr, ...activeBranchIds],
+      );
+
+      for (const r of todayDbRecords) {
+        const pres = Number(r.present_count || 0);
+        const total = Number(r.total_count || 0);
+        overallTodayPresent += pres;
+        overallTodayMarked += total;
+        const bExisting = todayBranchAttMap.get(r.branch_id) || { total, posted: total, present: pres, marked: total, pct: null };
+        bExisting.present = pres;
+        bExisting.marked = total;
+        bExisting.pct = total > 0 ? Math.round((pres / total) * 100) : 0;
+        todayBranchAttMap.set(r.branch_id, bExisting);
+      }
+    } catch {
+      //
+    }
+  }
+
+  const todayStudentAttPct =
+    overallTodayMarked > 0
+      ? Math.round((overallTodayPresent / overallTodayMarked) * 100)
+      : 0;
 
   const ROMAN_YEARS: Record<number, string> = { 1: "I", 2: "II", 3: "III", 4: "IV" };
 
-  // 10. Department Academic Overview Table (Real Live Values with Year Breakdown & Batches)
+  // 10. Department Academic Overview Table (Real Today Attendance & Live Metrics)
   const departmentOverview = branchesSortedByEnrollment.map((b) => {
     const sStat = studentBranchStats.find((s) => s.branch_id === b.id);
     const mStat = internalMarksStats.find((m) => m.branch_id === b.id);
 
-    const sAttVal = sStat?.avg_att != null ? Number(sStat.avg_att) : null;
-    const sAttStr = sAttVal != null ? `${Math.round(sAttVal)}%` : "null";
+    // Today's student attendance for this department
+    const branchTodaySessions = todaySessions.filter((s) => s.branch_id === b.id);
+    const hasBranchSessionsToday = branchTodaySessions.length > 0 || (todayBranchAttMap.get(b.id)?.total || 0) > 0;
+    const bAttObj = todayBranchAttMap.get(b.id);
+    let sAttStr = "—";
+    if (bAttObj && bAttObj.pct != null) {
+      sAttStr = `${bAttObj.pct}%`;
+    } else if (hasBranchSessionsToday) {
+      sAttStr = "0%";
+    }
 
-    // Faculty/Staff Attendance for branch based on classes conducted/posted in semester window
-    const facAttVal = branchFacultyAttMap.has(b.id) ? branchFacultyAttMap.get(b.id)! : null;
-    const facAttStr = facAttVal != null ? `${facAttVal}%` : "null";
+    // Today's faculty attendance for this department
+    const branchFacScheduled = new Set(branchTodaySessions.map((s) => s.faculty_staff_link_id).filter(Boolean)).size;
+    const branchFacPosted = new Set(
+      branchTodaySessions
+        .filter((s) => s.status === "posted" || s.status === "completed" || s.post_id != null)
+        .map((s) => s.faculty_staff_link_id)
+        .filter(Boolean),
+    ).size;
+    let facAttStr = "—";
+    if (branchFacScheduled > 0) {
+      const facPct = Math.round((branchFacPosted / branchFacScheduled) * 100);
+      facAttStr = `${facPct}%`;
+    } else if (branchFacultyAttMap.has(b.id)) {
+      facAttStr = `${branchFacultyAttMap.get(b.id)}%`;
+    }
 
     let passPctStr = "null";
-    // Only report internal marks pass percentage if substantial marks have been entered (> 20 entries)
-    // to avoid displaying a false 100% on a few sample test entries.
     if (mStat && Number(mStat.total_entries) >= 20) {
       const p = Math.round((Number(mStat.passed_entries) / Number(mStat.total_entries)) * 100);
       passPctStr = `${p}%`;
@@ -873,16 +1024,37 @@ export async function getPrincipalDashboardData(
       const yrNum = y.current_year;
       const yearLabel = `Year ${ROMAN_YEARS[yrNum] || yrNum}`;
       const yrBatches = y.batches || "";
-      const yrAttVal = y.avg_att != null ? Math.round(Number(y.avg_att)) : null;
-      const yrAttStr = yrAttVal != null ? `${yrAttVal}%` : "null";
 
-      const facRow = yearFacultyRows.find((f) => f.branch_id === b.id && f.year_of_study === yrNum);
-      let yrFacStr = "null";
-      if (facRow && Number(facRow.total_classes) > 0) {
-        const facPosted = Number(facRow.faculty_who_posted || 0);
-        const facTotal = Number(facRow.total_faculty || 0);
-        const pct = facTotal > 0 ? Math.round((facPosted / facTotal) * 100) : 0;
-        yrFacStr = `${pct}%`;
+      // Today's student attendance for this year
+      const yAttObj = todayYearAttMap.get(`${b.id}_${yrNum}`);
+      const yrSessionsToday = todaySessions.filter((s) => s.branch_id === b.id && s.year_of_study === yrNum);
+      let yrAttStr = "—";
+      if (yAttObj && yAttObj.pct != null) {
+        yrAttStr = `${yAttObj.pct}%`;
+      } else if (yrSessionsToday.length > 0 || (yAttObj && yAttObj.total > 0)) {
+        yrAttStr = "0%";
+      }
+
+      // Today's faculty attendance for this year
+      const yrFacScheduled = new Set(yrSessionsToday.map((s) => s.faculty_staff_link_id).filter(Boolean)).size;
+      const yrFacPosted = new Set(
+        yrSessionsToday
+          .filter((s) => s.status === "posted" || s.status === "completed" || s.post_id != null)
+          .map((s) => s.faculty_staff_link_id)
+          .filter(Boolean),
+      ).size;
+      let yrFacStr = "—";
+      if (yrFacScheduled > 0) {
+        const facPct = Math.round((yrFacPosted / yrFacScheduled) * 100);
+        yrFacStr = `${facPct}%`;
+      } else {
+        const facRow = yearFacultyRows.find((f) => f.branch_id === b.id && f.year_of_study === yrNum);
+        if (facRow && Number(facRow.total_classes) > 0) {
+          const facPosted = Number(facRow.faculty_who_posted || 0);
+          const facTotal = Number(facRow.total_faculty || 0);
+          const pct = facTotal > 0 ? Math.round((facPosted / facTotal) * 100) : 0;
+          yrFacStr = `${pct}%`;
+        }
       }
 
       const yrRisk = yearRiskRows.find((r) => r.branch_id === b.id && r.current_year === yrNum)?.below_65_count || 0;
@@ -913,8 +1085,8 @@ export async function getPrincipalDashboardData(
       subjectsBehind: behindCount,
       riskStudents: riskCount,
       totalStudents: Number(sStat?.total_students || 0),
-      isStudentAttGood: sAttVal != null ? sAttVal >= 75 : false,
-      isFacultyAttGood: facAttVal != null ? facAttVal >= 80 : false,
+      isStudentAttGood: bAttObj?.pct != null ? bAttObj.pct >= 75 : false,
+      isFacultyAttGood: facAttStr !== "—" ? parseInt(facAttStr) >= 80 : false,
       hasBehindRisk: behindCount >= 3,
       yearBreakdown,
     };
@@ -931,7 +1103,150 @@ export async function getPrincipalDashboardData(
       ? Math.round(validAvgAtts.reduce((sum, v) => sum + Number(v), 0) / validAvgAtts.length)
       : 0;
 
-  // 11. Student Attendance Section Wise Bar Chart Data (Actual Section Counts)
+  // 11. Real Slot-based Student Attendance Data with Detailed Timing & Dept Breakdown
+  type SlotSessionDetailRow = RowDataPacket & {
+    slot_order: number;
+    slot_label: string;
+    start_time: string | null;
+    end_time: string | null;
+    branch_id: number;
+    total_sessions: number;
+    posted_sessions: number;
+    total_present: number | null;
+    total_marked: number | null;
+  };
+
+  let slotDetailRows: SlotSessionDetailRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      slotDetailRows = await queryAcademic<SlotSessionDetailRow[]>(
+        `
+        SELECT 
+          COALESCE(ts.slot_order, 1) as slot_order,
+          COALESCE(ts.label, CONCAT('P', cs.timing_slot_id)) as slot_label,
+          COALESCE(ts.start_time, cs.start_time) as start_time,
+          COALESCE(ts.end_time, cs.end_time) as end_time,
+          cs.branch_id,
+          COUNT(cs.id) as total_sessions,
+          SUM(CASE WHEN cs.status IN ('posted', 'completed') OR ap.id IS NOT NULL THEN 1 ELSE 0 END) as posted_sessions,
+          SUM(ap.present_count) as total_present,
+          SUM(ap.present_count + ap.absent_count + ap.od_count + ap.leave_count) as total_marked
+        FROM ap_class_sessions cs
+        LEFT JOIN ap_timing_template_slots ts ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
+        LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+        WHERE ${dateClause} AND cs.branch_id IN (${branchInSql})
+        GROUP BY slot_order, slot_label, start_time, end_time, cs.branch_id
+        ORDER BY slot_order ASC
+        `,
+        [...dateParams, ...activeBranchIds],
+      );
+    } catch {
+      slotDetailRows = [];
+    }
+  }
+
+  function formatSlotTime(t: string | null) {
+    if (!t) return "";
+    const parts = t.split(":");
+    if (parts.length < 2) return t;
+    const hours = Number(parts[0]);
+    const mins = parts[1];
+    const ampm = hours >= 12 ? "PM" : "AM";
+    const h12 = hours % 12 || 12;
+    return `${String(h12).padStart(2, "0")}:${mins} ${ampm}`;
+  }
+
+  // Group by slot
+  const slotGroups = new Map<string, {
+    slot_order: number;
+    slot_label: string;
+    timing: string;
+    total_sessions: number;
+    posted_sessions: number;
+    total_present: number;
+    total_marked: number;
+    departments: Array<{
+      branchId: number;
+      branchCode: string;
+      branchName: string;
+      totalClasses: number;
+      postedClasses: number;
+      presentCount: number;
+      markedCount: number;
+      attendancePct: number;
+    }>;
+  }>();
+
+  for (const r of slotDetailRows) {
+    const key = r.slot_label;
+    let grp = slotGroups.get(key);
+    if (!grp) {
+      const startTimeStr = formatSlotTime(r.start_time);
+      const endTimeStr = formatSlotTime(r.end_time);
+      const timingStr = startTimeStr && endTimeStr ? `${startTimeStr} - ${endTimeStr}` : "";
+
+      grp = {
+        slot_order: r.slot_order,
+        slot_label: r.slot_label,
+        timing: timingStr,
+        total_sessions: 0,
+        posted_sessions: 0,
+        total_present: 0,
+        total_marked: 0,
+        departments: [],
+      };
+      slotGroups.set(key, grp);
+    }
+
+    const t = Number(r.total_sessions || 0);
+    const p = Number(r.posted_sessions || 0);
+    const pres = Number(r.total_present || 0);
+    const marked = Number(r.total_marked || 0);
+
+    grp.total_sessions += t;
+    grp.posted_sessions += p;
+    grp.total_present += pres;
+    grp.total_marked += marked;
+
+    const br = scopedBranches.find((b) => b.id === r.branch_id);
+    grp.departments.push({
+      branchId: r.branch_id,
+      branchCode: br?.code || "Dept",
+      branchName: br?.name || "Department",
+      totalClasses: t,
+      postedClasses: p,
+      presentCount: pres,
+      markedCount: marked,
+      attendancePct: marked > 0 ? Math.round((pres / marked) * 100) : 0,
+    });
+  }
+
+  const slotColors = ["#3b82f6", "#06b6d4", "#10b981", "#6366f1", "#8b5cf6", "#ec4899", "#f59e0b", "#14b8a6", "#3b82f6"];
+  const slotAttendance = Array.from(slotGroups.values())
+    .sort((a, b) => a.slot_order - b.slot_order)
+    .map((grp, idx) => {
+      const attPct = grp.total_marked > 0 ? Math.round((grp.total_present / grp.total_marked) * 100) : 0;
+      return {
+        slot: grp.slot_label,
+        slotLabel: grp.slot_label,
+        slotOrder: grp.slot_order,
+        timing: grp.timing,
+        department: grp.slot_label,
+        sections: grp.total_sessions,
+        totalClasses: grp.total_sessions,
+        postedClasses: grp.posted_sessions,
+        pendingClasses: Math.max(0, grp.total_sessions - grp.posted_sessions),
+        totalPresent: grp.total_present,
+        totalMarked: grp.total_marked,
+        totalAbsent: Math.max(0, grp.total_marked - grp.total_present),
+        attendance: attPct,
+        fill: slotColors[idx % slotColors.length],
+        label: `${attPct}%`,
+        departments: grp.departments,
+      };
+    });
+
+  // Section Attendance fallback
   const sectionColors = ["#10b981", "#14b8a6", "#eab308", "#f97316", "#3b82f6", "#8b5cf6"];
   const sectionAttendance = branchesForCards.slice(0, 5).map((b, idx) => {
     const sStat = studentBranchStats.find((s) => s.branch_id === b.id);
@@ -1286,7 +1601,7 @@ export async function getPrincipalDashboardData(
   // Compute dynamic trends for KPIs
   let studentTrendStr = "— 0%";
   let studentTrendPos = true;
-  if (activeBranchIds.length > 0) {
+  if (todayStudentAttPct > 0 && activeBranchIds.length > 0) {
     try {
       const [prevStuRow] = await queryStudent<(RowDataPacket & { prev_avg: number | null })[]>(
         `
@@ -1304,7 +1619,7 @@ export async function getPrincipalDashboardData(
         [...activeBranchIds, selectedDateStr],
       );
       if (prevStuRow && prevStuRow.prev_avg != null) {
-        const diff = Math.round((avgStudentAttendance - Number(prevStuRow.prev_avg)) * 10) / 10;
+        const diff = Math.round((todayStudentAttPct - Number(prevStuRow.prev_avg)) * 10) / 10;
         if (diff > 0) {
           studentTrendStr = `↑ ${diff}%`;
           studentTrendPos = true;
@@ -1320,7 +1635,7 @@ export async function getPrincipalDashboardData(
 
   let facultyTrendStr = "— 0%";
   let facultyTrendPos = true;
-  if (activeBranchIds.length > 0) {
+  if (facultyAttPct > 0 && activeBranchIds.length > 0) {
     try {
       const [prevFacRow] = await queryAcademic<(RowDataPacket & { prev_scheduled: number; prev_present: number })[]>(
         `
@@ -1366,7 +1681,7 @@ export async function getPrincipalDashboardData(
     },
     kpis: {
       studentAttendance: {
-        value: `${avgStudentAttendance}%`,
+        value: `${todayStudentAttPct}%`,
         trend: studentTrendStr,
         trendPositive: studentTrendPos,
         subtext: `${postedSessionsCount} of ${todaySessions.length || scheduledSessionsCount} classes posted`,
@@ -1397,7 +1712,8 @@ export async function getPrincipalDashboardData(
     },
     departmentOverview,
     priorities: dynamicPriorities,
-    sectionAttendance,
+    sectionAttendance: slotAttendance.length > 0 ? slotAttendance : sectionAttendance,
+    slotAttendance,
     studentsAtRiskDeptWise,
     subjectsBehindSchedule,
     facultyAttendanceAndAdjustment,

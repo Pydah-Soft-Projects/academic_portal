@@ -130,6 +130,37 @@ export type PrincipalDashboardData = {
     attendance: number;
     fill: string;
     label: string;
+    slot?: string;
+    slotLabel?: string;
+    totalClasses?: number;
+    postedClasses?: number;
+  }>;
+  slotAttendance?: Array<{
+    slot: string;
+    slotLabel?: string;
+    slotOrder?: number;
+    timing?: string;
+    department?: string;
+    sections?: number;
+    totalClasses?: number;
+    postedClasses?: number;
+    pendingClasses?: number;
+    totalPresent?: number;
+    totalMarked?: number;
+    totalAbsent?: number;
+    attendance: number;
+    fill: string;
+    label: string;
+    departments?: Array<{
+      branchId: number;
+      branchCode: string;
+      branchName: string;
+      totalClasses: number;
+      postedClasses: number;
+      presentCount: number;
+      markedCount: number;
+      attendancePct: number;
+    }>;
   }>;
   studentsAtRiskDeptWise: Array<{
     department: string;
@@ -202,7 +233,8 @@ export function PrincipalDashboard({
   const [error, setError] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [selectedPriority, setSelectedPriority] = useState<any | null>(null);
-  const [approvalTab, setApprovalTab] = useState<"approvals" | "deadlines">("approvals");
+  const [selectedSlotData, setSelectedSlotData] = useState<any | null>(null);
+  const [approvalTab, setApprovalTab] = useState<"approvals" | "deadlines">("deadlines");
   const [overviewYearFilter, setOverviewYearFilter] = useState<number | "all">("all");
   const [expandedDepts, setExpandedDepts] = useState<Record<string, boolean>>({});
 
@@ -217,6 +249,8 @@ export function PrincipalDashboard({
   // Build query parameters based on academic filter bar
   const queryParams = useMemo(() => {
     const params = new URLSearchParams();
+    if (filters.startDate) params.set("startDate", filters.startDate);
+    if (filters.endDate) params.set("endDate", filters.endDate);
     if (filters.date) params.set("date", filters.date);
     if (filters.collegeId && filters.collegeId !== "all") params.set("collegeId", String(filters.collegeId));
     if (filters.branchId && filters.branchId !== "all") params.set("branchId", String(filters.branchId));
@@ -817,14 +851,14 @@ export function PrincipalDashboard({
       {/* 4. LOWER ROW 1: 3 CARDS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         
-        {/* Card 1: Student Attendance (Section Wise) */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
+        {/* Card 1: Student Attendance (Slot Wise) */}
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between h-[370px]">
           <div>
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <Users className="h-4 w-4 text-blue-600" />
                 <h3 className="text-xs sm:text-sm font-bold text-slate-900">
-                  Student Attendance (Section Wise)
+                  Student Attendance
                 </h3>
               </div>
               <button
@@ -837,19 +871,19 @@ export function PrincipalDashboard({
             </div>
 
             {/* Bar Chart */}
-            <div className="h-56 w-full mt-4">
+            <div className="h-56 w-full mt-3">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
-                  data={current.sectionAttendance}
+                  data={(current.slotAttendance || current.sectionAttendance) as any[]}
                   margin={{ top: 20, right: 10, left: -20, bottom: 5 }}
                 >
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                   <XAxis
-                    dataKey="department"
+                    dataKey={(current.slotAttendance && current.slotAttendance.length > 0) ? "slot" : "department"}
                     tickLine={false}
                     axisLine={{ stroke: "#e2e8f0" }}
                     tick={{ fill: "#64748b", fontSize: 11 }}
-                    tickFormatter={(val, i) => `${val}\n(${current.sectionAttendance[i]?.sections || 0})`}
+                    tickFormatter={(val) => `${val}`}
                   />
                   <YAxis
                     domain={[0, 100]}
@@ -859,134 +893,155 @@ export function PrincipalDashboard({
                     ticks={[0, 25, 50, 75, 100]}
                   />
                   <Tooltip
-                    formatter={(value: any) => [`${value}%`, "Attendance"]}
+                    formatter={(value: any, _name: any, item: any) => {
+                      const payload = item?.payload;
+                      const sub = payload?.totalClasses != null
+                        ? ` (${payload.postedClasses || 0}/${payload.totalClasses} posted)`
+                        : payload?.sections != null
+                        ? ` (${payload.sections} sections)`
+                        : "";
+                      return [`${value}%${sub}`, "Attendance"];
+                    }}
                     contentStyle={{ borderRadius: "8px", fontSize: "12px", border: "1px solid #e2e8f0" }}
                   />
-                  <Bar dataKey="attendance" radius={[4, 4, 0, 0]} barSize={34}>
+                  <Bar
+                    dataKey="attendance"
+                    radius={[4, 4, 0, 0]}
+                    barSize={34}
+                    cursor="pointer"
+                    onClick={(entry: any) => {
+                      if (entry) setSelectedSlotData(entry.payload || entry);
+                    }}
+                  >
                     <LabelList
                       dataKey="label"
                       position="top"
                       style={{ fill: "#1e293b", fontSize: 12, fontWeight: 700 }}
                     />
-                    {current.sectionAttendance.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    {(current.slotAttendance || current.sectionAttendance).map((entry, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill={entry.fill}
+                        cursor="pointer"
+                        className="hover:opacity-80 transition-opacity"
+                        onClick={() => setSelectedSlotData(entry)}
+                      />
                     ))}
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
+            <p className="text-[10px] text-slate-400 text-center mt-2 font-medium">
+              Click any bar to view detailed slot metrics
+            </p>
           </div>
         </div>
 
         {/* Card 2: Students at Risk (Department Wise) */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-blue-600" />
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900">
-                  Students at Risk (Department Wise)
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveModal("risk_students")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
-              >
-                View All &gt;
-              </button>
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[370px]">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-blue-600" />
+              <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+                Students at Risk (Department Wise)
+              </h3>
             </div>
+            <button
+              type="button"
+              onClick={() => setActiveModal("risk_students")}
+              className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+            >
+              View All &gt;
+            </button>
+          </div>
 
-            <div className="overflow-x-auto mt-2">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="text-slate-400 border-b border-slate-100 font-medium">
-                    <th className="py-2">Department</th>
-                    <th className="py-2 text-center">&lt; 65% Att.</th>
-                    <th className="py-2 text-center">Failed Int-I</th>
-                    <th className="py-2 text-center">Failed Int-II</th>
-                    <th className="py-2 text-center">Failed Both</th>
+          <div className="overflow-y-auto overflow-x-auto mt-2 flex-1 pr-1">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-white z-10 shadow-2xs">
+                <tr className="text-slate-400 border-b border-slate-100 font-medium">
+                  <th className="py-2 bg-white">Department</th>
+                  <th className="py-2 text-center bg-white">&lt; 65% Att.</th>
+                  <th className="py-2 text-center bg-white">Failed Int-I</th>
+                  <th className="py-2 text-center bg-white">Failed Int-II</th>
+                  <th className="py-2 text-center bg-white">Failed Both</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100/60">
+                {current.studentsAtRiskDeptWise.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-6 text-center text-slate-400 font-medium">
+                      No departments currently have students flagged at risk
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100/60">
-                  {current.studentsAtRiskDeptWise.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="py-6 text-center text-slate-400 font-medium">
-                        No departments currently have students flagged at risk
-                      </td>
+                ) : (
+                  current.studentsAtRiskDeptWise.map((r) => (
+                    <tr key={r.department} className="hover:bg-slate-50/50">
+                      <td className="py-2 font-bold text-slate-800">{r.department}</td>
+                      <td className="py-2 text-center font-bold text-rose-600">{r.below65Attendance}</td>
+                      <td className="py-2 text-center text-slate-600">{r.failedInternal1}</td>
+                      <td className="py-2 text-center text-slate-600">{r.failedInternal2}</td>
+                      <td className="py-2 text-center font-bold text-rose-600">{r.failedBoth}</td>
                     </tr>
-                  ) : (
-                    current.studentsAtRiskDeptWise.map((r) => (
-                      <tr key={r.department} className="hover:bg-slate-50/50">
-                        <td className="py-2 font-bold text-slate-800">{r.department}</td>
-                        <td className="py-2 text-center font-bold text-rose-600">{r.below65Attendance}</td>
-                        <td className="py-2 text-center text-slate-600">{r.failedInternal1}</td>
-                        <td className="py-2 text-center text-slate-600">{r.failedInternal2}</td>
-                        <td className="py-2 text-center font-bold text-rose-600">{r.failedBoth}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
         {/* Card 3: Subjects Behind Schedule */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <BookOpen className="h-4 w-4 text-amber-500" />
-                <h3 className="text-xs sm:text-sm font-bold text-slate-900">
-                  Subjects Behind Schedule
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveModal("subjects_behind")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
-              >
-                View All &gt;
-              </button>
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[370px]">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
+            <div className="flex items-center gap-2">
+              <BookOpen className="h-4 w-4 text-amber-500" />
+              <h3 className="text-xs sm:text-sm font-bold text-slate-900">
+                Subjects Behind Schedule
+              </h3>
             </div>
+            <button
+              type="button"
+              onClick={() => setActiveModal("subjects_behind")}
+              className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+            >
+              View All &gt;
+            </button>
+          </div>
 
-            <div className="overflow-x-auto mt-2">
-              <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="text-slate-400 border-b border-slate-100 font-medium">
-                    <th className="py-2">Subject</th>
-                    <th className="py-2">Faculty</th>
-                    <th className="py-2">Dept</th>
-                    <th className="py-2 text-center">Delay</th>
-                    <th className="py-2 text-center">Status</th>
+          <div className="overflow-y-auto overflow-x-auto mt-2 flex-1 pr-1">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-white z-10 shadow-2xs">
+                <tr className="text-slate-400 border-b border-slate-100 font-medium">
+                  <th className="py-2 bg-white">Subject</th>
+                  <th className="py-2 bg-white">Faculty</th>
+                  <th className="py-2 bg-white">Dept</th>
+                  <th className="py-2 text-center bg-white">Delay</th>
+                  <th className="py-2 text-center bg-white">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100/60">
+                {current.subjectsBehindSchedule.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-6 text-center text-slate-400 font-medium">
+                      All subjects on track with scheduled syllabus delivery
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100/60">
-                  {current.subjectsBehindSchedule.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="py-6 text-center text-slate-400 font-medium">
-                        All subjects on track with scheduled syllabus delivery
+                ) : (
+                  current.subjectsBehindSchedule.map((s, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="py-2 font-semibold text-slate-800">{s.subject}</td>
+                      <td className="py-2 text-slate-600">{s.faculty}</td>
+                      <td className="py-2 font-medium text-slate-700">{s.dept}</td>
+                      <td className="py-2 text-center font-bold text-rose-600">{s.delay}</td>
+                      <td className="py-2 text-center">
+                        <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                          {s.status}
+                        </span>
                       </td>
                     </tr>
-                  ) : (
-                    current.subjectsBehindSchedule.map((s, idx) => (
-                      <tr key={idx} className="hover:bg-slate-50/50">
-                        <td className="py-2 font-semibold text-slate-800">{s.subject}</td>
-                        <td className="py-2 text-slate-600">{s.faculty}</td>
-                        <td className="py-2 font-medium text-slate-700">{s.dept}</td>
-                        <td className="py-2 text-center font-bold text-rose-600">{s.delay}</td>
-                        <td className="py-2 text-center">
-                          <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                            {s.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -1219,17 +1274,6 @@ export function PrincipalDashboard({
             <div className="flex items-center gap-4 border-b border-slate-100 mt-2 text-xs font-semibold">
               <button
                 type="button"
-                onClick={() => setApprovalTab("approvals")}
-                className={`pb-2 transition-colors cursor-pointer ${
-                  approvalTab === "approvals"
-                    ? "text-blue-600 border-b-2 border-blue-600"
-                    : "text-slate-400 hover:text-slate-600"
-                }`}
-              >
-                Pending Approvals
-              </button>
-              <button
-                type="button"
                 onClick={() => setApprovalTab("deadlines")}
                 className={`pb-2 transition-colors cursor-pointer ${
                   approvalTab === "deadlines"
@@ -1239,26 +1283,21 @@ export function PrincipalDashboard({
               >
                 Upcoming Deadlines
               </button>
+              <button
+                type="button"
+                onClick={() => setApprovalTab("approvals")}
+                className={`pb-2 transition-colors cursor-pointer ${
+                  approvalTab === "approvals"
+                    ? "text-blue-600 border-b-2 border-blue-600"
+                    : "text-slate-400 hover:text-slate-600"
+                }`}
+              >
+                Pending Approvals
+              </button>
             </div>
 
-            {/* Tab 1: Pending Approvals Content */}
-            {approvalTab === "approvals" ? (
-              <div className="mt-3 space-y-2">
-                {current.approvalsAndDeadlines.pendingApprovals.map((item, idx) => (
-                  <Link
-                    key={idx}
-                    href={item.href}
-                    className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-slate-50 transition-colors text-xs"
-                  >
-                    <span className="text-slate-700 font-medium">{item.label}</span>
-                    <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-xs">
-                      {item.count}
-                    </span>
-                  </Link>
-                ))}
-              </div>
-            ) : (
-              /* Tab 2: Upcoming Deadlines Content */
+            {/* Tab 1: Upcoming Deadlines Content */}
+            {approvalTab === "deadlines" ? (
               <div className="mt-3 space-y-2.5">
                 {current.approvalsAndDeadlines.upcomingDeadlines.map((dl, idx) => (
                   <div key={idx} className="flex items-start gap-2.5 py-1 text-xs">
@@ -1271,6 +1310,22 @@ export function PrincipalDashboard({
                       <span className="text-[11px] text-slate-400 block">{dl.subtitle}</span>
                     </div>
                   </div>
+                ))}
+              </div>
+            ) : (
+              /* Tab 2: Pending Approvals Content */
+              <div className="mt-3 space-y-2">
+                {current.approvalsAndDeadlines.pendingApprovals.map((item, idx) => (
+                  <Link
+                    key={idx}
+                    href={item.href}
+                    className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-slate-50 transition-colors text-xs"
+                  >
+                    <span className="text-slate-700 font-medium">{item.label}</span>
+                    <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-xs">
+                      {item.count}
+                    </span>
+                  </Link>
                 ))}
               </div>
             )}
@@ -1287,7 +1342,7 @@ export function PrincipalDashboard({
               <h3 className="text-base font-bold text-slate-900">
                 {activeModal === "dept_overview" && "Department Academic Overview (Full)"}
                 {activeModal === "priorities" && "All Priorities & Action Items"}
-                {activeModal === "section_att" && "Section-wise Student Attendance Breakdown"}
+                {activeModal === "section_att" && "Student Attendance (Slot-wise Breakdown)"}
                 {activeModal === "risk_students" && "Students at Risk Analysis"}
                 {activeModal === "subjects_behind" && "Subjects Behind Schedule - Detailed Report"}
                 {activeModal === "faculty_adjustment" && "Faculty Attendance & Class Adjustments Today"}
@@ -1641,9 +1696,16 @@ export function PrincipalDashboard({
 
               {activeModal === "section_att" && (
                 <div className="space-y-2">
-                  {current.sectionAttendance.map((s) => (
-                    <div key={s.department} className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs">
-                      <span className="font-bold text-slate-900">{s.department} ({s.sections} sections)</span>
+                  {(current.slotAttendance || current.sectionAttendance).map((s, idx) => (
+                    <div key={idx} className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs">
+                      <span className="font-bold text-slate-900">
+                        {s.slot || s.department}
+                        {s.totalClasses != null
+                          ? ` (${s.postedClasses || 0} of ${s.totalClasses} classes posted)`
+                          : s.sections != null
+                          ? ` (${s.sections} sections)`
+                          : ""}
+                      </span>
                       <span className="font-black text-emerald-600 text-sm">{s.attendance}%</span>
                     </div>
                   ))}
@@ -1719,6 +1781,188 @@ export function PrincipalDashboard({
                 type="button"
                 onClick={() => setActiveModal(null)}
                 className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Slot Attendance Detail Modal */}
+      {selectedSlotData && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200"
+          onClick={() => setSelectedSlotData(null)}
+        >
+          <div
+            className="bg-white rounded-2xl max-w-xl w-full p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div
+                  className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white shadow-xs"
+                  style={{ backgroundColor: selectedSlotData.fill || "#3b82f6" }}
+                >
+                  {selectedSlotData.slot || selectedSlotData.slotLabel || "P"}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Slot {selectedSlotData.slot || selectedSlotData.slotLabel || selectedSlotData.department} Attendance
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-500 font-medium mt-0.5">
+                    {selectedSlotData.timing && (
+                      <span className="flex items-center gap-1 text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md font-semibold">
+                        <Clock className="h-3 w-3 text-slate-500" />
+                        {selectedSlotData.timing}
+                      </span>
+                    )}
+                    <span>{current.meta?.dateFormatted || "Selected Date"}</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSlotData(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Overall Attendance & KPI Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-3 bg-blue-50/70 border border-blue-100 rounded-xl flex flex-col justify-between">
+                <span className="text-[10.5px] font-semibold text-blue-700">Attendance Rate</span>
+                <div className="flex items-baseline gap-1 mt-1">
+                  <span className="text-2xl font-black text-blue-900">
+                    {selectedSlotData.attendance}%
+                  </span>
+                </div>
+                <div className="w-full bg-blue-200 h-1.5 rounded-full mt-2 overflow-hidden">
+                  <div
+                    className="bg-blue-600 h-full rounded-full transition-all"
+                    style={{ width: `${Math.min(100, Math.max(0, selectedSlotData.attendance))}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl flex flex-col justify-between">
+                <span className="text-[10.5px] font-semibold text-slate-600">Total Classes</span>
+                <span className="text-2xl font-black text-slate-800 mt-1">
+                  {selectedSlotData.totalClasses || selectedSlotData.sections || 0}
+                </span>
+                <span className="text-[10px] text-slate-400">Scheduled in this slot</span>
+              </div>
+
+              <div className="p-3 bg-emerald-50/70 border border-emerald-100 rounded-xl flex flex-col justify-between">
+                <span className="text-[10.5px] font-semibold text-emerald-700">Posted Classes</span>
+                <span className="text-2xl font-black text-emerald-700 mt-1">
+                  {selectedSlotData.postedClasses || 0}
+                </span>
+                <span className="text-[10px] text-emerald-600 font-medium">
+                  {selectedSlotData.totalClasses
+                    ? `${Math.round(((selectedSlotData.postedClasses || 0) / selectedSlotData.totalClasses) * 100)}% completed`
+                    : "0%"}
+                </span>
+              </div>
+
+              <div className="p-3 bg-amber-50/70 border border-amber-100 rounded-xl flex flex-col justify-between">
+                <span className="text-[10.5px] font-semibold text-amber-700">Pending Posting</span>
+                <span className="text-2xl font-black text-amber-700 mt-1">
+                  {selectedSlotData.pendingClasses != null
+                    ? selectedSlotData.pendingClasses
+                    : Math.max(0, (selectedSlotData.totalClasses || 0) - (selectedSlotData.postedClasses || 0))}
+                </span>
+                <span className="text-[10px] text-amber-600 font-medium">Awaiting attendance</span>
+              </div>
+            </div>
+
+            {/* Students Present / Marked Summary */}
+            {(selectedSlotData.totalMarked != null && selectedSlotData.totalMarked > 0) && (
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-slate-500" />
+                  <span className="font-semibold text-slate-700">Students Marked:</span>
+                  <span className="font-bold text-slate-900">{selectedSlotData.totalMarked} students</span>
+                </div>
+                <div className="flex items-center gap-3 font-semibold">
+                  <span className="text-emerald-600">Present: {selectedSlotData.totalPresent || 0}</span>
+                  <span className="text-slate-300">|</span>
+                  <span className="text-rose-600">Absent: {selectedSlotData.totalAbsent || 0}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Department Breakdown */}
+            {selectedSlotData.departments && selectedSlotData.departments.length > 0 ? (
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  Department Breakdown ({selectedSlotData.departments.length})
+                </h4>
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold">
+                        <th className="py-2.5 px-3">Department</th>
+                        <th className="py-2.5 px-3 text-center">Classes</th>
+                        <th className="py-2.5 px-3 text-center">Status</th>
+                        <th className="py-2.5 px-3 text-right">Attendance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedSlotData.departments.map((d: any, idx: number) => (
+                        <tr key={idx} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="py-2.5 px-3">
+                            <div className="font-bold text-slate-800">{d.branchCode}</div>
+                            <div className="text-[10px] text-slate-500 truncate max-w-[180px]">{d.branchName}</div>
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-semibold text-slate-700">
+                            {d.totalClasses} {d.totalClasses === 1 ? "class" : "classes"}
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            {d.postedClasses >= d.totalClasses ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                                Posted
+                              </span>
+                            ) : d.postedClasses > 0 ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                                {d.postedClasses}/{d.totalClasses} Posted
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                                Pending
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-black">
+                            <span className={d.attendancePct >= 75 ? "text-emerald-600" : d.attendancePct >= 65 ? "text-amber-600" : "text-rose-600"}>
+                              {d.markedCount > 0 ? `${d.attendancePct}%` : "—"}
+                            </span>
+                            {d.markedCount > 0 && (
+                              <span className="block text-[10px] font-normal text-slate-400">
+                                {d.presentCount}/{d.markedCount}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Footer */}
+            <div className="pt-3 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedSlotData(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
               >
                 Close
               </button>

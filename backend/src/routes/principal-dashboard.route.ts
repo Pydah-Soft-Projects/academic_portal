@@ -20,24 +20,34 @@ principalDashboardRouter.get(
   async (req: AuthedRequest, res, next) => {
     try {
       const authz = getAuthz(req);
+      const rawCollege = typeof req.query.collegeId === "string" ? req.query.collegeId : undefined;
+      const rawBranch = typeof req.query.branchId === "string" ? req.query.branchId : undefined;
+
+      const reqCollegeId = rawCollege && rawCollege !== "all" && !isNaN(Number(rawCollege)) ? Number(rawCollege) : undefined;
+      const reqBranchId = rawBranch && rawBranch !== "all" && !isNaN(Number(rawBranch)) ? Number(rawBranch) : undefined;
+
       const scoped = scopedFilters(req, {
-        collegeId: req.query.collegeId ? Number(req.query.collegeId) : undefined,
-        branchId: req.query.branchId ? Number(req.query.branchId) : undefined,
+        collegeId: reqCollegeId,
+        branchId: reqBranchId,
       });
 
       const courseId = req.query.courseId ? Number(req.query.courseId) : undefined;
       const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : undefined;
       const semester = typeof req.query.semester === "string" ? req.query.semester : undefined;
       const date = typeof req.query.date === "string" ? req.query.date : undefined;
+      const startDate = typeof req.query.startDate === "string" ? req.query.startDate : undefined;
+      const endDate = typeof req.query.endDate === "string" ? req.query.endDate : undefined;
 
       const data = await getPrincipalDashboardData(authz, {
-        collegeId: scoped.collegeId,
-        collegeIds: scoped.collegeIds,
+        collegeId: reqCollegeId ?? scoped.collegeId,
+        collegeIds: reqCollegeId ? [reqCollegeId] : scoped.collegeIds,
         courseId: Number.isFinite(courseId) ? courseId : undefined,
-        branchId: scoped.branchId,
+        branchId: reqBranchId ? scoped.branchId : undefined,
         academicYear,
         semester,
         date,
+        startDate,
+        endDate,
       });
 
       res.json(data);
