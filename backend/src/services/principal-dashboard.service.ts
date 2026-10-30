@@ -2228,18 +2228,33 @@ export async function getPrincipalDashboardData(
   const totalFailedInt2 = Array.from(failedInt2Map.values()).reduce((sum, count) => sum + count, 0);
 
   const feeCollectionAndDues = {
-    collection: {
-      collectedAmount: "null",
-      totalReceivable: "null",
-      percentage: "null",
-    },
-    pendingDues: {
-      totalStudentsWithDues: "null",
-      lessThan15Days: "null",
-      between15And30Days: "null",
-      moreThan60Days: "null",
-    },
-    moduleStatus: "Fee portal module integration pending",
+    percentage: null as number | null,
+    collectedAmount: null as string | null,
+    totalAmount: null as string | null,
+    statusText: "Fee portal module integration pending",
+    pendingDues: [
+      {
+        label: "> 15 Days",
+        studentsCount: null as number | null,
+        amount: null as string | null,
+        color: "text-amber-500",
+        bg: "bg-amber-50",
+      },
+      {
+        label: "> 30 Days",
+        studentsCount: null as number | null,
+        amount: null as string | null,
+        color: "text-orange-500",
+        bg: "bg-orange-50",
+      },
+      {
+        label: "> 60 Days",
+        studentsCount: null as number | null,
+        amount: null as string | null,
+        color: "text-red-500",
+        bg: "bg-red-50",
+      },
+    ],
   };
 
   const result = {

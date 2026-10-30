@@ -1431,9 +1431,9 @@ export function PrincipalDashboard({
                     d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
                   />
                   <path
-                    className={current.feeCollectionAndDues.percentage != null ? "text-emerald-500" : "text-slate-200"}
+                    className={current.feeCollectionAndDues?.percentage != null ? "text-emerald-500" : "text-slate-200"}
                     strokeDasharray={
-                      current.feeCollectionAndDues.percentage != null
+                      current.feeCollectionAndDues?.percentage != null
                         ? `${current.feeCollectionAndDues.percentage}, 100`
                         : "0, 100"
                     }
@@ -1445,19 +1445,19 @@ export function PrincipalDashboard({
                   />
                 </svg>
                 <span className="absolute font-black text-xs sm:text-sm text-slate-700">
-                  {current.feeCollectionAndDues.percentage != null ? `${current.feeCollectionAndDues.percentage}%` : "null"}
+                  {current.feeCollectionAndDues?.percentage != null ? `${current.feeCollectionAndDues.percentage}%` : "null"}
                 </span>
               </div>
 
               <div>
                 <span className="text-[11px] font-medium text-slate-500 block">Collected</span>
                 <span className="text-xl font-extrabold text-slate-900 tracking-tight block">
-                  {current.feeCollectionAndDues.collectedAmount != null
+                  {current.feeCollectionAndDues?.collectedAmount != null
                     ? current.feeCollectionAndDues.collectedAmount
                     : "null"}
                 </span>
                 <span className="text-xs text-slate-400 block">
-                  {current.feeCollectionAndDues.totalAmount != null
+                  {current.feeCollectionAndDues?.totalAmount != null
                     ? `of ${current.feeCollectionAndDues.totalAmount}`
                     : "of null"}
                 </span>
@@ -1475,7 +1475,7 @@ export function PrincipalDashboard({
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
-                {current.feeCollectionAndDues.pendingDues.map((due) => (
+                {(Array.isArray(current.feeCollectionAndDues?.pendingDues) ? current.feeCollectionAndDues.pendingDues : []).map((due) => (
                   <div key={due.label} className={`${due.bg} p-2 rounded-lg border border-slate-100`}>
                     <span className="text-[10px] text-slate-500 block">{due.label}</span>
                     <span className={`text-sm font-extrabold block ${due.color}`}>
@@ -2042,24 +2042,24 @@ export function PrincipalDashboard({
                     <div>
                       <span className="text-xs text-slate-600 block">Total Fee Target</span>
                       <span className="text-xl font-black text-slate-900">
-                        {current.feeCollectionAndDues.totalAmount != null ? current.feeCollectionAndDues.totalAmount : "null"}
+                        {current.feeCollectionAndDues?.totalAmount != null ? current.feeCollectionAndDues.totalAmount : "null"}
                       </span>
                     </div>
                     <div>
                       <span className="text-xs text-slate-600 block">Total Collected</span>
                       <span className="text-xl font-black text-emerald-600">
-                        {current.feeCollectionAndDues.collectedAmount != null ? current.feeCollectionAndDues.collectedAmount : "null"}
+                        {current.feeCollectionAndDues?.collectedAmount != null ? current.feeCollectionAndDues.collectedAmount : "null"}
                       </span>
                     </div>
                     <div>
                       <span className="text-xs text-slate-600 block">Collection Rate</span>
                       <span className="text-xl font-black text-slate-900">
-                        {current.feeCollectionAndDues.percentage != null ? `${current.feeCollectionAndDues.percentage}%` : "null"}
+                        {current.feeCollectionAndDues?.percentage != null ? `${current.feeCollectionAndDues.percentage}%` : "null"}
                       </span>
                     </div>
                   </div>
                   <div className="grid grid-cols-3 gap-3">
-                    {current.feeCollectionAndDues.pendingDues.map((d) => (
+                    {(Array.isArray(current.feeCollectionAndDues?.pendingDues) ? current.feeCollectionAndDues.pendingDues : []).map((d) => (
                       <div key={d.label} className={`${d.bg} p-3 rounded-xl border border-slate-200 text-center`}>
                         <span className="text-xs text-slate-600 block font-medium">{d.label}</span>
                         <span className={`text-lg font-black block ${d.color}`}>
