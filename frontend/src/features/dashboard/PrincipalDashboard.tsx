@@ -29,6 +29,8 @@ import {
   CalendarDays,
   User,
   Filter,
+  Search,
+  Fingerprint,
 } from "lucide-react";
 import {
   BarChart,
@@ -183,8 +185,10 @@ export type PrincipalDashboardData = {
       late: number;
       leave: number;
       od: number;
+      permission?: number;
       absent: number;
       totalTeachingFaculty?: number;
+      totalEmployees?: number;
     };
     classesAffected: {
       total: number;
@@ -193,6 +197,70 @@ export type PrincipalDashboardData = {
       cancelled: number;
       pending: number;
     };
+    employeeWiseDetails?: Array<{
+      staffLinkId?: number;
+      empNo: string;
+      name: string;
+      department: string;
+      designation: string;
+      employeeGroup: string;
+      isTeaching?: boolean;
+      division: string;
+      status: "present" | "late" | "leave" | "od" | "permission" | "absent";
+      displayStatus: string;
+      thumbStatus: "active" | "partial" | "full" | "none";
+      checkInTime: string | null;
+      checkOutTime: string | null;
+      lateMinutes: number;
+      slotsCount?: number;
+      slotsPosted?: number;
+      slotsPending?: number;
+      slots?: Array<{
+        id: number;
+        subjectName: string;
+        subjectCode: string | null;
+        startTime: string | null;
+        endTime: string | null;
+        status: string;
+        isPosted: boolean;
+      }>;
+      subjects?: string[];
+      details: string | null;
+    }>;
+    hrmsLeaves?: Array<{
+      id: string;
+      empNo: string;
+      employeeName: string;
+      department: string;
+      leaveType: string;
+      fromDate: string;
+      toDate: string;
+      numberOfDays: number;
+      purpose: string;
+      status: string;
+    }>;
+    hrmsOds?: Array<{
+      id: string;
+      empNo: string;
+      employeeName: string;
+      department: string;
+      odType: string;
+      fromDate: string;
+      toDate: string;
+      purpose: string;
+      placeVisited?: string;
+      status: string;
+    }>;
+    hrmsPermissions?: Array<{
+      id: string;
+      empNo: string;
+      employeeName: string;
+      department: string;
+      date: string;
+      hours: number;
+      reason?: string;
+      status: string;
+    }>;
   };
   feeCollectionAndDues: {
     percentage: number | null;
@@ -213,12 +281,35 @@ export type PrincipalDashboardData = {
       count: number;
       href: string;
     }>;
+    pendingApprovalDetails?: Array<{
+      id: string;
+      category: "leave" | "od" | "ccl" | "general";
+      categoryLabel: string;
+      subType: string;
+      empNo: string;
+      employeeName: string;
+      department: string;
+      designation: string;
+      fromDate: string;
+      toDate: string;
+      numberOfDays: number;
+      purpose: string;
+      placeVisited?: string;
+      status: string;
+      statusLabel: string;
+      appliedAt: string;
+      slotsImpacted?: number;
+    }>;
     upcomingDeadlines: Array<{
       day: string;
       month: string;
       title: string;
       subtitle: string;
+      startDate?: string;
+      endDate?: string;
     }>;
+    allTimePendingCount?: number;
+    dateRangeLabel?: string;
   };
 };
 
@@ -235,7 +326,14 @@ export function PrincipalDashboard({
   const [activeModal, setActiveModal] = useState<string | null>(null);
   const [selectedPriority, setSelectedPriority] = useState<any | null>(null);
   const [selectedSlotData, setSelectedSlotData] = useState<any | null>(null);
-  const [approvalTab, setApprovalTab] = useState<"approvals" | "deadlines">("deadlines");
+  const [approvalTab, setApprovalTab] = useState<"approvals" | "deadlines" | "leaves_ods">("deadlines");
+  const [facultyModalTab, setFacultyModalTab] = useState<"employees" | "leaves" | "ods" | "permissions" | "adjustments">("employees");
+  const [empStatusFilter, setEmpStatusFilter] = useState<"all" | "present" | "late" | "leave" | "od" | "permission" | "absent">("all");
+  const [empGroupFilter, setEmpGroupFilter] = useState<"all" | "teaching" | "non_teaching">("all");
+  const [empSlotFilter, setEmpSlotFilter] = useState<"all" | "has_slots" | "no_slots">("all");
+  const [empSearchQuery, setEmpSearchQuery] = useState("");
+  const [pendingCategoryFilter, setPendingCategoryFilter] = useState<"all" | "leave" | "od" | "ccl" | "general">("all");
+  const [pendingSearchQuery, setPendingSearchQuery] = useState("");
   const [overviewYearFilter, setOverviewYearFilter] = useState<number | "all">("all");
   const [expandedDepts, setExpandedDepts] = useState<Record<string, boolean>>({});
 
@@ -295,6 +393,50 @@ export function PrincipalDashboard({
   }, [queryParams]);
 
   const current = data;
+
+  // Filtered employees for HRMS employee-wise attendance view (Classes/Slots assigned)
+  const filteredEmployees = useMemo(() => {
+    const list = current?.facultyAttendanceAndAdjustment?.employeeWiseDetails || [];
+    return list.filter((emp) => {
+      if (empStatusFilter !== "all") {
+        if (empStatusFilter === "present" && emp.status !== "present" && emp.status !== "late") return false;
+        if (empStatusFilter !== "present" && emp.status !== empStatusFilter) return false;
+      }
+      if (empGroupFilter === "teaching" && !emp.isTeaching) return false;
+      if (empGroupFilter === "non_teaching" && emp.isTeaching) return false;
+      if (empSlotFilter === "has_slots" && (!emp.slotsCount || emp.slotsCount === 0)) return false;
+      if (empSlotFilter === "no_slots" && (emp.slotsCount && emp.slotsCount > 0)) return false;
+      if (empSearchQuery.trim()) {
+        const q = empSearchQuery.toLowerCase().trim();
+        const matchesName = emp.name.toLowerCase().includes(q);
+        const matchesNo = emp.empNo.toLowerCase().includes(q);
+        const matchesDept = emp.department.toLowerCase().includes(q);
+        const matchesDesig = emp.designation.toLowerCase().includes(q);
+        const matchesSubj = emp.subjects?.some((s) => s.toLowerCase().includes(q));
+        if (!matchesName && !matchesNo && !matchesDept && !matchesDesig && !matchesSubj) return false;
+      }
+      return true;
+    });
+  }, [current?.facultyAttendanceAndAdjustment?.employeeWiseDetails, empStatusFilter, empGroupFilter, empSlotFilter, empSearchQuery]);
+
+  // Filtered pending approvals from HRMS
+  const filteredPendingApprovals = useMemo(() => {
+    const list = current?.approvalsAndDeadlines?.pendingApprovalDetails || [];
+    return list.filter((item) => {
+      if (pendingCategoryFilter !== "all" && item.category !== pendingCategoryFilter) return false;
+      if (pendingSearchQuery.trim()) {
+        const q = pendingSearchQuery.toLowerCase().trim();
+        const matchesName = item.employeeName.toLowerCase().includes(q);
+        const matchesNo = item.empNo.toLowerCase().includes(q);
+        const matchesDept = item.department.toLowerCase().includes(q);
+        const matchesPurpose = item.purpose.toLowerCase().includes(q);
+        const matchesType = item.subType.toLowerCase().includes(q);
+        const matchesPlace = item.placeVisited ? item.placeVisited.toLowerCase().includes(q) : false;
+        if (!matchesName && !matchesNo && !matchesDept && !matchesPurpose && !matchesType && !matchesPlace) return false;
+      }
+      return true;
+    });
+  }, [current?.approvalsAndDeadlines?.pendingApprovalDetails, pendingCategoryFilter, pendingSearchQuery]);
 
   if (loading) {
     return <PrincipalDashboardSkeleton />;
@@ -468,8 +610,8 @@ export function PrincipalDashboard({
       {/* 3. MIDDLE SECTION: DEPARTMENT ACADEMIC OVERVIEW & TODAY'S PRIORITIES */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         
-        {/* Left: Department Academic Overview (7 cols) */}
-        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
+        {/* Left: Department Academic Overview (7 cols, compact space matching Priorities) */}
+        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[430px] justify-between">
           <div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
               <div className="flex items-center gap-2">
@@ -539,11 +681,11 @@ export function PrincipalDashboard({
               </div>
             </div>
 
-            {/* Table */}
-            <div className="overflow-x-auto mt-3">
+            {/* Compact Scrollable Table Container */}
+            <div className="overflow-x-auto overflow-y-auto mt-2.5 flex-1 max-h-[310px] rounded-lg border border-slate-100">
               <table className="w-full text-left text-xs">
-                <thead>
-                  <tr className="text-slate-400 border-b border-slate-100 font-medium">
+                <thead className="sticky top-0 bg-white/95 backdrop-blur-xs z-10 border-b border-slate-200/80 shadow-2xs">
+                  <tr className="text-slate-500 font-semibold">
                     <th className="py-2.5 font-medium">Department / Years</th>
                     <th className="py-2.5 font-medium">Student Attendance</th>
                     <th className="py-2.5 font-medium">Faculty Attendance</th>
@@ -770,12 +912,24 @@ export function PrincipalDashboard({
                 </tbody>
               </table>
             </div>
+
+            {/* Department Footer / Status */}
+            <div className="pt-2.5 mt-auto border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+              <span>{current.departmentOverview.length} Departments Tracked</span>
+              <button
+                type="button"
+                onClick={() => setActiveModal("dept_overview")}
+                className="font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+              >
+                Open Full Overview &gt;
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Right: Today's Priorities (5 cols) */}
-        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
-          <div>
+        {/* Right: Today's Priorities (5 cols, matching height) */}
+        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[430px] justify-between">
+          <div className="flex flex-col h-full justify-between">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center font-black text-[11px]">
@@ -794,8 +948,8 @@ export function PrincipalDashboard({
               </button>
             </div>
 
-            {/* List of priority action items */}
-            <div className="mt-2.5 space-y-2">
+            {/* List of priority action items (Scrollable within height) */}
+            <div className="mt-2.5 space-y-2 overflow-y-auto flex-1 max-h-[310px] pr-1">
               {current.priorities.map((item) => (
                 <Link
                   key={item.id}
@@ -838,6 +992,18 @@ export function PrincipalDashboard({
                   <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all shrink-0 mt-0.5 ml-1" />
                 </Link>
               ))}
+            </div>
+
+            {/* Priorities Footer / Status */}
+            <div className="pt-2.5 mt-auto border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+              <span>{current.priorities.length} Action Items Pending</span>
+              <button
+                type="button"
+                onClick={() => setActiveModal("priorities")}
+                className="font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+              >
+                View All &gt;
+              </button>
             </div>
           </div>
         </div>
@@ -1073,38 +1239,64 @@ export function PrincipalDashboard({
             </div>
 
             {/* Top row status counters */}
-            <div className="grid grid-cols-5 gap-2 text-center mt-3">
-              <div className="bg-slate-50/80 p-2 rounded-lg">
-                <span className="text-[10px] text-slate-500 block">Present</span>
-                <span className="text-base sm:text-lg font-extrabold text-emerald-600">
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 text-center mt-3">
+              <div className="bg-emerald-50/70 border border-emerald-100/80 p-2 rounded-lg">
+                <span className="text-[10px] text-slate-500 block font-medium">Present</span>
+                <span className="text-sm sm:text-base font-extrabold text-emerald-600">
                   {current.facultyAttendanceAndAdjustment.facultyStatus.present}
                 </span>
               </div>
-              <div className="bg-slate-50/80 p-2 rounded-lg">
-                <span className="text-[10px] text-slate-500 block">Late</span>
-                <span className="text-base sm:text-lg font-extrabold text-amber-500">
+              <div className="bg-amber-50/70 border border-amber-100/80 p-2 rounded-lg">
+                <span className="text-[10px] text-slate-500 block font-medium">Late</span>
+                <span className="text-sm sm:text-base font-extrabold text-amber-500">
                   {current.facultyAttendanceAndAdjustment.facultyStatus.late}
                 </span>
               </div>
-              <div className="bg-slate-50/80 p-2 rounded-lg">
-                <span className="text-[10px] text-slate-500 block">Leave</span>
-                <span className="text-base sm:text-lg font-extrabold text-rose-500">
+              <div className="bg-rose-50/70 border border-rose-100/80 p-2 rounded-lg">
+                <span className="text-[10px] text-slate-500 block font-medium">Leave</span>
+                <span className="text-sm sm:text-base font-extrabold text-rose-500">
                   {current.facultyAttendanceAndAdjustment.facultyStatus.leave}
                 </span>
               </div>
-              <div className="bg-slate-50/80 p-2 rounded-lg">
-                <span className="text-[10px] text-slate-500 block">OD</span>
-                <span className="text-base sm:text-lg font-extrabold text-purple-600">
+              <div className="bg-purple-50/70 border border-purple-100/80 p-2 rounded-lg">
+                <span className="text-[10px] text-slate-500 block font-medium">OD</span>
+                <span className="text-sm sm:text-base font-extrabold text-purple-600">
                   {current.facultyAttendanceAndAdjustment.facultyStatus.od}
                 </span>
               </div>
-              <div className="bg-slate-50/80 p-2 rounded-lg">
-                <span className="text-[10px] text-slate-500 block">Absent</span>
-                <span className="text-base sm:text-lg font-extrabold text-rose-600">
+              <div className="bg-blue-50/70 border border-blue-100/80 p-2 rounded-lg">
+                <span className="text-[10px] text-slate-500 block font-medium">Permission</span>
+                <span className="text-sm sm:text-base font-extrabold text-blue-600">
+                  {current.facultyAttendanceAndAdjustment.facultyStatus.permission ?? 0}
+                </span>
+              </div>
+              <div className="bg-slate-50/80 border border-slate-200/80 p-2 rounded-lg">
+                <span className="text-[10px] text-slate-500 block font-medium">Absent</span>
+                <span className="text-sm sm:text-base font-extrabold text-rose-600">
                   {current.facultyAttendanceAndAdjustment.facultyStatus.absent}
                 </span>
               </div>
             </div>
+
+            {/* Quick Button: Employee-Wise Details */}
+            {current.facultyAttendanceAndAdjustment.employeeWiseDetails && current.facultyAttendanceAndAdjustment.employeeWiseDetails.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setFacultyModalTab("employees");
+                  setActiveModal("faculty_adjustment");
+                }}
+                className="mt-3 w-full py-1.5 px-2.5 bg-blue-50/80 hover:bg-blue-100/80 border border-blue-200/70 rounded-lg flex items-center justify-between text-xs font-semibold text-blue-700 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Employee-Wise Attendance ({current.facultyAttendanceAndAdjustment.employeeWiseDetails.length})</span>
+                </div>
+                <span className="text-[10px] text-blue-600 font-bold flex items-center gap-0.5">
+                  View Live Thumbs &rarr;
+                </span>
+              </button>
+            )}
 
             {/* Banner: Classes Affected Today */}
             <div className="mt-4 p-3 bg-rose-50/50 border border-rose-100 rounded-xl">
@@ -1267,7 +1459,7 @@ export function PrincipalDashboard({
             </div>
 
             {/* Tabs */}
-            <div className="flex items-center gap-4 border-b border-slate-100 mt-2 text-xs font-semibold">
+            <div className="flex items-center gap-3 border-b border-slate-100 mt-2 text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setApprovalTab("deadlines")}
@@ -1290,39 +1482,196 @@ export function PrincipalDashboard({
               >
                 Pending Approvals
               </button>
+              <button
+                type="button"
+                onClick={() => setApprovalTab("leaves_ods")}
+                className={`pb-2 transition-colors cursor-pointer ${
+                  approvalTab === "leaves_ods"
+                    ? "text-blue-600 border-b-2 border-blue-600"
+                    : "text-slate-400 hover:text-slate-600"
+                }`}
+              >
+                HRMS Leaves &amp; ODs
+              </button>
             </div>
 
             {/* Tab 1: Upcoming Deadlines Content */}
-            {approvalTab === "deadlines" ? (
+            {approvalTab === "deadlines" && (
               <div className="mt-3 space-y-2.5">
-                {current.approvalsAndDeadlines.upcomingDeadlines.map((dl, idx) => (
-                  <div key={idx} className="flex items-start gap-2.5 py-1 text-xs">
-                    <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-700 font-bold flex flex-col items-center justify-center shrink-0 border border-blue-100">
-                      <span className="text-xs leading-none">{dl.day}</span>
-                      <span className="text-[9px] uppercase leading-none mt-0.5">{dl.month}</span>
-                    </div>
-                    <div>
-                      <span className="font-bold text-slate-800 block">{dl.title}</span>
-                      <span className="text-[11px] text-slate-400 block">{dl.subtitle}</span>
-                    </div>
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium pb-0.5">
+                  <span className="flex items-center gap-1 text-slate-600">
+                    <Calendar className="h-3 w-3 text-purple-600" />
+                    Within: <strong className="text-slate-800">{current.approvalsAndDeadlines.dateRangeLabel || current.meta.dateFormatted}</strong>
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    {current.approvalsAndDeadlines.upcomingDeadlines.length} deadline{current.approvalsAndDeadlines.upcomingDeadlines.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                {current.approvalsAndDeadlines.upcomingDeadlines.length === 0 ? (
+                  <div className="text-xs text-slate-400 text-center py-4 bg-slate-50/50 rounded-lg border border-dashed border-slate-200">
+                    No examination deadlines within {current.approvalsAndDeadlines.dateRangeLabel || current.meta.dateFormatted}
                   </div>
-                ))}
+                ) : (
+                  current.approvalsAndDeadlines.upcomingDeadlines.slice(0, 4).map((dl, idx) => (
+                    <div key={idx} className="flex items-start gap-2.5 py-1 text-xs">
+                      <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-700 font-bold flex flex-col items-center justify-center shrink-0 border border-blue-100">
+                        <span className="text-xs leading-none">{dl.day}</span>
+                        <span className="text-[9px] uppercase leading-none mt-0.5">{dl.month}</span>
+                      </div>
+                      <div className="min-w-0 pr-1">
+                        <span className="font-bold text-slate-800 block truncate">{dl.title}</span>
+                        <span className="text-[11px] text-slate-400 block truncate">
+                          {dl.subtitle} {dl.startDate && dl.endDate ? "• " + dl.startDate + " to " + dl.endDate : ""}
+                        </span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-            ) : (
-              /* Tab 2: Pending Approvals Content */
-              <div className="mt-3 space-y-2">
-                {current.approvalsAndDeadlines.pendingApprovals.map((item, idx) => (
-                  <Link
-                    key={idx}
-                    href={item.href}
-                    className="flex items-center justify-between py-1.5 px-2 rounded-lg hover:bg-slate-50 transition-colors text-xs"
-                  >
-                    <span className="text-slate-700 font-medium">{item.label}</span>
-                    <span className="font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded text-xs">
-                      {item.count}
+            )}
+
+            {/* Tab 2: Pending Approvals Content */}
+            {approvalTab === "approvals" && (
+              <div className="mt-3 space-y-2.5">
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium pb-0.5">
+                  <span className="flex items-center gap-1 text-slate-600">
+                    <Calendar className="h-3 w-3 text-blue-600" />
+                    Dates in: <strong className="text-slate-800">{current.approvalsAndDeadlines.dateRangeLabel || current.meta.dateFormatted}</strong>
+                  </span>
+                  {current.approvalsAndDeadlines.allTimePendingCount != null && (
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      ({current.approvalsAndDeadlines.allTimePendingCount} total all-time)
                     </span>
-                  </Link>
-                ))}
+                  )}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+                  {current.approvalsAndDeadlines.pendingApprovals.slice(0, 3).map((item, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        const parts = item.href.split(":");
+                        if (parts[1] === "approvals_deadlines" && parts[2]) {
+                          setPendingCategoryFilter(parts[2] as any);
+                        }
+                        setActiveModal("approvals_deadlines");
+                      }}
+                      className="p-2 rounded-lg bg-slate-50 hover:bg-blue-50/60 border border-slate-100 hover:border-blue-200 transition-all text-left cursor-pointer group"
+                    >
+                      <span className="text-[10px] text-slate-500 block truncate font-medium group-hover:text-blue-700">
+                        {item.label}
+                      </span>
+                      <span className="text-sm font-extrabold text-slate-900 block group-hover:text-blue-600">
+                        {item.count}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {/* Preview of top HRMS pending requests */}
+                {current.approvalsAndDeadlines.pendingApprovalDetails && current.approvalsAndDeadlines.pendingApprovalDetails.length > 0 && (
+                  <div className="pt-2 border-t border-slate-100 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600">
+                      <span>Live HRMS Requests</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingCategoryFilter("all");
+                          setActiveModal("approvals_deadlines");
+                        }}
+                        className="text-blue-600 hover:text-blue-700 font-bold text-[10px] cursor-pointer"
+                      >
+                        View All ({current.approvalsAndDeadlines.pendingApprovalDetails.length}) &rarr;
+                      </button>
+                    </div>
+                    {current.approvalsAndDeadlines.pendingApprovalDetails.slice(0, 3).map((req) => (
+                      <div
+                        key={req.id}
+                        onClick={() => {
+                          setPendingCategoryFilter(req.category);
+                          setActiveModal("approvals_deadlines");
+                        }}
+                        className="p-2 rounded-lg bg-slate-50/70 hover:bg-slate-100/70 border border-slate-100 text-xs flex items-center justify-between cursor-pointer transition-colors"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-slate-900 truncate">{req.employeeName}</span>
+                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                              req.category === "leave" ? "bg-rose-100 text-rose-700" : req.category === "od" ? "bg-purple-100 text-purple-700" : "bg-sky-100 text-sky-700"
+                            }`}>
+                              {req.subType}
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-slate-500 block truncate">
+                            {req.department} &bull; {req.purpose} &bull; {req.fromDate === req.toDate ? req.fromDate : `${req.fromDate} - ${req.toDate}`}
+                          </span>
+                        </div>
+                        <span className="shrink-0 px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                          {req.statusLabel}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Tab 3: HRMS Leaves & ODs Content */}
+            {approvalTab === "leaves_ods" && (
+              <div className="mt-3 space-y-2">
+                {(!current.facultyAttendanceAndAdjustment.hrmsLeaves || current.facultyAttendanceAndAdjustment.hrmsLeaves.length === 0) &&
+                 (!current.facultyAttendanceAndAdjustment.hrmsOds || current.facultyAttendanceAndAdjustment.hrmsOds.length === 0) ? (
+                  <div className="text-xs text-slate-400 text-center py-4">No leaves or ODs recorded for today</div>
+                ) : (
+                  <>
+                    {current.facultyAttendanceAndAdjustment.hrmsLeaves?.slice(0, 3).map((l) => (
+                      <div
+                        key={l.id}
+                        onClick={() => {
+                          setFacultyModalTab("leaves");
+                          setActiveModal("faculty_adjustment");
+                        }}
+                        className="p-2 rounded-lg bg-rose-50/40 border border-rose-100 flex items-center justify-between text-xs cursor-pointer hover:bg-rose-50"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <span className="font-semibold text-slate-800 block truncate">{l.employeeName}</span>
+                          <span className="text-[11px] text-slate-500 block truncate">{l.department} &bull; {l.purpose}</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-700 shrink-0">
+                          {l.leaveType} ({l.numberOfDays}d)
+                        </span>
+                      </div>
+                    ))}
+                    {current.facultyAttendanceAndAdjustment.hrmsOds?.slice(0, 2).map((o) => (
+                      <div
+                        key={o.id}
+                        onClick={() => {
+                          setFacultyModalTab("ods");
+                          setActiveModal("faculty_adjustment");
+                        }}
+                        className="p-2 rounded-lg bg-purple-50/40 border border-purple-100 flex items-center justify-between text-xs cursor-pointer hover:bg-purple-50"
+                      >
+                        <div className="min-w-0 pr-2">
+                          <span className="font-semibold text-slate-800 block truncate">{o.employeeName}</span>
+                          <span className="text-[11px] text-slate-500 block truncate">{o.department} &bull; {o.placeVisited || o.purpose}</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-700 shrink-0">
+                          OD ({o.odType})
+                        </span>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFacultyModalTab("leaves");
+                        setActiveModal("faculty_adjustment");
+                      }}
+                      className="w-full text-center text-xs font-semibold text-blue-600 hover:text-blue-700 py-1 cursor-pointer"
+                    >
+                      View All Leaves &amp; ODs &gt;
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -1333,7 +1682,7 @@ export function PrincipalDashboard({
       {/* MODAL: VIEW ALL DETAILS */}
       {activeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 max-h-[85vh] overflow-y-auto">
+          <div className={`bg-white rounded-2xl ${activeModal === "faculty_adjustment" || activeModal === "dept_overview" || activeModal === "approvals_deadlines" ? "max-w-5xl" : "max-w-2xl"} w-full p-4 sm:p-6 shadow-2xl border border-slate-200 max-h-[88vh] overflow-y-auto`}>
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="text-base font-bold text-slate-900">
                 {activeModal === "dept_overview" && "Department Academic Overview (Full)"}
@@ -1659,34 +2008,214 @@ export function PrincipalDashboard({
 
               {activeModal === "approvals_deadlines" && (
                 <div className="space-y-4">
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Pending Approvals</h4>
-                    <div className="space-y-1.5">
-                      {current.approvalsAndDeadlines.pendingApprovals.map((a, i) => (
-                        <div key={i} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg text-xs">
-                          <span className="font-medium text-slate-800">{a.label}</span>
-                          <span className="font-bold bg-white border border-slate-200 px-2 py-0.5 rounded">{a.count} requests</span>
-                        </div>
-                      ))}
+                  {/* Selected Date Range Scope Banner */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-blue-50/70 border border-blue-100 rounded-xl text-xs">
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-blue-600 shrink-0" />
+                      <div>
+                        <span className="text-slate-500 text-[10px] block font-semibold uppercase">Dashboard Date Range Scope</span>
+                        <span className="font-bold text-slate-900">{current.approvalsAndDeadlines.dateRangeLabel || current.meta.dateFormatted}</span>
+                      </div>
+                    </div>
+                    {current.approvalsAndDeadlines.allTimePendingCount != null && (
+                      <span className="text-[11px] text-blue-800 bg-white border border-blue-200 px-3 py-1 rounded-full font-medium shadow-2xs">
+                        Showing <strong>{current.approvalsAndDeadlines.pendingApprovalDetails?.length || 0}</strong> requests with dates/durations within range ({current.approvalsAndDeadlines.allTimePendingCount} total all-time)
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Category Summary KPIs */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                    <div className="p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl">
+                      <span className="text-[10px] text-slate-500 font-semibold block">Total Pending</span>
+                      <span className="text-lg font-black text-slate-900">
+                        {current.approvalsAndDeadlines.pendingApprovalDetails?.length || 0}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-rose-50/70 border border-rose-100 rounded-xl">
+                      <span className="text-[10px] text-rose-600 font-semibold block">Faculty Leaves</span>
+                      <span className="text-lg font-black text-rose-700">
+                        {current.approvalsAndDeadlines.pendingApprovalDetails?.filter((p) => p.category === "leave").length || 0}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-purple-50/70 border border-purple-100 rounded-xl">
+                      <span className="text-[10px] text-purple-600 font-semibold block">On-Duty (OD)</span>
+                      <span className="text-lg font-black text-purple-700">
+                        {current.approvalsAndDeadlines.pendingApprovalDetails?.filter((p) => p.category === "od").length || 0}
+                      </span>
+                    </div>
+                    <div className="p-2.5 bg-sky-50/70 border border-sky-100 rounded-xl">
+                      <span className="text-[10px] text-sky-600 font-semibold block">Compensatory Off</span>
+                      <span className="text-lg font-black text-sky-700">
+                        {current.approvalsAndDeadlines.pendingApprovalDetails?.filter((p) => p.category === "ccl").length || 0}
+                      </span>
                     </div>
                   </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">Upcoming Milestones &amp; Deadlines</h4>
-                    <div className="space-y-2">
-                      {current.approvalsAndDeadlines.upcomingDeadlines.map((dl, i) => (
-                        <div key={i} className="flex items-center gap-3 p-2 bg-slate-50 rounded-lg text-xs">
-                          <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-bold flex flex-col items-center justify-center shrink-0">
-                            <span className="text-[11px] leading-none">{dl.day}</span>
-                            <span className="text-[8px] uppercase">{dl.month}</span>
-                          </div>
-                          <div>
-                            <span className="font-bold text-slate-800 block">{dl.title}</span>
-                            <span className="text-[11px] text-slate-500">{dl.subtitle}</span>
-                          </div>
-                        </div>
-                      ))}
+
+                  {/* Filter and Search Bar */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+                    <div className="flex items-center gap-1 text-xs overflow-x-auto pb-1">
+                      <button
+                        type="button"
+                        onClick={() => setPendingCategoryFilter("all")}
+                        className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                          pendingCategoryFilter === "all"
+                            ? "bg-slate-900 text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        All ({current.approvalsAndDeadlines.pendingApprovalDetails?.length || 0})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingCategoryFilter("leave")}
+                        className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                          pendingCategoryFilter === "leave"
+                            ? "bg-rose-600 text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        Leaves ({current.approvalsAndDeadlines.pendingApprovalDetails?.filter((p) => p.category === "leave").length || 0})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingCategoryFilter("od")}
+                        className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                          pendingCategoryFilter === "od"
+                            ? "bg-purple-600 text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        On-Duty ({current.approvalsAndDeadlines.pendingApprovalDetails?.filter((p) => p.category === "od").length || 0})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingCategoryFilter("ccl")}
+                        className={`px-3 py-1.5 rounded-lg font-bold transition-colors cursor-pointer ${
+                          pendingCategoryFilter === "ccl"
+                            ? "bg-sky-600 text-white"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                        }`}
+                      >
+                        CCL ({current.approvalsAndDeadlines.pendingApprovalDetails?.filter((p) => p.category === "ccl").length || 0})
+                      </button>
+                    </div>
+
+                    <div className="relative w-full sm:w-64">
+                      <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={pendingSearchQuery}
+                        onChange={(e) => setPendingSearchQuery(e.target.value)}
+                        placeholder="Search employee, dept, purpose..."
+                        className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
                     </div>
                   </div>
+
+                  {/* Pending Approvals Table */}
+                  <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[48vh] overflow-y-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3">Faculty / Employee</th>
+                          <th className="py-2.5 px-3">Department</th>
+                          <th className="py-2.5 px-3">Request Type</th>
+                          <th className="py-2.5 px-3">Dates &amp; Duration</th>
+                          <th className="py-2.5 px-3">Reason / Purpose</th>
+                          <th className="py-2.5 px-3">Current Status</th>
+                          <th className="py-2.5 px-3">Applied On</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredPendingApprovals.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="py-8 text-center text-slate-400">
+                              No matching pending approvals found
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredPendingApprovals.map((req) => (
+                            <tr key={req.id} className="hover:bg-slate-50/70 transition-colors">
+                              <td className="py-2.5 px-3">
+                                <div className="font-bold text-slate-900">{req.employeeName}</div>
+                                <div className="font-mono text-[10px] text-slate-500">ID: {req.empNo}</div>
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <div className="font-semibold text-slate-700">{req.department}</div>
+                                <div className="text-[10px] text-slate-400">{req.designation}</div>
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  req.category === "leave"
+                                    ? "bg-rose-100 text-rose-800"
+                                    : req.category === "od"
+                                    ? "bg-purple-100 text-purple-800"
+                                    : "bg-sky-100 text-sky-800"
+                                }`}>
+                                  {req.categoryLabel} • {req.subType}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-[11px] text-slate-700">
+                                <div className="font-medium">
+                                  {req.fromDate === req.toDate ? req.fromDate : `${req.fromDate} - ${req.toDate}`}
+                                </div>
+                                <span className="text-[10px] text-slate-400">
+                                  ({req.numberOfDays} day{req.numberOfDays > 1 ? "s" : ""})
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-[11px] text-slate-600 max-w-[200px]">
+                                {req.placeVisited && req.placeVisited !== "—" && (
+                                  <div className="font-semibold text-slate-800 truncate">
+                                    Place: {req.placeVisited}
+                                  </div>
+                                )}
+                                <div className="truncate">{req.purpose || "—"}</div>
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                  req.status.includes("approved")
+                                    ? "bg-blue-100 text-blue-800"
+                                    : req.status === "draft"
+                                    ? "bg-slate-100 text-slate-600"
+                                    : "bg-amber-100 text-amber-800"
+                                }`}>
+                                  <Clock className="h-2.5 w-2.5" />
+                                  {req.statusLabel}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-[10px] text-slate-500 font-mono">
+                                {req.appliedAt}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Upcoming Deadlines & Milestones Collapsible / Section */}
+                  {current.approvalsAndDeadlines.upcomingDeadlines.length > 0 && (
+                    <div className="pt-2 border-t border-slate-100">
+                      <h4 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+                        Upcoming Academic Milestones &amp; Examination Deadlines
+                      </h4>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {current.approvalsAndDeadlines.upcomingDeadlines.map((dl, i) => (
+                          <div key={i} className="flex items-center gap-3 p-2.5 bg-slate-50 rounded-xl border border-slate-100 text-xs">
+                            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white font-bold flex flex-col items-center justify-center shrink-0">
+                              <span className="text-[11px] leading-none">{dl.day}</span>
+                              <span className="text-[8px] uppercase">{dl.month}</span>
+                            </div>
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-800 block truncate">{dl.title}</span>
+                              <span className="text-[11px] text-slate-500 block truncate">{dl.subtitle}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1736,38 +2265,494 @@ export function PrincipalDashboard({
               )}
 
               {activeModal === "faculty_adjustment" && (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-5 gap-2 text-center">
-                    <div className="bg-emerald-50 p-2 rounded-lg">
-                      <span className="text-[10px] text-slate-500 block">Present</span>
-                      <span className="text-base font-bold text-emerald-600">{current.facultyAttendanceAndAdjustment.facultyStatus.present}</span>
+                <div className="space-y-4">
+                  {/* Top Counters Summary */}
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+                    <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-100">
+                      <span className="text-[10px] text-slate-500 block font-medium">Present</span>
+                      <span className="text-lg font-black text-emerald-600">
+                        {current.facultyAttendanceAndAdjustment.facultyStatus.present}
+                      </span>
                     </div>
-                    <div className="bg-amber-50 p-2 rounded-lg">
-                      <span className="text-[10px] text-slate-500 block">Late</span>
-                      <span className="text-base font-bold text-amber-600">{current.facultyAttendanceAndAdjustment.facultyStatus.late}</span>
+                    <div className="bg-amber-50 p-2.5 rounded-xl border border-amber-100">
+                      <span className="text-[10px] text-slate-500 block font-medium">Late</span>
+                      <span className="text-lg font-black text-amber-600">
+                        {current.facultyAttendanceAndAdjustment.facultyStatus.late}
+                      </span>
                     </div>
-                    <div className="bg-rose-50 p-2 rounded-lg">
-                      <span className="text-[10px] text-slate-500 block">Leave</span>
-                      <span className="text-base font-bold text-rose-600">{current.facultyAttendanceAndAdjustment.facultyStatus.leave}</span>
+                    <div className="bg-rose-50 p-2.5 rounded-xl border border-rose-100">
+                      <span className="text-[10px] text-slate-500 block font-medium">Leave</span>
+                      <span className="text-lg font-black text-rose-600">
+                        {current.facultyAttendanceAndAdjustment.facultyStatus.leave}
+                      </span>
                     </div>
-                    <div className="bg-purple-50 p-2 rounded-lg">
-                      <span className="text-[10px] text-slate-500 block">OD</span>
-                      <span className="text-base font-bold text-purple-600">{current.facultyAttendanceAndAdjustment.facultyStatus.od}</span>
+                    <div className="bg-purple-50 p-2.5 rounded-xl border border-purple-100">
+                      <span className="text-[10px] text-slate-500 block font-medium">On Duty (OD)</span>
+                      <span className="text-lg font-black text-purple-600">
+                        {current.facultyAttendanceAndAdjustment.facultyStatus.od}
+                      </span>
                     </div>
-                    <div className="bg-rose-50 p-2 rounded-lg">
-                      <span className="text-[10px] text-slate-500 block">Absent</span>
-                      <span className="text-base font-bold text-rose-600">{current.facultyAttendanceAndAdjustment.facultyStatus.absent}</span>
+                    <div className="bg-blue-50 p-2.5 rounded-xl border border-blue-100">
+                      <span className="text-[10px] text-slate-500 block font-medium">Permission</span>
+                      <span className="text-lg font-black text-blue-600">
+                        {current.facultyAttendanceAndAdjustment.facultyStatus.permission ?? 0}
+                      </span>
+                    </div>
+                    <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                      <span className="text-[10px] text-slate-500 block font-medium">Absent</span>
+                      <span className="text-lg font-black text-rose-600">
+                        {current.facultyAttendanceAndAdjustment.facultyStatus.absent}
+                      </span>
                     </div>
                   </div>
-                  <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">
-                    <span className="font-bold text-slate-800 block">Classes Affected Today: {current.facultyAttendanceAndAdjustment.classesAffected.total}</span>
-                    <p className="text-slate-500">
-                      Adjusted: {current.facultyAttendanceAndAdjustment.classesAffected.adjusted} | 
-                      Substitute: {current.facultyAttendanceAndAdjustment.classesAffected.substitute} | 
-                      Cancelled: {current.facultyAttendanceAndAdjustment.classesAffected.cancelled} | 
-                      Pending: {current.facultyAttendanceAndAdjustment.classesAffected.pending}
-                    </p>
+
+                  {/* Sub-tabs inside modal */}
+                  <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-2 text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setFacultyModalTab("employees")}
+                      className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                        facultyModalTab === "employees"
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      Employee Attendance ({current.facultyAttendanceAndAdjustment.employeeWiseDetails?.length || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFacultyModalTab("leaves")}
+                      className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                        facultyModalTab === "leaves"
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      HRMS Leaves ({current.facultyAttendanceAndAdjustment.hrmsLeaves?.length || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFacultyModalTab("ods")}
+                      className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                        facultyModalTab === "ods"
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      HRMS On-Duty / OD ({current.facultyAttendanceAndAdjustment.hrmsOds?.length || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFacultyModalTab("permissions")}
+                      className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                        facultyModalTab === "permissions"
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      Permissions ({current.facultyAttendanceAndAdjustment.hrmsPermissions?.length || 0})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFacultyModalTab("adjustments")}
+                      className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                        facultyModalTab === "adjustments"
+                          ? "bg-blue-600 text-white shadow-xs"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                    >
+                      Class Adjustments ({current.facultyAttendanceAndAdjustment.classesAffected.total})
+                    </button>
                   </div>
+
+                  {/* TAB 1: Employee-Wise Details */}
+                  {facultyModalTab === "employees" && (
+                    <div className="space-y-3">
+                      {/* Search & Filters */}
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                        <div className="relative flex-1">
+                          <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            placeholder="Search by employee name, ID or department..."
+                            value={empSearchQuery}
+                            onChange={(e) => setEmpSearchQuery(e.target.value)}
+                            className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 bg-slate-50/50"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1.5 text-xs overflow-x-auto pb-1 sm:pb-0">
+                          {(["all", "teaching", "non_teaching"] as const).map((grp) => (
+                            <button
+                              key={grp}
+                              type="button"
+                              onClick={() => setEmpGroupFilter(grp)}
+                              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-colors cursor-pointer shrink-0 ${
+                                empGroupFilter === grp
+                                  ? "bg-slate-900 text-white"
+                                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                              }`}
+                            >
+                              {grp === "all" ? "All Staff" : grp === "teaching" ? "Teaching Faculty" : "Non-Teaching"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Status Chips */}
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                        {(["all", "present", "late", "leave", "od", "permission", "absent"] as const).map((st) => (
+                          <button
+                            key={st}
+                            type="button"
+                            onClick={() => setEmpStatusFilter(st)}
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize transition-colors cursor-pointer shrink-0 ${
+                              empStatusFilter === st
+                                ? "bg-blue-600 text-white ring-2 ring-blue-300"
+                                : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                            }`}
+                          >
+                            {st}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Slot Filter Bar */}
+                      <div className="flex items-center gap-1.5 text-xs overflow-x-auto pb-1">
+                        <span className="text-slate-400 font-semibold text-[10px] uppercase">Slots:</span>
+                        <button
+                          type="button"
+                          onClick={() => setEmpSlotFilter("all")}
+                          className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                            empSlotFilter === "all" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          All Assigned ({current.facultyAttendanceAndAdjustment.employeeWiseDetails?.length || 0})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEmpSlotFilter("has_slots")}
+                          className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                            empSlotFilter === "has_slots" ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          With Slots Today ({current.facultyAttendanceAndAdjustment.employeeWiseDetails?.filter((e) => (e.slotsCount || 0) > 0).length || 0})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEmpSlotFilter("no_slots")}
+                          className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                            empSlotFilter === "no_slots" ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          No Slots ({current.facultyAttendanceAndAdjustment.employeeWiseDetails?.filter((e) => !e.slotsCount || e.slotsCount === 0).length || 0})
+                        </button>
+                      </div>
+
+                      {/* Employee Table */}
+                      <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                            <tr>
+                              <th className="py-2.5 px-3">Emp ID</th>
+                              <th className="py-2.5 px-3">Employee Name</th>
+                              <th className="py-2.5 px-3">Department &amp; Group</th>
+                              <th className="py-2.5 px-3">Scheduled Slots</th>
+                              <th className="py-2.5 px-3">Attendance Status</th>
+                              <th className="py-2.5 px-3">Biometric Timing</th>
+                              <th className="py-2.5 px-3">Details / Reason</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {filteredEmployees.length === 0 ? (
+                              <tr>
+                                <td colSpan={7} className="py-6 text-center text-slate-400">
+                                  No matching employee attendance records found
+                                </td>
+                              </tr>
+                            ) : (
+                              filteredEmployees.map((emp) => (
+                                <tr key={emp.empNo} className="hover:bg-slate-50/70 transition-colors">
+                                  <td className="py-2 px-3 font-mono text-[11px] font-bold text-slate-700">
+                                    {emp.empNo}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <div className="font-bold text-slate-900">{emp.name}</div>
+                                    <div className="text-[10px] text-slate-400">{emp.designation || "Staff"}</div>
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <div className="font-semibold text-slate-700">{emp.department}</div>
+                                    <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold mt-0.5 ${
+                                      emp.isTeaching ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"
+                                    }`}>
+                                      {emp.employeeGroup || (emp.isTeaching ? "TEACHING" : "NON-TEACHING")}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {emp.slotsCount && emp.slotsCount > 0 ? (
+                                      <div>
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                          <BookOpen className="h-2.5 w-2.5 text-blue-600" />
+                                          {emp.slotsCount} Slots ({emp.slotsPosted || 0} Posted)
+                                        </span>
+                                        {emp.subjects && emp.subjects.length > 0 && (
+                                          <span className="text-[10px] text-slate-500 block truncate max-w-[140px] mt-0.5">
+                                            {emp.subjects.slice(0, 2).join(", ")}
+                                          </span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-[10px] text-slate-400 italic">No slots today</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    {emp.status === "present" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                        <Fingerprint className="h-3 w-3 text-emerald-600" />
+                                        {emp.thumbStatus === "partial" ? "Present (Partial)" : "Present"}
+                                      </span>
+                                    )}
+                                    {emp.status === "late" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                                        <Clock className="h-3 w-3 text-amber-600" />
+                                        Late ({emp.lateMinutes}m)
+                                      </span>
+                                    )}
+                                    {emp.status === "leave" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                                        {emp.displayStatus}
+                                      </span>
+                                    )}
+                                    {emp.status === "od" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">
+                                        {emp.displayStatus}
+                                      </span>
+                                    )}
+                                    {emp.status === "permission" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800">
+                                        Permission
+                                      </span>
+                                    )}
+                                    {emp.status === "absent" && (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-600">
+                                        Absent
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3 font-mono text-[11px] text-slate-600">
+                                    {emp.checkInTime ? (
+                                      <div>
+                                        <span className="text-emerald-700 font-semibold">In: {emp.checkInTime}</span>
+                                        {emp.checkOutTime && (
+                                          <span className="text-slate-500 block text-[10px]">Out: {emp.checkOutTime}</span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-400 italic">No punch</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2 px-3 text-[11px] text-slate-500">
+                                    {emp.details || "—"}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* TAB 2: HRMS Leaves */}
+                  {facultyModalTab === "leaves" && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-3">Emp ID</th>
+                            <th className="py-2.5 px-3">Employee Name</th>
+                            <th className="py-2.5 px-3">Department</th>
+                            <th className="py-2.5 px-3">Leave Type</th>
+                            <th className="py-2.5 px-3">Dates &amp; Days</th>
+                            <th className="py-2.5 px-3">Reason / Purpose</th>
+                            <th className="py-2.5 px-3">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(!current.facultyAttendanceAndAdjustment.hrmsLeaves || current.facultyAttendanceAndAdjustment.hrmsLeaves.length === 0) ? (
+                            <tr>
+                              <td colSpan={7} className="py-6 text-center text-slate-400">
+                                No leave applications found for this date
+                              </td>
+                            </tr>
+                          ) : (
+                            current.facultyAttendanceAndAdjustment.hrmsLeaves.map((l) => (
+                              <tr key={l.id} className="hover:bg-slate-50/70 transition-colors">
+                                <td className="py-2 px-3 font-mono font-bold text-slate-700">{l.empNo}</td>
+                                <td className="py-2 px-3 font-bold text-slate-900">{l.employeeName}</td>
+                                <td className="py-2 px-3 text-slate-600 font-medium">{l.department}</td>
+                                <td className="py-2 px-3">
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800">
+                                    {l.leaveType}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-[11px] text-slate-700 font-medium">
+                                  <div>{l.fromDate === l.toDate ? l.fromDate : `${l.fromDate} - ${l.toDate}`}</div>
+                                  <span className="text-[10px] text-slate-400">({l.numberOfDays} day{l.numberOfDays > 1 ? "s" : ""})</span>
+                                </td>
+                                <td className="py-2 px-3 text-slate-600">{l.purpose || "—"}</td>
+                                <td className="py-2 px-3">
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
+                                    l.status.includes("approved")
+                                      ? "bg-emerald-100 text-emerald-800"
+                                      : "bg-amber-100 text-amber-800"
+                                  }`}>
+                                    {l.status.replace("_", " ")}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* TAB 3: HRMS ODs */}
+                  {facultyModalTab === "ods" && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-3">Emp ID</th>
+                            <th className="py-2.5 px-3">Employee Name</th>
+                            <th className="py-2.5 px-3">Department</th>
+                            <th className="py-2.5 px-3">OD Type</th>
+                            <th className="py-2.5 px-3">Dates</th>
+                            <th className="py-2.5 px-3">Location / Place</th>
+                            <th className="py-2.5 px-3">Purpose</th>
+                            <th className="py-2.5 px-3">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(!current.facultyAttendanceAndAdjustment.hrmsOds || current.facultyAttendanceAndAdjustment.hrmsOds.length === 0) ? (
+                            <tr>
+                              <td colSpan={8} className="py-6 text-center text-slate-400">
+                                No on-duty (OD) records found for this date
+                              </td>
+                            </tr>
+                          ) : (
+                            current.facultyAttendanceAndAdjustment.hrmsOds.map((o) => (
+                              <tr key={o.id} className="hover:bg-slate-50/70 transition-colors">
+                                <td className="py-2 px-3 font-mono font-bold text-slate-700">{o.empNo}</td>
+                                <td className="py-2 px-3 font-bold text-slate-900">{o.employeeName}</td>
+                                <td className="py-2 px-3 text-slate-600 font-medium">{o.department}</td>
+                                <td className="py-2 px-3">
+                                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800">
+                                    {o.odType}
+                                  </span>
+                                </td>
+                                <td className="py-2 px-3 text-[11px] text-slate-700">
+                                  {o.fromDate === o.toDate ? o.fromDate : `${o.fromDate} - ${o.toDate}`}
+                                </td>
+                                <td className="py-2 px-3 text-slate-600">{o.placeVisited || "—"}</td>
+                                <td className="py-2 px-3 text-slate-600">{o.purpose || "—"}</td>
+                                <td className="py-2 px-3">
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
+                                    o.status.includes("approved")
+                                      ? "bg-emerald-100 text-emerald-800"
+                                      : "bg-amber-100 text-amber-800"
+                                  }`}>
+                                    {o.status.replace("_", " ")}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* TAB 4: HRMS Permissions */}
+                  {facultyModalTab === "permissions" && (
+                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                          <tr>
+                            <th className="py-2.5 px-3">Emp ID</th>
+                            <th className="py-2.5 px-3">Employee Name</th>
+                            <th className="py-2.5 px-3">Department</th>
+                            <th className="py-2.5 px-3">Date</th>
+                            <th className="py-2.5 px-3">Duration</th>
+                            <th className="py-2.5 px-3">Reason / Remarks</th>
+                            <th className="py-2.5 px-3">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {(!current.facultyAttendanceAndAdjustment.hrmsPermissions || current.facultyAttendanceAndAdjustment.hrmsPermissions.length === 0) ? (
+                            <tr>
+                              <td colSpan={7} className="py-6 text-center text-slate-400">
+                                No permissions recorded for this date
+                              </td>
+                            </tr>
+                          ) : (
+                            current.facultyAttendanceAndAdjustment.hrmsPermissions.map((p) => (
+                              <tr key={p.id} className="hover:bg-slate-50/70 transition-colors">
+                                <td className="py-2 px-3 font-mono font-bold text-slate-700">{p.empNo}</td>
+                                <td className="py-2 px-3 font-bold text-slate-900">{p.employeeName}</td>
+                                <td className="py-2 px-3 text-slate-600 font-medium">{p.department}</td>
+                                <td className="py-2 px-3 text-[11px] text-slate-700">{p.date}</td>
+                                <td className="py-2 px-3 font-semibold text-blue-700">{p.hours} hr{p.hours > 1 ? "s" : ""}</td>
+                                <td className="py-2 px-3 text-slate-600">{p.reason || "—"}</td>
+                                <td className="py-2 px-3">
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 capitalize">
+                                    {p.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* TAB 5: Class Adjustments */}
+                  {facultyModalTab === "adjustments" && (
+                    <div className="space-y-3">
+                      <div className="p-4 bg-slate-50 rounded-xl text-xs space-y-2 border border-slate-200">
+                        <span className="font-bold text-slate-800 text-sm block">
+                          Classes Affected Today: {current.facultyAttendanceAndAdjustment.classesAffected.total}
+                        </span>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-2">
+                          <div className="p-2 bg-emerald-50 rounded-lg">
+                            <span className="text-[10px] text-slate-500 block">Adjusted</span>
+                            <span className="text-base font-bold text-emerald-600">
+                              {current.facultyAttendanceAndAdjustment.classesAffected.adjusted}
+                            </span>
+                          </div>
+                          <div className="p-2 bg-blue-50 rounded-lg">
+                            <span className="text-[10px] text-slate-500 block">Substitute</span>
+                            <span className="text-base font-bold text-blue-600">
+                              {current.facultyAttendanceAndAdjustment.classesAffected.substitute}
+                            </span>
+                          </div>
+                          <div className="p-2 bg-rose-50 rounded-lg">
+                            <span className="text-[10px] text-slate-500 block">Cancelled</span>
+                            <span className="text-base font-bold text-rose-600">
+                              {current.facultyAttendanceAndAdjustment.classesAffected.cancelled}
+                            </span>
+                          </div>
+                          <div className="p-2 bg-amber-50 rounded-lg">
+                            <span className="text-[10px] text-slate-500 block">Pending</span>
+                            <span className="text-base font-bold text-amber-600">
+                              {current.facultyAttendanceAndAdjustment.classesAffected.pending}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

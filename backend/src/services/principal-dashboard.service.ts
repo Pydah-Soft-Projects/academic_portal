@@ -1,5 +1,11 @@
 import type { RowDataPacket } from "mysql2";
-import { queryAcademic, queryStudent, queryExam } from "../db/pools.js";
+import { queryAcademic, queryStudent, queryExam, getHrmsDb } from "../db/pools.js";
+import {
+  extractHrmsStaffProfile,
+  loadHrmsOrgLookups,
+  isTeachingGroup,
+  HRMS_EMPLOYEE_PROJECTION,
+} from "./hrms-staff.service.js";
 import type { AuthzContext } from "../authz/authorization.service.js";
 
 export type PrincipalDashboardFilters = {
@@ -36,11 +42,11 @@ export async function getPrincipalDashboardData(
   const dateFormatted = isDateRange
     ? `${new Date(startDateStr + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })} - ${new Date(endDateStr + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
     : new Date(startDateStr + "T00:00:00").toLocaleDateString("en-GB", {
-        weekday: "short",
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      });
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
 
   const academicYear = filters.academicYear || "AY 2024-25";
   const semester =
@@ -160,7 +166,7 @@ export async function getPrincipalDashboardData(
     }
   }
 
-  const totalTeachingFacultyCount = distinctTeachingFacultyMap.size || (isVp ? 32 : 76);
+  let totalTeachingFacultyCount = distinctTeachingFacultyMap.size || (isVp ? 32 : 76);
 
   // 4. Class Sessions for the Selected Date
   type SessionRow = RowDataPacket & {
@@ -308,21 +314,722 @@ export async function getPrincipalDashboardData(
     ];
   }
 
-  // Calculate live faculty presence
-  const livePresent = presentFacultyIds.size;
-  const liveAbsent = cancelledFacultyIds.size;
-  const liveLate = 0;
-  const liveLeave = facultyLeaveCount;
-  const liveOd = facultyOdCount;
+  // 5b. Live HRMS Employee Attendance, Classes-Assigned Faculty & Slots Biometrics
+  let hrmsEmployeesTotal = 0;
+  let hrmsTeachingTotal = 0;
+  let hrmsPresent = 0;
+  let hrmsLate = 0;
+  let hrmsLeave = 0;
+  let hrmsOd = 0;
+  let hrmsPermission = 0;
+  let hrmsAbsent = 0;
+  let allPendingLeavesCount = 0;
+  let allPendingOdsCount = 0;
+  let allPendingCclsCount = 0;
 
-  // Faculty Attendance percentage (Dynamic from today's class sessions)
-  const scheduledFacultyTodayCount = scheduledFacultyIds.size + presentFacultyIds.size + cancelledFacultyIds.size;
-  const facultyAttPct =
-    scheduledFacultyTodayCount > 0
-      ? Math.round((livePresent / scheduledFacultyTodayCount) * 100)
+  type FacultySlotItem = {
+    id: number;
+    subjectName: string;
+    subjectCode: string | null;
+    startTime: string | null;
+    endTime: string | null;
+    status: string;
+    isPosted: boolean;
+  };
+
+  let employeeWiseDetails: Array<{
+    staffLinkId: number;
+    empNo: string;
+    name: string;
+    department: string;
+    designation: string;
+    employeeGroup: string;
+    isTeaching: boolean;
+    division: string;
+    status: "present" | "late" | "leave" | "od" | "permission" | "absent";
+    displayStatus: string;
+    thumbStatus: "active" | "partial" | "full" | "none";
+    checkInTime: string | null;
+    checkOutTime: string | null;
+    lateMinutes: number;
+    slotsCount: number;
+    slotsPosted: number;
+    slotsPending: number;
+    slots: FacultySlotItem[];
+    subjects: string[];
+    details: string | null;
+  }> = [];
+
+  let hrmsLeavesList: Array<{
+    id: string;
+    empNo: string;
+    employeeName: string;
+    department: string;
+    leaveType: string;
+    fromDate: string;
+    toDate: string;
+    numberOfDays: number;
+    purpose: string;
+    status: string;
+  }> = [];
+
+  let hrmsOdsList: Array<{
+    id: string;
+    empNo: string;
+    employeeName: string;
+    department: string;
+    odType: string;
+    fromDate: string;
+    toDate: string;
+    purpose: string;
+    placeVisited?: string;
+    status: string;
+  }> = [];
+
+  let hrmsPermissionsList: Array<{
+    id: string;
+    empNo: string;
+    employeeName: string;
+    department: string;
+    date: string;
+    hours: number;
+    reason?: string;
+    status: string;
+  }> = [];
+
+  let pendingApprovalDetailsList: Array<{
+    id: string;
+    category: "leave" | "od" | "ccl" | "general";
+    categoryLabel: string;
+    subType: string;
+    empNo: string;
+    employeeName: string;
+    department: string;
+    designation: string;
+    fromDate: string;
+    toDate: string;
+    numberOfDays: number;
+    purpose: string;
+    placeVisited?: string;
+    status: string;
+    statusLabel: string;
+    appliedAt: string;
+    slotsImpacted?: number;
+  }> = [];
+
+  let hrmsLoaded = false;
+
+  // Build slot mapping per faculty from todaySessions
+  const staffSlotsMap = new Map<number, {
+    totalSlots: number;
+    postedSlots: number;
+    pendingSlots: number;
+    cancelledSlots: number;
+    slots: FacultySlotItem[];
+    subjects: string[];
+  }>();
+
+  for (const s of todaySessions) {
+    if (!s.faculty_staff_link_id) continue;
+    let entry = staffSlotsMap.get(s.faculty_staff_link_id);
+    if (!entry) {
+      entry = {
+        totalSlots: 0,
+        postedSlots: 0,
+        pendingSlots: 0,
+        cancelledSlots: 0,
+        slots: [],
+        subjects: [],
+      };
+      staffSlotsMap.set(s.faculty_staff_link_id, entry);
+    }
+    entry.totalSlots++;
+    const isPosted = s.status === "posted" || s.status === "completed" || s.post_id != null;
+    if (isPosted) entry.postedSlots++;
+    else if (s.status === "cancelled") entry.cancelledSlots++;
+    else entry.pendingSlots++;
+
+    entry.slots.push({
+      id: s.id,
+      subjectName: s.subject_name || "Class Session",
+      subjectCode: s.subject_code,
+      startTime: s.start_time,
+      endTime: s.end_time,
+      status: s.status,
+      isPosted,
+    });
+
+    if (s.subject_name && !entry.subjects.includes(s.subject_name)) {
+      entry.subjects.push(s.subject_name);
+    }
+  }
+
+  // Find all faculty users assigned to classes/timetable or slots in scoped branches
+  type AssignedFacultyStaffRow = RowDataPacket & {
+    staff_link_id: number;
+    hrms_employee_id: string | null;
+    employee_code: string | null;
+    display_name: string;
+    department_name: string | null;
+  };
+
+  let assignedStaffRows: AssignedFacultyStaffRow[] = [];
+  if (activeBranchIds.length > 0) {
+    try {
+      assignedStaffRows = await queryAcademic<AssignedFacultyStaffRow[]>(
+        `
+        SELECT DISTINCT 
+          sl.id as staff_link_id, 
+          sl.hrms_employee_id, 
+          sl.employee_code, 
+          sl.display_name, 
+          sl.department_name
+        FROM ap_staff_link sl
+        WHERE sl.id IN (
+          SELECT te.faculty_staff_link_id 
+          FROM ap_timetable_entries te 
+          JOIN ap_timetable_plans p ON p.id = te.plan_id 
+          WHERE p.branch_id IN (${branchInSql})
+          UNION
+          SELECT cs.faculty_staff_link_id 
+          FROM ap_class_sessions cs 
+          WHERE cs.branch_id IN (${branchInSql})
+        )
+        ORDER BY sl.display_name ASC
+        `,
+        [...activeBranchIds, ...activeBranchIds],
+      );
+    } catch {
+      assignedStaffRows = [];
+    }
+  }
+
+  if (assignedStaffRows.length === 0) {
+    try {
+      assignedStaffRows = await queryAcademic<AssignedFacultyStaffRow[]>(
+        `SELECT id as staff_link_id, hrms_employee_id, employee_code, display_name, department_name FROM ap_staff_link ORDER BY display_name ASC LIMIT 100`
+      );
+    } catch {
+      assignedStaffRows = [];
+    }
+  }
+
+  try {
+    const hrmsDb = await getHrmsDb();
+    const lookups = await loadHrmsOrgLookups(hrmsDb);
+
+    const empNos = assignedStaffRows
+      .map((r) => String(r.hrms_employee_id || r.employee_code || "").trim())
+      .filter(Boolean);
+
+    if (empNos.length > 0) {
+      const rawEmployees = await hrmsDb
+        .collection("employees")
+        .find({ emp_no: { $in: empNos } })
+        .project(HRMS_EMPLOYEE_PROJECTION)
+        .toArray();
+
+      const staffProfiles = rawEmployees.map((e) => extractHrmsStaffProfile(e, lookups));
+      const empProfileMap = new Map<string, typeof staffProfiles[0]>();
+      for (const p of staffProfiles) {
+        empProfileMap.set(p.hrmsId, p);
+      }
+
+      // Indian Standard Time (UTC+5:30) midnight boundaries so dates stored as midnight IST in MongoDB match accurately
+      const startOfDay = new Date(`${startDateStr}T00:00:00+05:30`);
+      const endOfDay = new Date(`${endDateStr}T23:59:59.999+05:30`);
+
+      const leaveDateFilter = {
+        $or: [
+          {
+            fromDate: { $lte: endOfDay },
+            toDate: { $gte: startOfDay },
+          },
+          { fromDate: { $regex: `^${selectedDateStr}` } },
+          { toDate: { $regex: `^${selectedDateStr}` } },
+        ],
+      };
+
+      // Filter pending approvals respecting dashboard date ranges and request durations
+      const pendingLeaveDateFilter = {
+        $or: [
+          { fromDate: { $lte: endOfDay }, toDate: { $gte: startOfDay } },
+          { fromDate: { $lte: endDateStr }, toDate: { $gte: startDateStr } },
+          { fromDate: { $regex: `^(${selectedDateStr}|${startDateStr}|${endDateStr})` } },
+          { toDate: { $regex: `^(${selectedDateStr}|${startDateStr}|${endDateStr})` } },
+        ],
+      };
+
+      const pendingOdDateFilter = {
+        $or: [
+          { fromDate: { $lte: endOfDay }, toDate: { $gte: startOfDay } },
+          { fromDate: { $lte: endDateStr }, toDate: { $gte: startDateStr } },
+          { fromDate: { $regex: `^(${selectedDateStr}|${startDateStr}|${endDateStr})` } },
+          { toDate: { $regex: `^(${selectedDateStr}|${startDateStr}|${endDateStr})` } },
+        ],
+      };
+
+      const pendingCclDateFilter = {
+        $or: [
+          { date: { $gte: startDateStr, $lte: endDateStr } },
+          { date: { $gte: startOfDay, $lte: endOfDay } },
+          { date: selectedDateStr },
+        ],
+      };
+
+
+
+      const [
+        dailies,
+        rawLogs,
+        leaves,
+        ods,
+        perms,
+        pendingLeavesDocs,
+        pendingOdsDocs,
+        pendingCclsDocs,
+        totalLeavesCount,
+        totalOdsCount,
+        totalCclsCount,
+      ] = await Promise.all([
+        hrmsDb
+          .collection("attendancedailies")
+          .find({
+            $or: [
+              { emp_no: { $in: empNos }, date: isDateRange ? { $gte: startDateStr, $lte: endDateStr } : selectedDateStr },
+              { employeeNumber: { $in: empNos }, date: isDateRange ? { $gte: startDateStr, $lte: endDateStr } : selectedDateStr },
+              { emp_no: { $in: empNos }, date: { $gte: startOfDay, $lte: endOfDay } },
+              { employeeNumber: { $in: empNos }, date: { $gte: startOfDay, $lte: endOfDay } },
+            ],
+          })
+          .toArray(),
+        hrmsDb
+          .collection("attendancerawlogs")
+          .find({
+            employeeNumber: { $in: empNos },
+            $or: [
+              { timestamp: { $gte: startOfDay, $lte: endOfDay } },
+              { timestamp: { $regex: `^${selectedDateStr}` } },
+              { date: { $gte: startOfDay, $lte: endOfDay } },
+              { date: isDateRange ? { $gte: startDateStr, $lte: endDateStr } : selectedDateStr },
+            ],
+          })
+          .toArray(),
+        hrmsDb
+          .collection("leaves")
+          .find({
+            emp_no: { $in: empNos },
+            status: { $nin: ["rejected", "cancelled"] },
+            ...leaveDateFilter,
+          })
+          .toArray(),
+        hrmsDb
+          .collection("ods")
+          .find({
+            emp_no: { $in: empNos },
+            status: { $nin: ["rejected", "cancelled"] },
+            ...leaveDateFilter,
+          })
+          .toArray(),
+        hrmsDb
+          .collection("permissions")
+          .find({
+            emp_no: { $in: empNos },
+            status: { $nin: ["rejected", "cancelled"] },
+          })
+          .toArray()
+          .catch(() => []),
+        // Scoped HRMS Pending Approvals with Date Ranges & Durations:
+        hrmsDb
+          .collection("leaves")
+          .find({
+            emp_no: { $in: empNos },
+            status: { $in: ["pending", "submitted", "hod_approved", "reporting_manager_approved"] },
+            ...pendingLeaveDateFilter,
+          })
+          .sort({ fromDate: -1, createdAt: -1 })
+          .limit(100)
+          .toArray(),
+        hrmsDb
+          .collection("ods")
+          .find({
+            emp_no: { $in: empNos },
+            status: { $in: ["pending", "submitted", "draft", "hod_approved", "manager_approved"] },
+            ...pendingOdDateFilter,
+          })
+          .sort({ fromDate: -1, createdAt: -1 })
+          .limit(100)
+          .toArray(),
+        hrmsDb
+          .collection("cclrequests")
+          .find({
+            emp_no: { $in: empNos },
+            status: { $in: ["pending", "submitted", "hod_approved"] },
+            ...pendingCclDateFilter,
+          })
+          .sort({ date: -1, createdAt: -1 })
+          .limit(50)
+          .toArray()
+          .catch(() => []),
+        // All-time counts for broader context
+        hrmsDb.collection("leaves").countDocuments({
+          emp_no: { $in: empNos },
+          status: { $in: ["pending", "submitted", "hod_approved", "reporting_manager_approved"] },
+        }),
+        hrmsDb.collection("ods").countDocuments({
+          emp_no: { $in: empNos },
+          status: { $in: ["pending", "submitted", "draft", "hod_approved", "manager_approved"] },
+        }),
+        hrmsDb.collection("cclrequests").countDocuments({
+          emp_no: { $in: empNos },
+          status: { $in: ["pending", "submitted", "hod_approved"] },
+        }).catch(() => 0),
+      ]);
+
+      allPendingLeavesCount = totalLeavesCount || 0;
+      allPendingOdsCount = totalOdsCount || 0;
+      allPendingCclsCount = totalCclsCount || 0;
+
+      const rawPunchesMap = new Map<string, { first: Date; last: Date; count: number }>();
+      for (const log of rawLogs) {
+        const eNo = String(log.employeeNumber || log.emp_no);
+        const ts = new Date(log.timestamp || log.createdAt || log.date);
+        const existing = rawPunchesMap.get(eNo);
+        if (!existing) {
+          rawPunchesMap.set(eNo, { first: ts, last: ts, count: 1 });
+        } else {
+          if (ts < existing.first) existing.first = ts;
+          if (ts > existing.last) existing.last = ts;
+          existing.count++;
+        }
+      }
+
+      const dailyMap = new Map<string, any>();
+      for (const d of dailies) {
+        const key = String(d.employeeNumber || d.emp_no);
+        dailyMap.set(key, d);
+      }
+
+      const leaveMap = new Map<string, any>();
+      for (const l of leaves) {
+        leaveMap.set(String(l.emp_no), l);
+      }
+
+      const odMap = new Map<string, any>();
+      for (const o of ods) {
+        odMap.set(String(o.emp_no), o);
+      }
+
+      const permMap = new Map<string, any>();
+      for (const p of perms) {
+        permMap.set(String(p.emp_no), p);
+      }
+
+      const formatTime = (d: Date | string | null | undefined) => {
+        if (!d) return null;
+        const dateObj = typeof d === "string" ? new Date(d) : d;
+        if (isNaN(dateObj.getTime())) return null;
+        return dateObj.toLocaleTimeString("en-IN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: true,
+          timeZone: "Asia/Kolkata",
+        });
+      };
+
+      const formatISTDate = (d: Date | string | null | undefined) => {
+        if (!d) return "—";
+        const dateObj = typeof d === "string" ? new Date(d) : d;
+        if (isNaN(dateObj.getTime())) return typeof d === "string" ? d : "—";
+        return dateObj.toLocaleDateString("en-GB", { timeZone: "Asia/Kolkata" });
+      };
+
+      hrmsEmployeesTotal = assignedStaffRows.length;
+      hrmsTeachingTotal = assignedStaffRows.length;
+
+      employeeWiseDetails = assignedStaffRows.map((staffRow) => {
+        const hrmsId = String(staffRow.hrms_employee_id || staffRow.employee_code || "").trim();
+        const profile = empProfileMap.get(hrmsId);
+        const daily = dailyMap.get(hrmsId);
+        const punch = rawPunchesMap.get(hrmsId);
+        const hasThumb = Boolean(punch);
+        const leaveRec = leaveMap.get(hrmsId);
+        const odRec = odMap.get(hrmsId);
+        const permRec = permMap.get(hrmsId);
+
+        const slotInfo = staffSlotsMap.get(staffRow.staff_link_id);
+        const slotsCount = slotInfo?.totalSlots || 0;
+        const slotsPosted = slotInfo?.postedSlots || 0;
+        const slotsPending = slotInfo?.pendingSlots || 0;
+        const assignedSlots = slotInfo?.slots || [];
+        const subjectsList = slotInfo?.subjects || (staffRow.department_name ? [staffRow.department_name] : []);
+
+        const isTeaching = profile ? isTeachingGroup(profile.employeeGroup) : true;
+        const shiftWithIn = daily?.shifts?.find((s: any) => s.inTime != null);
+        const hasInTime = Boolean(shiftWithIn?.inTime);
+        const isPartial = daily?.status === "PARTIAL";
+        const isPresentStatus = daily?.status === "PRESENT";
+        const isLate = Boolean((daily?.totalLateInMinutes ?? 0) > 0 || shiftWithIn?.isLateIn);
+        const isLeave = Boolean(leaveRec || daily?.status === "LEAVE");
+        const isOd = Boolean(odRec || daily?.status === "OD" || (daily?.odHours && daily.odHours > 0));
+        const isPermission = Boolean(permRec || (daily?.permissionHours ?? 0) > 0 || (daily?.permissionCount ?? 0) > 0);
+
+        let status: "present" | "late" | "leave" | "od" | "permission" | "absent" = "absent";
+        let displayStatus = "Absent";
+        let thumbStatus: "active" | "partial" | "full" | "none" = "none";
+        let details: string | null = null;
+
+        // If employee has active thumb details or partial status on HRMS database, show here present
+        if (hasThumb || hasInTime || isPartial || isPresentStatus) {
+          status = isLate ? "late" : "present";
+          displayStatus = isLate ? "Late" : "Present";
+          thumbStatus = isPartial ? "partial" : hasThumb ? "active" : "full";
+          hrmsPresent++;
+          if (isLate) hrmsLate++;
+
+          const punchText = punch ? `Active Thumb (${punch.count} punch${punch.count > 1 ? "es" : ""})` : "Present";
+          const slotText = slotsCount > 0 ? `${slotsCount} slots today (${slotsPosted} posted)` : "No slots scheduled";
+          details = `${punchText} • ${slotText}`;
+        } else if (isLeave) {
+          status = "leave";
+          displayStatus = `Leave (${leaveRec?.leaveType || "CL"})`;
+          details = leaveRec?.purpose ? `Leave: ${leaveRec.purpose}` : "Leave applied on HRMS";
+          hrmsLeave++;
+        } else if (isOd) {
+          status = "od";
+          displayStatus = `OD (${odRec?.odType || "On Duty"})`;
+          details = odRec?.placeVisited ? `OD: ${odRec.placeVisited}` : (odRec?.purpose || "Official duty");
+          hrmsOd++;
+        } else if (isPermission) {
+          status = "permission";
+          displayStatus = "Permission";
+          details = `${daily?.permissionHours || 1} hr permission`;
+          hrmsPermission++;
+        } else {
+          status = "absent";
+          displayStatus = "Absent";
+          details = slotsCount > 0 ? `No biometric punch • ${slotsCount} slots scheduled` : "No biometric thumb punch";
+          hrmsAbsent++;
+        }
+
+        const checkIn = shiftWithIn?.inTime
+          ? formatTime(shiftWithIn.inTime)
+          : punch?.first
+            ? formatTime(punch.first)
+            : null;
+        const checkOut = shiftWithIn?.outTime
+          ? formatTime(shiftWithIn.outTime)
+          : punch && punch.count > 1
+            ? formatTime(punch.last)
+            : null;
+
+        return {
+          staffLinkId: staffRow.staff_link_id,
+          empNo: hrmsId || `STF-${staffRow.staff_link_id}`,
+          name: staffRow.display_name || profile?.name || "Faculty",
+          department: profile?.department || staffRow.department_name || "Engineering",
+          designation: profile?.designation || (isTeaching ? "Faculty" : "Staff"),
+          employeeGroup: profile?.employeeGroup || "teaching",
+          isTeaching,
+          division: profile?.division || "Pydah College of Engineering",
+          status,
+          displayStatus,
+          thumbStatus,
+          checkInTime: checkIn,
+          checkOutTime: checkOut,
+          lateMinutes: daily?.totalLateInMinutes || shiftWithIn?.lateInMinutes || 0,
+          slotsCount,
+          slotsPosted,
+          slotsPending,
+          slots: assignedSlots,
+          subjects: subjectsList,
+          details,
+        };
+      });
+
+      // Format Leaves
+      hrmsLeavesList = leaves.map((l: any) => ({
+        id: String(l._id),
+        empNo: String(l.emp_no),
+        employeeName: empProfileMap.get(String(l.emp_no))?.name || `Employee ${l.emp_no}`,
+        department: empProfileMap.get(String(l.emp_no))?.department || l.department_name || "—",
+        leaveType: String(l.leaveType || "CL"),
+        fromDate: l.fromDate ? new Date(l.fromDate).toLocaleDateString("en-GB") : "—",
+        toDate: l.toDate ? new Date(l.toDate).toLocaleDateString("en-GB") : "—",
+        numberOfDays: Number(l.numberOfDays || 1),
+        purpose: String(l.purpose || l.remarks || "Personal"),
+        status: String(l.status || "pending"),
+      }));
+
+      // Format ODs
+      hrmsOdsList = ods.map((o: any) => ({
+        id: String(o._id),
+        empNo: String(o.emp_no),
+        employeeName: empProfileMap.get(String(o.emp_no))?.name || `Employee ${o.emp_no}`,
+        department: empProfileMap.get(String(o.emp_no))?.department || o.department_name || "—",
+        odType: String(o.odType || "On Duty"),
+        fromDate: o.fromDate ? new Date(o.fromDate).toLocaleDateString("en-GB") : "—",
+        toDate: o.toDate ? new Date(o.toDate).toLocaleDateString("en-GB") : "—",
+        purpose: String(o.purpose || o.remarks || "Official"),
+        placeVisited: o.placeVisited || "—",
+        status: String(o.status || "approved"),
+      }));
+
+      // Format Permissions
+      hrmsPermissionsList = perms.map((p: any) => ({
+        id: String(p._id),
+        empNo: String(p.emp_no),
+        employeeName: empProfileMap.get(String(p.emp_no))?.name || `Employee ${p.emp_no}`,
+        department: empProfileMap.get(String(p.emp_no))?.department || p.department_name || "—",
+        date: p.date || (p.fromDate ? new Date(p.fromDate).toLocaleDateString("en-GB") : "—"),
+        hours: Number(p.hours || 1),
+        reason: String(p.reason || p.purpose || "Permission"),
+        status: String(p.status || "approved"),
+      }));
+
+      // Format Pending Approvals from HRMS
+      const pendingLeavesFormatted = pendingLeavesDocs.map((l: any) => {
+        const staff = empProfileMap.get(String(l.emp_no));
+        const statusKey = String(l.status || "pending").toLowerCase();
+        let statusLabel = "Pending Approval";
+        if (statusKey === "hod_approved") statusLabel = "HOD Approved";
+        else if (statusKey === "reporting_manager_approved" || statusKey === "manager_approved") statusLabel = "Manager Approved";
+        else if (statusKey === "submitted") statusLabel = "Submitted";
+
+        return {
+          id: String(l._id),
+          category: "leave" as const,
+          categoryLabel: "Faculty Leave",
+          subType: String(l.leaveType || "CL"),
+          empNo: String(l.emp_no),
+          employeeName: staff?.name || `Employee ${l.emp_no}`,
+          department: staff?.department || l.department_name || "—",
+          designation: staff?.designation || "Faculty",
+          fromDate: formatISTDate(l.fromDate),
+          toDate: formatISTDate(l.toDate),
+          numberOfDays: Number(l.numberOfDays || 1),
+          purpose: String(l.purpose || l.remarks || "Personal"),
+          status: statusKey,
+          statusLabel,
+          appliedAt: l.appliedAt ? new Date(l.appliedAt).toLocaleDateString("en-GB") : (l.createdAt ? new Date(l.createdAt).toLocaleDateString("en-GB") : "—"),
+        };
+      });
+
+      const pendingOdsFormatted = pendingOdsDocs.map((o: any) => {
+        const staff = empProfileMap.get(String(o.emp_no));
+        const statusKey = String(o.status || "pending").toLowerCase();
+        let statusLabel = "Pending Approval";
+        if (statusKey === "hod_approved") statusLabel = "HOD Approved";
+        else if (statusKey === "manager_approved") statusLabel = "Manager Approved";
+        else if (statusKey === "draft") statusLabel = "Draft";
+
+        return {
+          id: String(o._id),
+          category: "od" as const,
+          categoryLabel: "On-Duty (OD)",
+          subType: String(o.odType || "On Duty"),
+          empNo: String(o.emp_no),
+          employeeName: staff?.name || `Employee ${o.emp_no}`,
+          department: staff?.department || o.department_name || "—",
+          designation: staff?.designation || "Faculty",
+          fromDate: formatISTDate(o.fromDate),
+          toDate: formatISTDate(o.toDate),
+          numberOfDays: Number(o.numberOfDays || 1),
+          purpose: String(o.purpose || o.remarks || "Official"),
+          placeVisited: o.placeVisited || "—",
+          status: statusKey,
+          statusLabel,
+          appliedAt: o.appliedAt ? new Date(o.appliedAt).toLocaleDateString("en-GB") : (o.createdAt ? new Date(o.createdAt).toLocaleDateString("en-GB") : "—"),
+        };
+      });
+
+      const pendingCclsFormatted = pendingCclsDocs.map((c: any) => {
+        const staff = empProfileMap.get(String(c.emp_no));
+        const statusKey = String(c.status || "pending").toLowerCase();
+        return {
+          id: String(c._id),
+          category: "ccl" as const,
+          categoryLabel: "Compensatory Off (CCL)",
+          subType: "CCL",
+          empNo: String(c.emp_no),
+          employeeName: staff?.name || `Employee ${c.emp_no}`,
+          department: staff?.department || c.department_name || "—",
+          designation: staff?.designation || "Faculty",
+          fromDate: c.date ? new Date(c.date).toLocaleDateString("en-GB") : "—",
+          toDate: c.date ? new Date(c.date).toLocaleDateString("en-GB") : "—",
+          numberOfDays: 1,
+          purpose: String(c.reason || c.attendanceNote || "Compensatory Leave"),
+          status: statusKey,
+          statusLabel: statusKey === "hod_approved" ? "HOD Approved" : "Pending Approval",
+          appliedAt: c.appliedAt ? new Date(c.appliedAt).toLocaleDateString("en-GB") : (c.createdAt ? new Date(c.createdAt).toLocaleDateString("en-GB") : "—"),
+        };
+      });
+
+      pendingApprovalDetailsList = [
+        ...pendingLeavesFormatted,
+        ...pendingOdsFormatted,
+        ...pendingCclsFormatted,
+      ];
+
+      // Update pending approvals summary cards
+      const extraApprovals: Array<{ label: string; count: number; href: string }> = [];
+      if (pendingLeavesDocs.length > 0) {
+        extraApprovals.push({
+          label: "Faculty Leave Requests",
+          count: pendingLeavesDocs.length,
+          href: "#modal:approvals_deadlines:leave",
+        });
+      }
+      if (pendingOdsDocs.length > 0) {
+        extraApprovals.push({
+          label: "On-Duty (OD) Requests",
+          count: pendingOdsDocs.length,
+          href: "#modal:approvals_deadlines:od",
+        });
+      }
+      if (pendingCclsDocs.length > 0) {
+        extraApprovals.push({
+          label: "Compensatory Off (CCL)",
+          count: pendingCclsDocs.length,
+          href: "#modal:approvals_deadlines:ccl",
+        });
+      }
+
+      if (extraApprovals.length > 0) {
+        pendingApprovalsList = [
+          ...extraApprovals,
+          ...pendingApprovalsList.filter((p) => !p.label.includes("Faculty Leave / OD")),
+        ];
+      }
+
+      hrmsLoaded = true;
+    }
+  } catch (err) {
+    console.warn("Failed to query HRMS attendance:", err);
+  }
+
+  // Calculate live faculty presence
+  const livePresent = hrmsLoaded ? hrmsPresent : presentFacultyIds.size;
+  const liveAbsent = hrmsLoaded ? hrmsAbsent : cancelledFacultyIds.size;
+  const liveLate = hrmsLoaded ? hrmsLate : 0;
+  const liveLeave = hrmsLoaded ? hrmsLeave : facultyLeaveCount;
+  const liveOd = hrmsLoaded ? hrmsOd : facultyOdCount;
+  const livePermission = hrmsLoaded ? hrmsPermission : 0;
+
+  if (hrmsLoaded && hrmsEmployeesTotal > 0) {
+    totalTeachingFacultyCount = hrmsEmployeesTotal;
+  }
+
+  // Faculty Attendance percentage (Dynamic from HRMS if loaded, else fallback to class sessions)
+  const facultyAttPct = hrmsLoaded
+    ? hrmsEmployeesTotal > 0
+      ? Math.round((hrmsPresent / hrmsEmployeesTotal) * 100)
+      : 0
+    : scheduledSessionsCount > 0
+      ? Math.round((livePresent / scheduledSessionsCount) * 100)
       : todaySessions.length > 0
-      ? Math.round((postedSessionsCount / todaySessions.length) * 100)
-      : 0;
+        ? Math.round((postedSessionsCount / todaySessions.length) * 100)
+        : 0;
 
   // Classes Affected Today
   const totalClassesAffected = cancelledSessionsCount + adjustedClassesCount + substituteClassesCount;
@@ -1325,17 +2032,50 @@ export async function getPrincipalDashboardData(
     return parts ? `${parts} (${ex.name})` : ex.name;
   }
 
-  let upcomingDeadlines: Array<{ day: string; month: string; title: string; subtitle: string }> = [];
+  type ExamRowWithDates = RowDataPacket & {
+    id: number;
+    name: string;
+    type: string | null;
+    examinationStartDate: string | null;
+    examinationEndDate: string | null;
+    course?: string | null;
+    branch?: string | null;
+    semester?: number | null;
+    yearOfStudy?: number | null;
+  };
+
+  let upcomingDeadlines: Array<{
+    day: string;
+    month: string;
+    title: string;
+    subtitle: string;
+    startDate?: string;
+    endDate?: string;
+  }> = [];
 
   try {
-    const liveExams = await queryExam<ExamRow[]>(
+    let deadlineWhere = "status IN ('approved', 'published')";
+    const deadlineParams: any[] = [];
+
+    if (isDateRange) {
+      // Exam duration overlaps with dashboard date range [startDateStr, endDateStr]
+      deadlineWhere += " AND examinationStartDate <= ? AND COALESCE(examinationEndDate, examinationStartDate) >= ?";
+      deadlineParams.push(endDateStr, startDateStr);
+    } else {
+      // Single date: active on date or starting within upcoming 30-day window from selected date
+      deadlineWhere += " AND COALESCE(examinationEndDate, examinationStartDate) >= ? AND examinationStartDate <= DATE_ADD(?, INTERVAL 30 DAY)";
+      deadlineParams.push(startDateStr, startDateStr);
+    }
+
+    const liveExams = await queryExam<ExamRowWithDates[]>(
       `
-      SELECT id, name, type, examinationStartDate, course, branch, semester, yearOfStudy
+      SELECT id, name, type, examinationStartDate, examinationEndDate, course, branch, semester, yearOfStudy
       FROM exams
-      WHERE status IN ('approved', 'published') AND examinationStartDate >= CURDATE()
+      WHERE ${deadlineWhere}
       ORDER BY examinationStartDate ASC
-      LIMIT 5
+      LIMIT 8
       `,
+      deadlineParams,
     );
 
     if (liveExams.length > 0) {
@@ -1348,6 +2088,8 @@ export async function getPrincipalDashboardData(
           month,
           title: formatExamTitle(ex),
           subtitle: `${ex.branch ? `${ex.branch} · ` : ""}${ex.type ? `${ex.type.toUpperCase()} Examination` : "Examination"}`,
+          startDate: ex.examinationStartDate ? String(ex.examinationStartDate).slice(0, 10) : undefined,
+          endDate: ex.examinationEndDate ? String(ex.examinationEndDate).slice(0, 10) : undefined,
         };
       });
     }
@@ -1579,15 +2321,17 @@ export async function getPrincipalDashboardData(
     // Keep roleLabel
   }
 
-  // Build Faculty Attendance & Class Adjustment metrics (Pure Live)
+  // Build Faculty Attendance & Class Adjustment metrics (Pure Live with HRMS)
   const facultyAttendanceAndAdjustment = {
     facultyStatus: {
       present: livePresent,
       late: liveLate,
       leave: liveLeave,
       od: liveOd,
+      permission: livePermission,
       absent: liveAbsent,
       totalTeachingFaculty: totalTeachingFacultyCount,
+      totalEmployees: hrmsEmployeesTotal || totalTeachingFacultyCount,
     },
     classesAffected: {
       total: totalClassesAffected,
@@ -1596,7 +2340,13 @@ export async function getPrincipalDashboardData(
       cancelled: cancelledSessionsCount,
       pending: scheduledSessionsCount,
     },
+    employeeWiseDetails,
+    hrmsLeaves: hrmsLeavesList,
+    hrmsOds: hrmsOdsList,
+    hrmsPermissions: hrmsPermissionsList,
   };
+
+
 
   // Compute dynamic trends for KPIs
   let studentTrendStr = "— 0%";
@@ -1690,7 +2440,7 @@ export async function getPrincipalDashboardData(
         value: `${facultyAttPct}%`,
         trend: facultyTrendStr,
         trendPositive: facultyTrendPos,
-        subtext: `Present: ${livePresent} | Leave: ${liveLeave} | Absent: ${liveAbsent}`,
+        subtext: `Present: ${livePresent} | Leave: ${liveLeave} | OD: ${liveOd} | Absent: ${liveAbsent}`,
       },
       studentsAtRisk: {
         value: `${totalBelow65InScope}`,
@@ -1720,7 +2470,10 @@ export async function getPrincipalDashboardData(
     feeCollectionAndDues,
     approvalsAndDeadlines: {
       pendingApprovals: pendingApprovalsList,
+      pendingApprovalDetails: pendingApprovalDetailsList,
       upcomingDeadlines,
+      allTimePendingCount: (allPendingLeavesCount || 0) + (allPendingOdsCount || 0) + (allPendingCclsCount || 0),
+      dateRangeLabel: dateFormatted,
     },
   };
 }
