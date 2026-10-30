@@ -388,6 +388,7 @@ export function DashboardView() {
   if (dashboardMode === "hod") {
     return (
       <HodDashboard
+        userId={user?.id}
         userName={user?.name}
         departmentName={(user as { department?: string })?.department}
         roleLabel={authorization?.roles?.[0]?.label}

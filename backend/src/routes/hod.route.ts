@@ -15,11 +15,21 @@ hodRouter.get(
       const date = typeof req.query.date === "string" ? req.query.date : undefined;
       const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : undefined;
 
+      const rawYears = req.query.years || req.query.year;
+      let years: number[] | undefined;
+      if (typeof rawYears === "string" && rawYears.trim() && rawYears !== "all") {
+        years = rawYears
+          .split(",")
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isFinite(n) && n > 0);
+      }
+
       const data = await getHodDashboardData(getAuthz(req), {
         departmentName,
         branchId,
         date,
         academicYear,
+        years: years && years.length > 0 ? years : undefined,
       });
 
       res.json({ data });

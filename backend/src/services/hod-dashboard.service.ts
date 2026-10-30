@@ -148,6 +148,7 @@ export async function getHodDashboardData(
     branchId?: number;
     date?: string;
     academicYear?: string;
+    years?: number[];
   } = {},
 ): Promise<HodDashboardData> {
   const selectedDate = options.date || new Date().toISOString().split("T")[0];
@@ -245,14 +246,21 @@ export async function getHodDashboardData(
   const activeDeptName = FRIENDLY_NAMES[activeDeptShort] || activeDeptShort;
 
   // 3. Dynamic Student Attendance Metrics (Regular Students Only)
-  const activeFilterCondition = `s.branch_id = ? AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'`;
+  const hasYearFilter = Array.isArray(options.years) && options.years.length > 0;
+  let activeFilterCondition = `s.branch_id = ? AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'`;
+  const studentFilterParams: any[] = [activeBranchId];
+
+  if (hasYearFilter) {
+    activeFilterCondition += ` AND s.current_year IN (${options.years!.map(() => "?").join(",")})`;
+    studentFilterParams.push(...options.years!);
+  }
 
   // Total enrolled students
   let totalStudents = 0;
   try {
     const [totalRow] = await queryStudent<(RowDataPacket & { total: number })[]>(
       `SELECT COUNT(*) as total FROM students s WHERE ${activeFilterCondition}`,
-      [activeBranchId],
+      studentFilterParams,
     );
     totalStudents = Number(totalRow?.total || 0);
   } catch {
@@ -295,8 +303,9 @@ export async function getHodDashboardData(
       WHERE cs.branch_id = ?
         AND cs.session_date = ?
         AND cs.status NOT IN ('cancelled', 'holiday')
+        ${hasYearFilter ? `AND p.year_of_study IN (${options.years!.map(() => "?").join(",")})` : ""}
       `,
-      [activeBranchId, effectiveAttendanceDate],
+      hasYearFilter ? [activeBranchId, effectiveAttendanceDate, ...options.years!] : [activeBranchId, effectiveAttendanceDate],
     );
 
     scheduledPeriodsCount = Number(periodAgg?.scheduled_periods || 0);
@@ -337,11 +346,12 @@ export async function getHodDashboardData(
         WHERE cs.branch_id = ?
           AND cs.session_date < ?
           AND cs.status NOT IN ('cancelled', 'holiday')
+          ${hasYearFilter ? `AND p.year_of_study IN (${options.years!.map(() => "?").join(",")})` : ""}
         GROUP BY cs.session_date
         ORDER BY cs.session_date DESC
         LIMIT 1
         `,
-        [activeBranchId, effectiveAttendanceDate],
+        hasYearFilter ? [activeBranchId, effectiveAttendanceDate, ...options.years!] : [activeBranchId, effectiveAttendanceDate],
       );
 
       if (prevDayRow?.prev_pct != null) {
@@ -388,10 +398,11 @@ export async function getHodDashboardData(
       WHERE cs.branch_id = ?
         AND cs.session_date = ?
         AND cs.status NOT IN ('cancelled', 'holiday')
+        ${hasYearFilter ? `AND p.year_of_study IN (${options.years!.map(() => "?").join(",")})` : ""}
       GROUP BY p.year_of_study, section_name
       ORDER BY p.year_of_study ASC, section_name ASC
       `,
-      [activeBranchId, effectiveAttendanceDate],
+      hasYearFilter ? [activeBranchId, effectiveAttendanceDate, ...options.years!] : [activeBranchId, effectiveAttendanceDate],
     );
   } catch {
     sectionAggRows = [];
@@ -420,9 +431,10 @@ export async function getHodDashboardData(
       WHERE cs.branch_id = ?
         AND cs.session_date = ?
         AND cs.status NOT IN ('cancelled', 'holiday')
+        ${hasYearFilter ? `AND p.year_of_study IN (${options.years!.map(() => "?").join(",")})` : ""}
       ORDER BY p.year_of_study ASC, section_name ASC, cs.start_time ASC, cs.id ASC
       `,
-      [activeBranchId, effectiveAttendanceDate],
+      hasYearFilter ? [activeBranchId, effectiveAttendanceDate, ...options.years!] : [activeBranchId, effectiveAttendanceDate],
     );
   } catch {
     periodDetailRows = [];
@@ -463,7 +475,7 @@ export async function getHodDashboardData(
       HAVING students_count >= 5
       ORDER BY s.current_year ASC, section ASC
       `,
-      [activeBranchId],
+      studentFilterParams,
     );
   } catch {
     studentSectionCounts = [];
@@ -473,6 +485,76 @@ export async function getHodDashboardData(
   for (const s of studentSectionCounts) {
     const yr = ROMAN_YEARS[s.current_year] || String(s.current_year);
     studentCountMap.set(`${yr} - ${s.section}`, Number(s.students_count));
+  }
+
+  // Query configured timetable plans to know all official sections (e.g. I - A, I - B, I - C)
+  type ConfiguredSectionPlanRow = RowDataPacket & {
+    year_of_study: number;
+    section_name: string;
+  };
+  let branchConfiguredPlans: ConfiguredSectionPlanRow[] = [];
+  try {
+    let planQuery = `
+      SELECT DISTINCT year_of_study, COALESCE(NULLIF(TRIM(section_name), ''), 'A') as section_name
+      FROM ap_timetable_plans
+      WHERE branch_id = ?
+    `;
+    const planParams: any[] = [activeBranchId];
+    if (hasYearFilter) {
+      planQuery += ` AND year_of_study IN (${options.years!.map(() => "?").join(",")})`;
+      planParams.push(...options.years!);
+    }
+    planQuery += ` ORDER BY year_of_study ASC, section_name ASC`;
+    branchConfiguredPlans = await queryAcademic<ConfiguredSectionPlanRow[]>(planQuery, planParams);
+  } catch {
+    branchConfiguredPlans = [];
+  }
+
+  // Determine list of all distinct sections to represent
+  const targetSections: Array<{ year: number; section: string }> = [];
+
+  if (branchConfiguredPlans.length > 0) {
+    for (const dp of branchConfiguredPlans) {
+      if (!targetSections.some((ts) => ts.year === dp.year_of_study && ts.section === dp.section_name)) {
+        targetSections.push({ year: dp.year_of_study, section: dp.section_name });
+      }
+    }
+  }
+
+  for (const sc of studentSectionCounts) {
+    if (!targetSections.some((ts) => ts.year === sc.current_year && ts.section === sc.section)) {
+      targetSections.push({ year: sc.current_year, section: sc.section });
+    }
+  }
+
+  targetSections.sort((a, b) => a.year !== b.year ? a.year - b.year : a.section.localeCompare(b.section));
+
+  // Compute student count per section
+  const sectionStudentCountMap = new Map<string, number>();
+  const activeYearsToCheck = hasYearFilter ? options.years! : [1, 2, 3, 4];
+
+  for (const yr of activeYearsToCheck) {
+    const plansForYear = targetSections.filter((ts) => ts.year === yr);
+    const studentsForYear = studentSectionCounts
+      .filter((sc) => sc.current_year === yr)
+      .reduce((sum, sc) => sum + Number(sc.students_count), 0);
+
+    if (plansForYear.length > 0 && studentsForYear > 0) {
+      const distinctSectionsInDb = studentSectionCounts.filter((sc) => sc.current_year === yr);
+      if (distinctSectionsInDb.length > 1) {
+        for (const sc of distinctSectionsInDb) {
+          const yrLabel = ROMAN_YEARS[sc.current_year] || String(sc.current_year);
+          sectionStudentCountMap.set(`${yrLabel} - ${sc.section}`, Number(sc.students_count));
+        }
+      } else {
+        const base = Math.floor(studentsForYear / plansForYear.length);
+        const rem = studentsForYear % plansForYear.length;
+        plansForYear.forEach((p, idx) => {
+          const yrLabel = ROMAN_YEARS[p.year] || String(p.year);
+          sectionStudentCountMap.set(`${yrLabel} - ${p.section}`, base + (idx < rem ? 1 : 0));
+        });
+      }
+    }
   }
 
   let sectionBreakdown: Array<{
@@ -485,49 +567,33 @@ export async function getHodDashboardData(
     periods: Array<{ periodNumber: number; isPosted: boolean }>;
   }> = [];
 
-  if (sectionAggRows.length > 0) {
-    sectionBreakdown = sectionAggRows.map((r) => {
-      const yr = ROMAN_YEARS[r.year_of_study] || String(r.year_of_study);
-      const label = `${yr} - ${r.section_name}`;
-      const pct = isPostedToday && r.sec_pct != null && r.posted_periods > 0 ? Number(r.sec_pct) : 0;
-      const students = studentCountMap.get(label) || 0;
-      const scheduled = Number(r.scheduled_periods) || 7;
-      const posted = Number(r.posted_periods) || 0;
-      const periodProgress = scheduled > 0 ? Math.round((posted / scheduled) * 100) : 0;
-      const periods = sectionPeriodsMap.get(label) || Array.from({ length: scheduled }, (_, i) => ({
-        periodNumber: i + 1,
-        isPosted: false,
-      }));
+  sectionBreakdown = targetSections.map((ts) => {
+    const yr = ROMAN_YEARS[ts.year] || String(ts.year);
+    const label = `${yr} - ${ts.section}`;
+    const agg = sectionAggRows.find((r) => r.year_of_study === ts.year && r.section_name === ts.section);
 
-      return {
-        section: label,
-        percentage: pct,
-        students,
-        postedPeriods: posted,
-        totalPeriods: scheduled,
-        periodProgress,
-        periods,
-      };
-    });
-  } else {
-    sectionBreakdown = studentSectionCounts.map((r) => {
-      const yr = ROMAN_YEARS[r.current_year] || String(r.current_year);
-      const label = `${yr} - ${r.section}`;
-      return {
-        section: label,
-        percentage: 0,
-        students: Number(r.students_count),
-        postedPeriods: 0,
-        totalPeriods: 7,
-        periodProgress: 0,
-        periods: Array.from({ length: 7 }, (_, i) => ({
-          periodNumber: i + 1,
-          isPosted: false,
-        })),
-      };
-    });
-  }
+    const pct = isPostedToday && agg && agg.sec_pct != null && agg.posted_periods > 0 ? Number(agg.sec_pct) : 0;
+    const students = sectionStudentCountMap.get(label) || studentCountMap.get(label) || 0;
+    const scheduled = Number(agg?.scheduled_periods) || 7;
+    const posted = Number(agg?.posted_periods) || 0;
+    const periodProgress = scheduled > 0 ? Math.round((posted / scheduled) * 100) : 0;
+    const periods = sectionPeriodsMap.get(label) || Array.from({ length: scheduled }, (_, i) => ({
+      periodNumber: i + 1,
+      isPosted: false,
+    }));
 
+    return {
+      section: label,
+      percentage: pct,
+      students,
+      postedPeriods: posted,
+      totalPeriods: scheduled,
+      periodProgress,
+      periods,
+    };
+  });
+
+  
   // 4. Real Continuous Absentees (Absent for 3+ class session days in the past 14 days from Academic Portal)
   let continuousAbsenteesCount = 0;
   try {
@@ -538,14 +604,16 @@ export async function getHodDashboardData(
         FROM ap_attendance_post_students aps
         INNER JOIN ap_attendance_posts ap ON ap.id = aps.attendance_post_id
         INNER JOIN ap_class_sessions cs ON cs.id = ap.class_session_id
+        INNER JOIN ap_timetable_plans p ON p.id = cs.plan_id
         WHERE cs.branch_id = ?
           AND aps.status = 'absent'
           AND cs.session_date >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+          ${hasYearFilter ? `AND p.year_of_study IN (${options.years!.map(() => "?").join(",")})` : ""}
         GROUP BY aps.student_db_id
         HAVING abs_count >= 3
       ) t
       `,
-      [activeBranchId],
+      hasYearFilter ? [activeBranchId, ...options.years!] : [activeBranchId],
     );
     continuousAbsenteesCount = Number(absRow?.total || 0);
   } catch {
@@ -589,13 +657,13 @@ export async function getHodDashboardData(
       ) low ON low.student_id = s.id
       WHERE s.branch_id = ?
         AND s.current_year IS NOT NULL
-        AND s.current_year >= 2
+        ${hasYearFilter ? `AND s.current_year IN (${options.years!.map(() => "?").join(",")})` : `AND s.current_year >= 2`}
         AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular'
       GROUP BY s.current_year, section
       HAVING COUNT(DISTINCT s.id) >= 5
       ORDER BY s.current_year ASC, section ASC
       `,
-      [activeBranchId, activeBranchId],
+      hasYearFilter ? [activeBranchId, ...options.years!, activeBranchId, ...options.years!] : [activeBranchId, activeBranchId],
     );
   } catch {
     riskRows = [];
@@ -628,22 +696,25 @@ export async function getHodDashboardData(
     examFailRows = [];
   }
 
-  const sectionsAtRisk: HodDashboardData["sectionsAtRisk"] = riskRows.map((r, idx) => {
-    const yr = ROMAN_YEARS[r.current_year] || String(r.current_year);
-    const secLabel = `${yr} - ${r.section}`;
+  const sectionsAtRisk: HodDashboardData["sectionsAtRisk"] = targetSections.map((ts, idx) => {
+    const yr = ROMAN_YEARS[ts.year] || String(ts.year);
+    const secLabel = `${yr} - ${ts.section}`;
+
+    const riskMatch = riskRows.find((r) => r.current_year === ts.year && r.section === ts.section);
+    const lowAtt = Number(riskMatch?.low_att_count || 0);
 
     const int1Fails = examFailRows
-      .filter((e) => e.section_name === r.section && (e.semester_number === 1 || !e.semester_number))
+      .filter((e) => e.section_name === ts.section && (e.semester_number === (ts.year * 2 - 1) || !e.semester_number))
       .reduce((sum, e) => sum + Number(e.failed_count), 0);
 
     const int2Fails = examFailRows
-      .filter((e) => e.section_name === r.section && e.semester_number === 2)
+      .filter((e) => e.section_name === ts.section && e.semester_number === (ts.year * 2))
       .reduce((sum, e) => sum + Number(e.failed_count), 0);
 
     return {
       section: secLabel,
       headerBg: headerColors[idx % headerColors.length],
-      lowAttendance: Number(r.low_att_count || 0),
+      lowAttendance: lowAtt,
       internal1Failed: int1Fails,
       internal2Failed: int2Fails,
     };
@@ -675,11 +746,12 @@ export async function getHodDashboardData(
         AND cs.branch_id = ?
         AND (cs.status = 'posted' OR cs.status = 'completed')
       WHERE tp.branch_id = ?
+        ${hasYearFilter ? `AND tp.year_of_study IN (${options.years!.map(() => "?").join(",")})` : ""}
       GROUP BY te.subject_id, te.subject_name, sl.display_name
       ORDER BY conducted_count ASC
       LIMIT 8
       `,
-      [activeBranchId, activeBranchId],
+      hasYearFilter ? [activeBranchId, activeBranchId, ...options.years!] : [activeBranchId, activeBranchId],
     );
 
     for (const row of pacingRows) {
@@ -839,7 +911,7 @@ export async function getHodDashboardData(
       [activeBranchId],
     );
   } catch {
-    departmentPlans = [];
+    branchConfiguredPlans = [];
   }
 
   // 8d. Unposted class session attendance today
@@ -1309,14 +1381,16 @@ export async function getHodDashboardData(
 
   // 13. Dynamic Placements (computed from 4th year regular students)
   let eligibleCount = 0;
-  try {
-    const [finalYearRow] = await queryStudent<CountRow[]>(
-      `SELECT COUNT(*) as total FROM students s WHERE ${activeFilterCondition} AND s.current_year = 4`,
-      [activeBranchId],
-    );
-    eligibleCount = Number(finalYearRow?.total || 0);
-  } catch {
-    eligibleCount = 0;
+  if (!hasYearFilter || options.years!.includes(4)) {
+    try {
+      const [finalYearRow] = await queryStudent<CountRow[]>(
+        `SELECT COUNT(*) as total FROM students s WHERE s.branch_id = ? AND LOWER(TRIM(COALESCE(s.student_status, ''))) = 'regular' AND s.current_year = 4`,
+        [activeBranchId],
+      );
+      eligibleCount = Number(finalYearRow?.total || 0);
+    } catch {
+      eligibleCount = 0;
+    }
   }
 
   // No mock multipliers. Pure data based on enrolled 4th year students.

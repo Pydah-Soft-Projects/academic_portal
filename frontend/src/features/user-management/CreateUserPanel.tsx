@@ -7,6 +7,7 @@ import { apiFetch } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { getRoleStyle } from "@/features/user-management/RoleBadge";
 import type { ApRoleOption, HrmsCandidate, ManagedUser } from "@/features/user-management/types";
+import { YearAccessControl, setUserYearAccess } from "@/features/user-management/YearAccessControl";
 
 const fieldClass =
   "mt-1 h-10 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-navy-900 outline-none focus:border-navy-800 focus:ring-2 focus:ring-navy-800/10 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-600";
@@ -97,6 +98,7 @@ export function CreateUserPanel(props: Props) {
   const [selected, setSelected] = useState<HrmsCandidate | null>(null);
   const [roleKey, setRoleKey] = useState(creatableRoles[0]?.roleKey ?? "staff");
   const [collegeScopes, setCollegeScopes] = useState<Record<number, CollegeScopeDraft>>({});
+  const [selectedYears, setSelectedYears] = useState<string[]>(["all"]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -172,6 +174,7 @@ export function CreateUserPanel(props: Props) {
     setSelected(null);
     setRoleKey(creatableRoles[0]?.roleKey ?? "staff");
     setCollegeScopes({});
+    setSelectedYears(["all"]);
     setError(null);
   }
 
@@ -294,13 +297,18 @@ export function CreateUserPanel(props: Props) {
           hrmsUserId: selected.hrmsUserId,
           roleKey,
           scopes: scopesPayload,
+          yearAccess: selectedYears,
           isActive: true,
         }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body?.message || "Failed to create user");
+      const createdUser = body as ManagedUser;
+      if (createdUser?.id) {
+        setUserYearAccess(createdUser.id, selectedYears);
+      }
       reset();
-      await props.onCreated(body as ManagedUser);
+      await props.onCreated(createdUser);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create user");
     } finally {
@@ -505,13 +513,20 @@ export function CreateUserPanel(props: Props) {
         </section>
 
         {/* 3 · Access Scope */}
-        <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm">
-          <div className="mb-3 flex items-center gap-2">
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm space-y-3">
+          <div className="flex items-center gap-2">
             <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-700 text-xs font-bold text-white">
               3
             </span>
             <h3 className="text-sm font-semibold text-navy-900">Access Scope</h3>
           </div>
+
+          {/* Year Access */}
+          <YearAccessControl
+            selectedYears={selectedYears}
+            onChange={setSelectedYears}
+            roleTitle={roleKey === "hod" ? "HOD" : selectedRole?.label || "user"}
+          />
 
           {isGlobal ? (
             <div className="rounded-lg border border-emerald-200 bg-white px-3 py-4 text-sm text-slate-600">

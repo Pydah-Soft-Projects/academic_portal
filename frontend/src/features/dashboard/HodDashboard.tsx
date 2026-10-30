@@ -28,6 +28,8 @@ import {
   CalendarCheck,
 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { getUserYearAccess } from "@/features/user-management/YearAccessControl";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { HodDashboardSkeleton } from "./HodDashboardSkeleton";
@@ -134,6 +136,7 @@ export type HodDashboardData = {
 };
 
 interface HodDashboardProps {
+  userId?: number | string;
   userName?: string;
   departmentName?: string;
   roleLabel?: string;
@@ -142,6 +145,7 @@ interface HodDashboardProps {
 }
 
 export function HodDashboard({
+  userId: propUserId,
   userName: propUserName,
   departmentName: propDept,
   roleLabel: propRole,
@@ -149,6 +153,39 @@ export function HodDashboard({
   date: propDate,
 }: HodDashboardProps) {
   const { filters } = useAcademicContext();
+  const { user } = useAuth();
+  const effectiveUserId = propUserId ?? user?.id;
+
+  const [yearAccessVersion, setYearAccessVersion] = useState(0);
+
+  useEffect(() => {
+    const handleStorage = () => setYearAccessVersion((v) => v + 1);
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener("academic_user_year_access_changed", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener("academic_user_year_access_changed", handleStorage);
+    };
+  }, []);
+
+  const userYearAccess = useMemo(() => {
+    return getUserYearAccess(effectiveUserId, ["all"]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveUserId, yearAccessVersion]);
+
+  const activeYearsParam = useMemo(() => {
+    if (!userYearAccess || userYearAccess.includes("all") || userYearAccess.length === 0) {
+      return undefined;
+    }
+    return userYearAccess.filter((y) => y !== "all").join(",");
+  }, [userYearAccess]);
+
+  const yearScopeLabel = useMemo(() => {
+    if (!activeYearsParam) return null;
+    return userYearAccess
+      .map((y) => (y === "1" ? "1st Year" : y === "2" ? "2nd Year" : y === "3" ? "3rd Year" : `${y}th Year`))
+      .join(", ");
+  }, [activeYearsParam, userYearAccess]);
 
   const [data, setData] = useState<HodDashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -191,6 +228,9 @@ export function HodDashboard({
         } else if (selectedDeptName && selectedDeptName !== "all") {
           params.set("departmentName", selectedDeptName);
         }
+        if (activeYearsParam) {
+          params.set("years", activeYearsParam);
+        }
         if (activeAY) params.set("academicYear", activeAY);
         if (filters.startDate) params.set("startDate", filters.startDate);
         if (filters.endDate) params.set("endDate", filters.endDate);
@@ -218,7 +258,7 @@ export function HodDashboard({
         setRefreshing(false);
       }
     },
-    [activeBranchId, selectedDeptName, activeAY, activeDate, filters.startDate, filters.endDate],
+    [activeBranchId, selectedDeptName, activeYearsParam, activeAY, activeDate, filters.startDate, filters.endDate],
   );
 
   useEffect(() => {
@@ -318,7 +358,7 @@ export function HodDashboard({
                   Student Attendance Overview
                 </h2>
                 <p className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5">
-                  <span>{displayDept} • Today&apos;s Attendance ({displayDate})</span>
+                  <span>{displayDept}{yearScopeLabel ? ` • ${yearScopeLabel}` : ""} • Today&apos;s Attendance ({displayDate})</span>
                   {isStatsLoading && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 font-bold animate-pulse">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Updating...

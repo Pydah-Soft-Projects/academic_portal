@@ -11,6 +11,17 @@ import {
   PanelLeftClose,
   UserRound,
   X,
+  Shield,
+  Building,
+  GraduationCap,
+  Calendar,
+  Mail,
+  BadgeCheck,
+  BookOpen,
+  Layers,
+  Users,
+  CheckCircle2,
+  Briefcase,
 } from "lucide-react";
 import { NAV_GROUPS, filterNavGroups, navLabelForItem, type NavGroup } from "@/lib/navigation";
 import { cn } from "@/lib/cn";
@@ -20,6 +31,7 @@ import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { apiFetch } from "@/lib/api";
 import { LogoutConfirmModal } from "@/components/auth/LogoutConfirmModal";
+import { getUserYearAccess } from "@/features/user-management/YearAccessControl";
 
 type Props = {
   open: boolean;
@@ -652,12 +664,42 @@ function SelfProfileModal(props: {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [username, setUsername] = useState("");
+  const [hrmsEmployeeId, setHrmsEmployeeId] = useState<string | null>(null);
+  const [roles, setRoles] = useState<Array<{
+    id: number;
+    roleId?: number;
+    roleKey: string;
+    label: string;
+    collegeId: number | null;
+    collegeName: string | null;
+    branchId: number | null;
+    branchName: string | null;
+  }>>([]);
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const [teachingScope, setTeachingScope] = useState<{
+    staffLinkId: number | null;
+    subjectsCount: number;
+    totalTeachingStudents: number;
+    subjects: Array<{
+      subjectId: number;
+      subjectCode: string;
+      subjectName: string;
+      sectionName: string | null;
+      batch: string | null;
+      yearOfStudy: number | null;
+      semesterNumber: number | null;
+      branchId: number;
+      branchName: string;
+      collegeName: string;
+      studentCount: number;
+    }>;
+  } | null>(null);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const inputClass =
-    "mt-1 h-9 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-brand-600";
+    "mt-1 h-9 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none focus:border-brand-600 focus:ring-1 focus:ring-brand-500";
 
   useEffect(() => {
     let cancelled = false;
@@ -672,7 +714,11 @@ function SelfProfileModal(props: {
         setName(String(body.name ?? ""));
         setEmail(String(body.email ?? ""));
         setUsername(String(body.username ?? ""));
+        setHrmsEmployeeId(body.hrmsEmployeeId ? String(body.hrmsEmployeeId) : null);
         setIsLocalBootstrap(Boolean(body.isLocalBootstrap));
+        setRoles(Array.isArray(body.roles) ? body.roles : []);
+        setPermissions(Array.isArray(body.permissions) ? body.permissions : []);
+        setTeachingScope(body.teachingScope ?? null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load profile");
       } finally {
@@ -723,17 +769,67 @@ function SelfProfileModal(props: {
     }
   }
 
+  // Generate user initials for avatar
+  const initials = name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() || "")
+    .join("") || "AP";
+
+  const primaryRole = roles[0];
+  const isGlobalUser = roles.some((r) => r.roleKey === "super_admin" || (!r.collegeId && !r.branchId));
+
+  const userYearAccess = useMemo(() => {
+    return getUserYearAccess(props.userId, ["all"]);
+  }, [props.userId]);
+
+  const isAllYears = !userYearAccess || userYearAccess.length === 0 || userYearAccess.includes("all");
+  const yearLabelsMap: Record<string, string> = {
+    "1": "1st Year",
+    "2": "2nd Year",
+    "3": "3rd Year",
+    "4": "4th Year (Final Year)",
+  };
+  const activeYearLabels = isAllYears
+    ? ["1st Year", "2nd Year", "3rd Year", "4th Year (Final Year)"]
+    : userYearAccess.map((y) => yearLabelsMap[y] || `${y} Year`);
+
+  const yearBadge = isAllYears
+    ? "All Years (Full Coverage)"
+    : activeYearLabels.join(", ");
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/40 p-4">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-xs">
       <button type="button" className="absolute inset-0" aria-label="Close" onClick={props.onClose} />
-      <div className="relative flex w-full max-w-lg flex-col max-h-[85vh] rounded-xl border border-border bg-white shadow-xl">
-        <div className="flex shrink-0 items-center justify-between border-b border-border px-5 py-3">
-          <h3 className="font-semibold text-slate-700">My profile</h3>
-          <Button variant="ghost" size="sm" onClick={props.onClose}>
-            Close
+      <div className="relative flex w-full max-w-xl flex-col max-h-[90vh] rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        {/* Modal Header */}
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-navy-700 to-navy-900 text-white font-bold text-base shadow-sm">
+              {initials}
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-navy-900 flex items-center gap-2">
+                {name || "User Profile"}
+                {hrmsEmployeeId && (
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 font-mono border border-slate-200">
+                    ID: {hrmsEmployeeId}
+                  </span>
+                )}
+              </h3>
+              <p className="text-xs text-slate-500 font-medium">
+                {email || username || "Academic Portal Member"}
+              </p>
+            </div>
+          </div>
+          <Button variant="ghost" size="sm" onClick={props.onClose} className="text-slate-400 hover:text-slate-700">
+            <X className="h-4 w-4" />
           </Button>
         </div>
-        <div className="overflow-y-auto space-y-3 px-5 py-4">
+
+        {/* Modal Body */}
+        <div className="overflow-y-auto space-y-4 px-6 py-5">
           {loading ? (
             <div className="space-y-3 py-2 portal-fade-in" aria-busy="true" aria-label="Loading profile…">
               <Skeleton className="h-4 w-24 rounded" />
@@ -742,75 +838,258 @@ function SelfProfileModal(props: {
               <Skeleton className="h-9 w-full rounded-md" />
             </div>
           ) : null}
-          {error ? <p className="text-sm text-critical">{error}</p> : null}
+
+          {error ? (
+            <div className="rounded-lg bg-red-50 p-3 text-xs text-red-700 border border-red-200">
+              {error}
+            </div>
+          ) : null}
+
           {!loading ? (
             <>
-              <label className="block text-xs font-medium text-slate-500">
-                Display name
-                <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
-              </label>
-              {isLocalBootstrap ? (
-                <>
-                  <label className="block text-xs font-medium text-slate-500">
-                    Username
-                    <input
-                      className={inputClass}
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                    />
-                  </label>
-                  <label className="block text-xs font-medium text-slate-500">
-                    Email
-                    <input
-                      className={inputClass}
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-                  </label>
-                  <div className="space-y-2 border-t border-border pt-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Change password (optional)
-                    </p>
-                    <label className="block text-xs font-medium text-slate-500">
-                      Current password
-                      <input
-                        type="password"
-                        className={inputClass}
-                        value={currentPassword}
-                        onChange={(e) => setCurrentPassword(e.target.value)}
-                      />
-                    </label>
-                    <label className="block text-xs font-medium text-slate-500">
-                      New password
-                      <input
-                        type="password"
-                        className={inputClass}
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                      />
-                    </label>
-                    <label className="block text-xs font-medium text-slate-500">
-                      Confirm new password
-                      <input
-                        type="password"
-                        className={inputClass}
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                      />
-                    </label>
+              {/* SECTION: Assigned Role & Access Authority */}
+              <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-blue-700" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-blue-950">
+                      Assigned Role &amp; Access Authority
+                    </h4>
                   </div>
-                </>
-              ) : (
-                <p className="text-xs text-slate-500">
-                  Username, email, and password are managed in HRMS for linked accounts.
+                  <span className="rounded-full bg-blue-100 px-2.5 py-0.5 text-[11px] font-bold text-blue-800">
+                    {roles.length} Role{roles.length === 1 ? "" : "s"} Active
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {roles.length === 0 ? (
+                    <span className="text-xs text-slate-500">No specific role assigned.</span>
+                  ) : (
+                    roles.map((r, idx) => (
+                      <span
+                        key={idx}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-bold text-navy-900 shadow-2xs"
+                      >
+                        <BadgeCheck className="h-3.5 w-3.5 text-blue-600" />
+                        {r.label || r.roleKey}
+                      </span>
+                    ))
+                  )}
+                </div>
+
+                <p className="text-[11px] text-blue-800 leading-relaxed">
+                  {primaryRole?.roleKey === "hod"
+                    ? "Head of Department — Authorized for complete academic management, attendance supervision, timetable allocation, and risk monitoring for the assigned department."
+                    : primaryRole?.roleKey === "super_admin"
+                    ? "Super Admin — Unrestricted institute-wide system access, user management, and portal configuration."
+                    : primaryRole?.roleKey === "principal" || primaryRole?.roleKey === "vice_principal"
+                    ? "College Leadership — Oversight across all academic streams, faculty rosters, and college operations."
+                    : primaryRole?.roleKey === "class_teacher"
+                    ? "Class Teacher — Designated mentor and section in-charge for student attendance, internal assessments, and student rosters."
+                    : "Faculty Member — Teaching schedule, period attendance recording, and curriculum tracking."}
                 </p>
-              )}
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="secondary" onClick={props.onClose}>
+              </div>
+
+              {/* SECTION: Scope of Access (College, Branch, Year) */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-4 w-4 text-emerald-700" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-emerald-950">
+                      Scope of Access (Institutional Coverage)
+                    </h4>
+                  </div>
+                  <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                    Verified Scope
+                  </span>
+                </div>
+
+                {isGlobalUser ? (
+                  <div className="rounded-lg border border-emerald-200 bg-white p-3 text-xs text-slate-700 space-y-1">
+                    <span className="font-bold text-emerald-800">🌐 Global Authority</span>
+                    <p className="text-slate-600">Access applies across all colleges, departments, and academic branches.</p>
+                  </div>
+                ) : (
+                  <div className="grid gap-2.5 sm:grid-cols-2">
+                    {/* College Scope */}
+                    <div className="rounded-lg border border-emerald-100 bg-white p-3 space-y-1 shadow-2xs">
+                      <div className="flex items-center gap-1.5 text-slate-500 text-[11px] font-semibold">
+                        <Building className="h-3.5 w-3.5 text-emerald-600" />
+                        <span>College Scope</span>
+                      </div>
+                      <p className="text-xs font-bold text-navy-950">
+                        {primaryRole?.collegeName || "Pydah College of Engineering"}
+                      </p>
+                    </div>
+
+                    {/* Department / Branch Scope */}
+                    <div className="rounded-lg border border-emerald-100 bg-white p-3 space-y-1 shadow-2xs">
+                      <div className="flex items-center gap-1.5 text-slate-500 text-[11px] font-semibold">
+                        <GraduationCap className="h-3.5 w-3.5 text-emerald-600" />
+                        <span>Department &amp; Branch</span>
+                      </div>
+                      <p className="text-xs font-bold text-navy-950">
+                        {primaryRole?.branchName
+                          ? `${primaryRole.branchName} (B.Tech)`
+                          : "All Academic Branches"}
+                      </p>
+                    </div>
+
+                    {/* Year Access Scope */}
+                    <div className="rounded-lg border border-emerald-100 bg-white p-3 space-y-1 shadow-2xs sm:col-span-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5 text-slate-500 text-[11px] font-semibold">
+                          <Calendar className="h-3.5 w-3.5 text-[#f59e0b]" />
+                          <span>Year Access Scope</span>
+                        </div>
+                        <span className="rounded bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 border border-amber-200">
+                          {yearBadge}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {activeYearLabels.map((yr) => (
+                          <span
+                            key={yr}
+                            className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800 border border-amber-200/60"
+                          >
+                            <CheckCircle2 className="h-3 w-3 text-amber-600" />
+                            {yr}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-[11px] text-slate-500 pt-0.5">
+                        {isAllYears
+                          ? "Authorized to access and review student records across all academic years of the department."
+                          : `Authorized to access and review student records for ${yearBadge} of the department.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION: Teaching Scope (if available) */}
+              {teachingScope && teachingScope.subjects && teachingScope.subjects.length > 0 ? (
+                <div className="rounded-xl border border-violet-100 bg-violet-50/40 p-4 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <BookOpen className="h-4 w-4 text-violet-700" />
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-violet-950">
+                        Teaching Class Allocations
+                      </h4>
+                    </div>
+                    <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-800">
+                      {teachingScope.subjects.length} Class Session{teachingScope.subjects.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {teachingScope.subjects.slice(0, 3).map((sub, i) => (
+                      <div
+                        key={i}
+                        className="flex items-center justify-between rounded-lg border border-violet-100 bg-white px-3 py-2 text-xs"
+                      >
+                        <div>
+                          <span className="font-semibold text-slate-800">{sub.subjectName}</span>
+                          <span className="block text-[11px] text-slate-500">
+                            {sub.branchName} · Sem {sub.semesterNumber || 1} ({sub.sectionName || "A"})
+                          </span>
+                        </div>
+                        <span className="text-[11px] font-medium text-slate-600">
+                          {sub.studentCount} Students
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* SECTION: Account Information & Settings */}
+              <div className="space-y-3 pt-1">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-600">
+                  Account Details
+                </h4>
+
+                <label className="block text-xs font-medium text-slate-600">
+                  Display name
+                  <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
+                </label>
+
+                {isLocalBootstrap ? (
+                  <>
+                    <label className="block text-xs font-medium text-slate-600">
+                      Username
+                      <input
+                        className={inputClass}
+                        value={username}
+                        onChange={(e) => setUsername(e.target.value)}
+                      />
+                    </label>
+                    <label className="block text-xs font-medium text-slate-600">
+                      Email
+                      <input
+                        className={inputClass}
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                      />
+                    </label>
+                    <div className="space-y-2 border-t border-slate-200 pt-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                        Change password (optional)
+                      </p>
+                      <label className="block text-xs font-medium text-slate-600">
+                        Current password
+                        <input
+                          type="password"
+                          className={inputClass}
+                          value={currentPassword}
+                          onChange={(e) => setCurrentPassword(e.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-slate-600">
+                        New password
+                        <input
+                          type="password"
+                          className={inputClass}
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-slate-600">
+                        Confirm new password
+                        <input
+                          type="password"
+                          className={inputClass}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                  </>
+                ) : (
+                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500 font-medium">Username / Login:</span>
+                      <span className="font-semibold text-slate-800">{username || email}</span>
+                    </div>
+                    {email && (
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-500 font-medium">Registered Email:</span>
+                        <span className="font-semibold text-slate-800">{email}</span>
+                      </div>
+                    )}
+                    <p className="text-[11px] text-slate-400 pt-1">
+                      Username, email, and sign-in credentials are synchronized with HRMS for linked accounts.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex justify-end gap-2.5 border-t border-slate-100 pt-4">
+                <Button variant="secondary" onClick={props.onClose} className="text-xs">
                   Cancel
                 </Button>
-                <Button disabled={busy} onClick={() => void save()}>
-                  {busy ? "Saving…" : "Save"}
+                <Button disabled={busy} onClick={() => void save()} className="text-xs">
+                  {busy ? "Saving…" : "Save Changes"}
                 </Button>
               </div>
             </>

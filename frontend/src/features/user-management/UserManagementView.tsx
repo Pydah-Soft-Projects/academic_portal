@@ -32,6 +32,7 @@ import {
 } from "@/features/user-management/types";
 import { RolesPermissionsPanel } from "@/features/user-management/RolesPermissionsPanel";
 import { CreateUserPanel } from "@/features/user-management/CreateUserPanel";
+import { YearAccessControl, getUserYearAccess, setUserYearAccess } from "@/features/user-management/YearAccessControl";
 import { UserPermissionsModal } from "@/features/user-management/UserPermissionsModal";
 import {
   PERMISSION_MATRIX_MODULES,
@@ -1396,8 +1397,8 @@ function UserDetailModal(props: {
             </section>
 
             {/* 3 · Access Scope */}
-            <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm">
-              <div className="mb-3 flex items-center justify-between gap-2">
+            <section className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 shadow-sm space-y-3">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-700 text-xs font-bold text-white">
                     3
@@ -1413,6 +1414,13 @@ function UserDetailModal(props: {
                   </Button>
                 ) : null}
               </div>
+
+              {/* Year Access representation */}
+              <YearAccessControl
+                selectedYears={getUserYearAccess(user.id, ["all"])}
+                roleTitle={user.roles.some((r) => r.roleKey === "hod") ? "HOD" : user.roles[0]?.label || "user"}
+                readOnly
+              />
 
               {bootstrapSuperAdmin ? (
                 <div className="rounded-lg border border-emerald-200 bg-white px-3 py-4 text-sm text-slate-600">
@@ -1876,6 +1884,9 @@ function RolesDialog(props: {
   const initialRoleKey =
     props.user.roles[0]?.roleKey ?? creatableRoles[0]?.roleKey ?? "staff";
   const [selectedRoleKey, setSelectedRoleKey] = useState<string>(initialRoleKey);
+  const [selectedYears, setSelectedYears] = useState<string[]>(() =>
+    getUserYearAccess(props.user.id, ["all"]),
+  );
   const [collegeScopes, setCollegeScopes] = useState<Record<number, CollegeScopeDraft>>(() =>
     buildInitialCollegeScopes(props.user.roles, props.branches),
   );
@@ -2063,6 +2074,7 @@ function RolesDialog(props: {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body?.message || "Failed to update role & scope");
+      setUserYearAccess(props.user.id, selectedYears);
       await props.onSaved(body as ManagedUser);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update role & scope");
@@ -2122,6 +2134,13 @@ function RolesDialog(props: {
         </div>
       ) : (
         <div className="space-y-3">
+          {/* Year Access */}
+          <YearAccessControl
+            selectedYears={selectedYears}
+            onChange={setSelectedYears}
+            roleTitle={selectedRoleKey === "hod" ? "HOD" : selectedRoleMeta?.label || "user"}
+          />
+
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-bold text-slate-800">

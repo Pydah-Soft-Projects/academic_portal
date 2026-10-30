@@ -155,6 +155,7 @@ export type FeedbackReportData = {
     facultyRating: number;
     unitStatus: string;
     tokenHash: string;
+    studentName?: string;
   }>;
   /** Per faculty+subject submission progress (sections grouped into one row) */
   submissionProgress?: Array<{
@@ -2221,8 +2222,8 @@ export function FeedbackReportsView() {
                             <span className="font-medium text-slate-800">{sub.unitStatus}</span>
                           </td>
                           <td className="py-2.5 px-3 text-right">
-                            <span className="font-mono text-[11px] text-slate-400">
-                              {sub.tokenHash}
+                            <span className="font-semibold text-xs text-slate-900">
+                              {sub.studentName || sub.tokenHash}
                             </span>
                           </td>
                         </tr>

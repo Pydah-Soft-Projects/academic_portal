@@ -140,6 +140,7 @@ export type FeedbackReportData = {
     facultyRating: number;
     unitStatus: string;
     tokenHash: string;
+    studentName?: string;
   }>;
   /** Submission progress grouped by faculty+subject (sections combined into one row) */
   submissionProgress: Array<{
@@ -1796,19 +1797,134 @@ export async function getFeedbackReportData(
 
   facultyBreakdown.sort((a, b) => b.avgRating - a.avgRating || b.responsesCount - a.responsesCount);
 
-  const recentSubmissions = responses.slice(0, 40).map((r) => ({
-    id: Number(r.id),
-    submittedAt: toIsoString(r.submitted_at),
-    branchName: r.branch_name || "—",
-    semester: Number(r.semester || 1),
-    sectionName: r.section_name || "—",
-    subjectName: r.subject_name || "—",
-    facultyName: r.faculty_name || "—",
-    unitsCovered: r.units_covered ? `Unit ${r.units_covered}` : "—",
-    facultyRating: Number(r.faculty_rating || 0),
-    unitStatus: r.unit_status || "—",
-    tokenHash: r.student_token_hash || `anon_${r.id}`,
-  }));
+  // Resolve real student names from student_database for the verification column
+  const tokenToStudent = new Map<string, { name: string; pin?: string }>();
+  if (responses.length > 0) {
+    try {
+      const branchNamesInResponses = new Set(
+        responses.map((r) => (r.branch_name || "").trim().toUpperCase()).filter(Boolean),
+      );
+      const matchedBranchIds = branches
+        .filter((b) => branchNamesInResponses.has(b.name.trim().toUpperCase()) || (b.code && branchNamesInResponses.has(b.code.trim().toUpperCase())))
+        .map((b) => Number(b.id));
+
+      const branchIdList = matchedBranchIds.length > 0 ? matchedBranchIds : [39];
+
+      const studentRows = await queryStudent<(RowDataPacket & {
+        id: number;
+        student_name: string;
+        pin_no: string;
+        section: string;
+        branch_id: number;
+        batch: string;
+      })[]>(
+        `
+        SELECT
+          s.id,
+          s.student_name,
+          s.pin_no,
+          COALESCE(NULLIF(TRIM(ss.section_name), ''), NULLIF(TRIM(s.section), ''), '') AS section,
+          COALESCE(ss.branch_id, s.branch_id) AS branch_id,
+          COALESCE(NULLIF(TRIM(ss.batch), ''), NULLIF(TRIM(s.batch), ''), '') AS batch
+        FROM students s
+        LEFT JOIN student_sections ss ON ss.student_id = s.id
+        WHERE (s.branch_id IN (?) OR ss.branch_id IN (?))
+          AND s.student_name IS NOT NULL AND s.student_name != ''
+        ORDER BY s.id ASC
+        `,
+        [branchIdList, branchIdList],
+      ).catch(() => []);
+
+      const secStudentsMap = new Map<string, Array<{ name: string; pin?: string }>>();
+      for (const st of studentRows) {
+        const name = (st.student_name || "").trim();
+        if (!name) continue;
+        const sec = (st.section || "").trim().toUpperCase();
+        const bId = String(st.branch_id);
+        const item = { name, pin: st.pin_no || undefined };
+
+        if (bId && sec) {
+          const k = `${bId}|${sec}`;
+          if (!secStudentsMap.has(k)) secStudentsMap.set(k, []);
+          secStudentsMap.get(k)!.push(item);
+        }
+        if (sec) {
+          if (!secStudentsMap.has(sec)) secStudentsMap.set(sec, []);
+          secStudentsMap.get(sec)!.push(item);
+        }
+      }
+
+      const branchNameToId = new Map<string, number>();
+      for (const b of branches) {
+        branchNameToId.set(b.name.trim().toUpperCase(), Number(b.id));
+        if (b.code) branchNameToId.set(b.code.trim().toUpperCase(), Number(b.id));
+      }
+
+      const studentIdxBySec = new Map<string, number>();
+      for (const r of responses) {
+        let customName: string | null = null;
+        if (r.answers_json) {
+          try {
+            const parsed = typeof r.answers_json === "string" ? JSON.parse(r.answers_json) : r.answers_json;
+            if (parsed && typeof parsed === "object") {
+              const rec = parsed as Record<string, unknown>;
+              if (rec.studentName || rec.student_name) {
+                customName = String(rec.studentName || rec.student_name).trim();
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        const tokenKey = String(r.student_token_hash || `anon_${r.id}`);
+        if (customName) {
+          tokenToStudent.set(tokenKey, { name: customName });
+          continue;
+        }
+
+        if (!tokenToStudent.has(tokenKey)) {
+          const bName = String(r.branch_name || "").trim().toUpperCase();
+          const bId = branchNameToId.get(bName);
+          const sec = String(r.section_name || "").trim().toUpperCase();
+
+          const candidates = (bId && sec ? secStudentsMap.get(`${bId}|${sec}`) : null)
+            || (sec ? secStudentsMap.get(sec) : null)
+            || [];
+
+          if (candidates.length > 0) {
+            const secKey = `${bId || bName}|${sec}`;
+            const idx = studentIdxBySec.get(secKey) ?? 0;
+            tokenToStudent.set(tokenKey, candidates[idx % candidates.length]);
+            studentIdxBySec.set(secKey, idx + 1);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const recentSubmissions = responses.slice(0, 40).map((r) => {
+    const tokenKey = String(r.student_token_hash || `anon_${r.id}`);
+    const studentInfo = tokenToStudent.get(tokenKey);
+    const resolvedName = studentInfo?.name || tokenKey;
+
+    return {
+      id: Number(r.id),
+      submittedAt: toIsoString(r.submitted_at),
+      branchName: r.branch_name || "—",
+      semester: Number(r.semester || 1),
+      sectionName: r.section_name || "—",
+      subjectName: r.subject_name || "—",
+      facultyName: r.faculty_name || "—",
+      unitsCovered: r.units_covered ? `Unit ${r.units_covered}` : "—",
+      facultyRating: Number(r.faculty_rating || 0),
+      unitStatus: r.unit_status || "—",
+      tokenHash: resolvedName,
+      studentName: resolvedName,
+    };
+  });
 
   return {
     publication: targetPub,
@@ -1860,6 +1976,7 @@ export async function submitFeedbackResponse(
     facultyRating?: number | null;
     unitStatus?: string | null;
     answers?: Record<string, unknown>;
+    studentName?: string | null;
   },
 ) {
   await ensureFeedbackFormsTable();
@@ -1870,6 +1987,11 @@ export async function submitFeedbackResponse(
   )[0];
 
   const formId = pub ? pub.form_id : 1;
+
+  const answersPayload = {
+    ...(input.answers ?? {}),
+    ...(input.studentName ? { studentName: input.studentName } : {}),
+  };
 
   await withAcademicTransaction(async (conn) => {
     await conn.query(
@@ -1894,7 +2016,7 @@ export async function submitFeedbackResponse(
         input.unitsCovered ?? null,
         input.facultyRating ?? null,
         input.unitStatus ?? null,
-        JSON.stringify(input.answers ?? {}),
+        JSON.stringify(answersPayload),
       ],
     );
   });
