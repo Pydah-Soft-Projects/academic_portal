@@ -336,6 +336,8 @@ export function PrincipalDashboard({
   const [pendingSearchQuery, setPendingSearchQuery] = useState("");
   const [overviewYearFilter, setOverviewYearFilter] = useState<number | "all">("all");
   const [expandedDepts, setExpandedDepts] = useState<Record<string, boolean>>({});
+  const [deptPage, setDeptPage] = useState(1);
+  const DEPT_PAGE_SIZE = 5;
 
   // Determine effective role title
   const isVp =
@@ -437,6 +439,22 @@ export function PrincipalDashboard({
       return true;
     });
   }, [current?.approvalsAndDeadlines?.pendingApprovalDetails, pendingCategoryFilter, pendingSearchQuery]);
+
+  // Reset department overview page when year filter changes
+  useEffect(() => {
+    setDeptPage(1);
+  }, [overviewYearFilter]);
+
+  const totalDeptPages = useMemo(() => {
+    const total = current?.departmentOverview?.length || 0;
+    return Math.max(1, Math.ceil(total / DEPT_PAGE_SIZE));
+  }, [current?.departmentOverview?.length]);
+
+  const paginatedDepartments = useMemo(() => {
+    const list = current?.departmentOverview || [];
+    const start = (deptPage - 1) * DEPT_PAGE_SIZE;
+    return list.slice(start, start + DEPT_PAGE_SIZE);
+  }, [current?.departmentOverview, deptPage]);
 
   if (loading) {
     return <PrincipalDashboardSkeleton />;
@@ -611,7 +629,7 @@ export function PrincipalDashboard({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         
         {/* Left: Department Academic Overview (7 cols, compact space matching Priorities) */}
-        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[430px] justify-between">
+        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
           <div>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-100 gap-2">
               <div className="flex items-center gap-2">
@@ -681,11 +699,11 @@ export function PrincipalDashboard({
               </div>
             </div>
 
-            {/* Compact Scrollable Table Container */}
-            <div className="overflow-x-auto overflow-y-auto mt-2.5 flex-1 max-h-[310px] rounded-lg border border-slate-100">
+            {/* Compact Table Container (Zero internal vertical scroll) */}
+            <div className="overflow-x-auto mt-2.5 rounded-lg border border-slate-100">
               <table className="w-full text-left text-xs">
-                <thead className="sticky top-0 bg-white/95 backdrop-blur-xs z-10 border-b border-slate-200/80 shadow-2xs">
-                  <tr className="text-slate-500 font-semibold">
+                <thead>
+                  <tr className="text-slate-500 font-semibold border-b border-slate-200/80 bg-slate-50/60">
                     <th className="py-2.5 font-medium">Department / Years</th>
                     <th className="py-2.5 font-medium">Student Attendance</th>
                     <th className="py-2.5 font-medium">Faculty Attendance</th>
@@ -695,7 +713,7 @@ export function PrincipalDashboard({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100/70">
-                  {current.departmentOverview.map((row) => {
+                  {paginatedDepartments.map((row) => {
                     const isExpanded = Boolean(expandedDepts[row.department]);
                     const hasYears = Boolean(row.yearBreakdown && row.yearBreakdown.length > 0);
 
@@ -913,22 +931,47 @@ export function PrincipalDashboard({
               </table>
             </div>
 
-            {/* Department Footer / Status */}
-            <div className="pt-2.5 mt-auto border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
-              <span>{current.departmentOverview.length} Departments Tracked</span>
+            {/* Department Footer / Status with Pagination */}
+            <div className="pt-3 mt-auto border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+              <span className="text-[11px] text-slate-400 font-medium">
+                Showing {(deptPage - 1) * DEPT_PAGE_SIZE + 1}–{Math.min(deptPage * DEPT_PAGE_SIZE, current.departmentOverview.length)} of {current.departmentOverview.length} Departments
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={deptPage <= 1}
+                  onClick={() => setDeptPage((p) => Math.max(1, p - 1))}
+                  className="px-2 py-0.5 rounded border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
+                  title="Previous page"
+                >
+                  &larr; Prev
+                </button>
+                <span className="text-[11px] font-bold text-slate-700 px-1">
+                  {deptPage} / {totalDeptPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={deptPage >= totalDeptPages}
+                  onClick={() => setDeptPage((p) => Math.min(totalDeptPages, p + 1))}
+                  className="px-2 py-0.5 rounded border border-slate-200 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-colors shadow-2xs"
+                  title="Next page"
+                >
+                  Next &rarr;
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={() => setActiveModal("dept_overview")}
-                className="font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
               >
-                Open Full Overview &gt;
+                Full Overview ({current.departmentOverview.length}) &gt;
               </button>
             </div>
           </div>
         </div>
 
         {/* Right: Today's Priorities (5 cols, matching height) */}
-        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col h-[430px] justify-between">
+        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-5 flex flex-col justify-between">
           <div className="flex flex-col h-full justify-between">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
@@ -948,9 +991,9 @@ export function PrincipalDashboard({
               </button>
             </div>
 
-            {/* List of priority action items (Scrollable within height) */}
-            <div className="mt-2.5 space-y-2 overflow-y-auto flex-1 max-h-[310px] pr-1">
-              {current.priorities.map((item) => (
+            {/* List of priority action items (Clean without internal vertical scrolling) */}
+            <div className="mt-2.5 space-y-2">
+              {current.priorities.slice(0, 5).map((item) => (
                 <Link
                   key={item.id}
                   href={item.href}
@@ -995,7 +1038,7 @@ export function PrincipalDashboard({
             </div>
 
             {/* Priorities Footer / Status */}
-            <div className="pt-2.5 mt-auto border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+            <div className="pt-3 mt-auto border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
               <span>{current.priorities.length} Action Items Pending</span>
               <button
                 type="button"
@@ -1100,7 +1143,7 @@ export function PrincipalDashboard({
         </div>
 
         {/* Card 2: Students at Risk (Department Wise) */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col h-[285px]">
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
             <div className="flex items-center gap-2">
               <Users className="h-4 w-4 text-blue-600" />
@@ -1117,7 +1160,7 @@ export function PrincipalDashboard({
             </button>
           </div>
 
-          <div className="overflow-y-auto overflow-x-auto mt-2 flex-1 pr-1">
+          <div className="overflow-x-auto mt-2 flex-1">
             <table className="w-full text-left text-xs">
               <thead className="sticky top-0 bg-white z-10 shadow-2xs">
                 <tr className="text-slate-400 border-b border-slate-100 font-medium">
@@ -1136,7 +1179,7 @@ export function PrincipalDashboard({
                     </td>
                   </tr>
                 ) : (
-                  current.studentsAtRiskDeptWise.map((r) => (
+                  current.studentsAtRiskDeptWise.slice(0, 5).map((r) => (
                     <tr key={r.department} className="hover:bg-slate-50/50">
                       <td className="py-2 font-bold text-slate-800">{r.department}</td>
                       <td className="py-2 text-center font-bold text-rose-600">{r.below65Attendance}</td>
@@ -1152,7 +1195,7 @@ export function PrincipalDashboard({
         </div>
 
         {/* Card 3: Subjects Behind Schedule */}
-        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col h-[285px]">
+        <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs p-4 sm:p-4.5 flex flex-col justify-between">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
             <div className="flex items-center gap-2">
               <BookOpen className="h-4 w-4 text-amber-500" />
@@ -1169,7 +1212,7 @@ export function PrincipalDashboard({
             </button>
           </div>
 
-          <div className="overflow-y-auto overflow-x-auto mt-2 flex-1 pr-1">
+          <div className="overflow-x-auto mt-2 flex-1">
             <table className="w-full text-left text-xs">
               <thead className="sticky top-0 bg-white z-10 shadow-2xs">
                 <tr className="text-slate-400 border-b border-slate-100 font-medium">
@@ -1188,7 +1231,7 @@ export function PrincipalDashboard({
                     </td>
                   </tr>
                 ) : (
-                  current.subjectsBehindSchedule.map((s, idx) => (
+                  current.subjectsBehindSchedule.slice(0, 5).map((s, idx) => (
                     <tr key={idx} className="hover:bg-slate-50/50">
                       <td className="py-2 font-semibold text-slate-800">{s.subject}</td>
                       <td className="py-2 text-slate-600">{s.faculty}</td>
@@ -1681,9 +1724,13 @@ export function PrincipalDashboard({
 
       {/* MODAL: VIEW ALL DETAILS */}
       {activeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in">
-          <div className={`bg-white rounded-2xl ${activeModal === "faculty_adjustment" || activeModal === "dept_overview" || activeModal === "approvals_deadlines" ? "max-w-5xl" : "max-w-2xl"} w-full p-4 sm:p-6 shadow-2xl border border-slate-200 max-h-[88vh] overflow-y-auto`}>
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in">
+          <div className={`bg-white rounded-2xl ${
+            activeModal === "faculty_adjustment" || activeModal === "approvals_deadlines" || activeModal === "dept_overview"
+              ? "max-w-7xl w-[96vw] h-[92vh] max-h-[92vh]"
+              : "max-w-2xl max-h-[88vh] overflow-y-auto"
+          } w-full p-4 sm:p-6 shadow-2xl border border-slate-200 flex flex-col overflow-hidden`}>
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 shrink-0">
               <h3 className="text-base font-bold text-slate-900">
                 {activeModal === "dept_overview" && "Department Academic Overview (Full)"}
                 {activeModal === "priorities" && "All Priorities & Action Items"}
@@ -1703,7 +1750,11 @@ export function PrincipalDashboard({
               </button>
             </div>
 
-            <div className="py-4">
+            <div className={`py-4 ${
+              activeModal === "faculty_adjustment" || activeModal === "approvals_deadlines" || activeModal === "dept_overview"
+                ? "flex-1 min-h-0 flex flex-col overflow-hidden"
+                : ""
+            }`}>
               {activeModal === "priorities" && (
                 <div className="space-y-2.5">
                   <div className="text-xs text-slate-500 mb-2">
@@ -1762,8 +1813,8 @@ export function PrincipalDashboard({
               )}
 
               {activeModal === "dept_overview" && (
-                <div className="overflow-x-auto space-y-2">
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <div className="flex-1 min-h-0 flex flex-col space-y-2">
+                  <div className="flex items-center justify-between pb-2 border-b border-slate-100 shrink-0">
                     <span className="text-xs text-slate-500 font-medium">
                       Click any department to drop down year-wise metrics
                     </span>
@@ -1787,17 +1838,18 @@ export function PrincipalDashboard({
                     </button>
                   </div>
 
-                  <table className="w-full text-xs text-left">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-slate-500 font-medium">
-                        <th className="py-2">Department / Years</th>
-                        <th className="py-2">Student Attendance</th>
-                        <th className="py-2">Faculty Attendance</th>
-                        <th className="py-2">Internal Pass %</th>
-                        <th className="py-2 text-center">Behind</th>
-                        <th className="py-2 text-center">Risk Students</th>
-                      </tr>
-                    </thead>
+                  <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
+                    <table className="w-full text-xs text-left">
+                      <thead className="sticky top-0 bg-slate-50 text-slate-600 font-semibold z-10 border-b border-slate-200 shadow-2xs">
+                        <tr>
+                          <th className="py-2.5 px-3">Department / Years</th>
+                          <th className="py-2.5 px-3">Student Attendance</th>
+                          <th className="py-2.5 px-3">Faculty Attendance</th>
+                          <th className="py-2.5 px-3">Internal Pass %</th>
+                          <th className="py-2.5 px-3 text-center">Behind</th>
+                          <th className="py-2.5 px-3 text-center">Risk Students</th>
+                        </tr>
+                      </thead>
                     <tbody className="divide-y divide-slate-100">
                       {current.departmentOverview.map((row) => {
                         const isExpanded = Boolean(expandedDepts[row.department]);
@@ -1930,7 +1982,8 @@ export function PrincipalDashboard({
                         );
                       })}
                     </tbody>
-                  </table>
+                    </table>
+                  </div>
                 </div>
               )}
 
@@ -2114,9 +2167,17 @@ export function PrincipalDashboard({
                   </div>
 
                   {/* Pending Approvals Table */}
-                  <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[48vh] overflow-y-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                  <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
+                    <table className="w-full text-left text-xs table-fixed">
+                      <colgroup>
+                        <col className="w-[20%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[14%]" />
+                        <col className="w-[15%]" />
+                        <col className="w-[23%]" />
+                        <col className="w-[14%]" />
+                      </colgroup>
+                      <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                         <tr>
                           <th className="py-2.5 px-3">Faculty / Employee</th>
                           <th className="py-2.5 px-3">Department</th>
@@ -2265,9 +2326,9 @@ export function PrincipalDashboard({
               )}
 
               {activeModal === "faculty_adjustment" && (
-                <div className="space-y-4">
+                <div className="flex-1 min-h-0 flex flex-col space-y-3">
                   {/* Top Counters Summary */}
-                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center">
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 text-center shrink-0">
                     <div className="bg-emerald-50 p-2.5 rounded-xl border border-emerald-100">
                       <span className="text-[10px] text-slate-500 block font-medium">Present</span>
                       <span className="text-lg font-black text-emerald-600">
@@ -2307,7 +2368,7 @@ export function PrincipalDashboard({
                   </div>
 
                   {/* Sub-tabs inside modal */}
-                  <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-2 text-xs font-semibold">
+                  <div className="flex items-center gap-2 border-b border-slate-200 overflow-x-auto pb-2 text-xs font-semibold shrink-0">
                     <button
                       type="button"
                       onClick={() => setFacultyModalTab("employees")}
@@ -2367,9 +2428,9 @@ export function PrincipalDashboard({
 
                   {/* TAB 1: Employee-Wise Details */}
                   {facultyModalTab === "employees" && (
-                    <div className="space-y-3">
+                    <div className="flex-1 min-h-0 flex flex-col space-y-2.5">
                       {/* Search & Filters */}
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+                      <div className="shrink-0 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                         <div className="relative flex-1">
                           <Search className="h-4 w-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                           <input
@@ -2399,7 +2460,7 @@ export function PrincipalDashboard({
                       </div>
 
                       {/* Status Chips */}
-                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+                      <div className="shrink-0 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
                         {(["all", "present", "late", "leave", "od", "permission", "absent"] as const).map((st) => (
                           <button
                             key={st}
@@ -2417,7 +2478,7 @@ export function PrincipalDashboard({
                       </div>
 
                       {/* Slot Filter Bar */}
-                      <div className="flex items-center gap-1.5 text-xs overflow-x-auto pb-1">
+                      <div className="shrink-0 flex items-center gap-1.5 text-xs overflow-x-auto pb-1">
                         <span className="text-slate-400 font-semibold text-[10px] uppercase">Slots:</span>
                         <button
                           type="button"
@@ -2448,10 +2509,19 @@ export function PrincipalDashboard({
                         </button>
                       </div>
 
-                      {/* Employee Table */}
-                      <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
-                        <table className="w-full text-left text-xs">
-                          <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                      {/* Employee Table Container (No side scrollings, single vertical scroll, fully visible details) */}
+                      <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
+                        <table className="w-full text-left text-xs table-fixed">
+                          <colgroup>
+                            <col className="w-[75px]" />
+                            <col className="w-[20%]" />
+                            <col className="w-[12%]" />
+                            <col className="w-[20%]" />
+                            <col className="w-[13%]" />
+                            <col className="w-[11%]" />
+                            <col className="w-[24%]" />
+                          </colgroup>
+                          <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                             <tr>
                               <th className="py-2.5 px-3">Emp ID</th>
                               <th className="py-2.5 px-3">Employee Name</th>
@@ -2472,48 +2542,48 @@ export function PrincipalDashboard({
                             ) : (
                               filteredEmployees.map((emp) => (
                                 <tr key={emp.empNo} className="hover:bg-slate-50/70 transition-colors">
-                                  <td className="py-2 px-3 font-mono text-[11px] font-bold text-slate-700">
+                                  <td className="py-2.5 px-3 font-mono text-[11px] font-bold text-slate-700 whitespace-nowrap">
                                     {emp.empNo}
                                   </td>
-                                  <td className="py-2 px-3">
-                                    <div className="font-bold text-slate-900">{emp.name}</div>
-                                    <div className="text-[10px] text-slate-400">{emp.designation || "Staff"}</div>
+                                  <td className="py-2.5 px-3">
+                                    <div className="font-bold text-slate-900 leading-tight">{emp.name}</div>
+                                    <div className="text-[10px] text-slate-500 mt-0.5">{emp.designation || "Staff"}</div>
                                   </td>
-                                  <td className="py-2 px-3">
+                                  <td className="py-2.5 px-3">
                                     <div className="font-semibold text-slate-700">{emp.department}</div>
                                     <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold mt-0.5 ${
-                                      emp.isTeaching ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"
+                                      emp.isTeaching ? "bg-indigo-50 text-indigo-700 border border-indigo-100" : "bg-slate-100 text-slate-600"
                                     }`}>
                                       {emp.employeeGroup || (emp.isTeaching ? "TEACHING" : "NON-TEACHING")}
                                     </span>
                                   </td>
-                                  <td className="py-2 px-3">
+                                  <td className="py-2.5 px-3">
                                     {emp.slotsCount && emp.slotsCount > 0 ? (
-                                      <div>
+                                      <div className="space-y-1">
                                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                          <BookOpen className="h-2.5 w-2.5 text-blue-600" />
+                                          <BookOpen className="h-2.5 w-2.5 text-blue-600 shrink-0" />
                                           {emp.slotsCount} Slots ({emp.slotsPosted || 0} Posted)
                                         </span>
                                         {emp.subjects && emp.subjects.length > 0 && (
-                                          <span className="text-[10px] text-slate-500 block truncate max-w-[140px] mt-0.5">
-                                            {emp.subjects.slice(0, 2).join(", ")}
+                                          <span className="text-[10.5px] text-slate-500 block leading-snug whitespace-normal" title={emp.subjects.join(", ")}>
+                                            {emp.subjects.slice(0, 3).join(", ")}{emp.subjects.length > 3 ? ` +${emp.subjects.length - 3} more` : ""}
                                           </span>
                                         )}
                                       </div>
                                     ) : (
-                                      <span className="text-[10px] text-slate-400 italic">No slots today</span>
+                                      <span className="text-[10.5px] text-slate-400 italic">No slots today</span>
                                     )}
                                   </td>
-                                  <td className="py-2 px-3">
+                                  <td className="py-2.5 px-3 whitespace-nowrap">
                                     {emp.status === "present" && (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                                        <Fingerprint className="h-3 w-3 text-emerald-600" />
+                                        <Fingerprint className="h-3 w-3 text-emerald-600 shrink-0" />
                                         {emp.thumbStatus === "partial" ? "Present (Partial)" : "Present"}
                                       </span>
                                     )}
                                     {emp.status === "late" && (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
-                                        <Clock className="h-3 w-3 text-amber-600" />
+                                        <Clock className="h-3 w-3 text-amber-600 shrink-0" />
                                         Late ({emp.lateMinutes}m)
                                       </span>
                                     )}
@@ -2538,19 +2608,19 @@ export function PrincipalDashboard({
                                       </span>
                                     )}
                                   </td>
-                                  <td className="py-2 px-3 font-mono text-[11px] text-slate-600">
+                                  <td className="py-2.5 px-3 font-mono text-[11px] whitespace-nowrap">
                                     {emp.checkInTime ? (
-                                      <div>
-                                        <span className="text-emerald-700 font-semibold">In: {emp.checkInTime}</span>
+                                      <div className="space-y-0.5">
+                                        <span className="text-emerald-700 font-semibold block">In: {emp.checkInTime}</span>
                                         {emp.checkOutTime && (
                                           <span className="text-slate-500 block text-[10px]">Out: {emp.checkOutTime}</span>
                                         )}
                                       </div>
                                     ) : (
-                                      <span className="text-slate-400 italic">No punch</span>
+                                      <span className="text-slate-400 italic text-[11px]">No punch</span>
                                     )}
                                   </td>
-                                  <td className="py-2 px-3 text-[11px] text-slate-500">
+                                  <td className="py-2.5 px-3 text-[11px] text-slate-600 leading-relaxed whitespace-normal break-words">
                                     {emp.details || "—"}
                                   </td>
                                 </tr>
@@ -2564,9 +2634,18 @@ export function PrincipalDashboard({
 
                   {/* TAB 2: HRMS Leaves */}
                   {facultyModalTab === "leaves" && (
-                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                    <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
+                      <table className="w-full text-left text-xs table-fixed">
+                        <colgroup>
+                          <col className="w-[80px]" />
+                          <col className="w-[20%]" />
+                          <col className="w-[14%]" />
+                          <col className="w-[14%]" />
+                          <col className="w-[16%]" />
+                          <col className="w-[24%]" />
+                          <col className="w-[12%]" />
+                        </colgroup>
+                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                           <tr>
                             <th className="py-2.5 px-3">Emp ID</th>
                             <th className="py-2.5 px-3">Employee Name</th>
@@ -2599,7 +2678,7 @@ export function PrincipalDashboard({
                                   <div>{l.fromDate === l.toDate ? l.fromDate : `${l.fromDate} - ${l.toDate}`}</div>
                                   <span className="text-[10px] text-slate-400">({l.numberOfDays} day{l.numberOfDays > 1 ? "s" : ""})</span>
                                 </td>
-                                <td className="py-2 px-3 text-slate-600">{l.purpose || "—"}</td>
+                                <td className="py-2.5 px-3 text-slate-600 text-[11px] leading-relaxed whitespace-normal break-words">{l.purpose || "—"}</td>
                                 <td className="py-2 px-3">
                                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
                                     l.status.includes("approved")
@@ -2619,9 +2698,19 @@ export function PrincipalDashboard({
 
                   {/* TAB 3: HRMS ODs */}
                   {facultyModalTab === "ods" && (
-                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                    <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
+                      <table className="w-full text-left text-xs table-fixed">
+                        <colgroup>
+                          <col className="w-[80px]" />
+                          <col className="w-[18%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[15%]" />
+                          <col className="w-[18%]" />
+                          <col className="w-[15%]" />
+                          <col className="w-[10%]" />
+                        </colgroup>
+                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                           <tr>
                             <th className="py-2.5 px-3">Emp ID</th>
                             <th className="py-2.5 px-3">Employee Name</th>
@@ -2654,8 +2743,8 @@ export function PrincipalDashboard({
                                 <td className="py-2 px-3 text-[11px] text-slate-700">
                                   {o.fromDate === o.toDate ? o.fromDate : `${o.fromDate} - ${o.toDate}`}
                                 </td>
-                                <td className="py-2 px-3 text-slate-600">{o.placeVisited || "—"}</td>
-                                <td className="py-2 px-3 text-slate-600">{o.purpose || "—"}</td>
+                                <td className="py-2.5 px-3 text-slate-600 text-[11px] leading-relaxed whitespace-normal break-words">{o.placeVisited || "—"}</td>
+                                <td className="py-2.5 px-3 text-slate-600 text-[11px] leading-relaxed whitespace-normal break-words">{o.purpose || "—"}</td>
                                 <td className="py-2 px-3">
                                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${
                                     o.status.includes("approved")
@@ -2675,9 +2764,18 @@ export function PrincipalDashboard({
 
                   {/* TAB 4: HRMS Permissions */}
                   {facultyModalTab === "permissions" && (
-                    <div className="border border-slate-200 rounded-xl overflow-hidden max-h-[50vh] overflow-y-auto">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 border-b border-slate-200">
+                    <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
+                      <table className="w-full text-left text-xs table-fixed">
+                        <colgroup>
+                          <col className="w-[80px]" />
+                          <col className="w-[20%]" />
+                          <col className="w-[14%]" />
+                          <col className="w-[14%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[28%]" />
+                          <col className="w-[12%]" />
+                        </colgroup>
+                        <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                           <tr>
                             <th className="py-2.5 px-3">Emp ID</th>
                             <th className="py-2.5 px-3">Employee Name</th>
@@ -2703,7 +2801,7 @@ export function PrincipalDashboard({
                                 <td className="py-2 px-3 text-slate-600 font-medium">{p.department}</td>
                                 <td className="py-2 px-3 text-[11px] text-slate-700">{p.date}</td>
                                 <td className="py-2 px-3 font-semibold text-blue-700">{p.hours} hr{p.hours > 1 ? "s" : ""}</td>
-                                <td className="py-2 px-3 text-slate-600">{p.reason || "—"}</td>
+                                <td className="py-2.5 px-3 text-slate-600 text-[11px] leading-relaxed whitespace-normal break-words">{p.reason || "—"}</td>
                                 <td className="py-2 px-3">
                                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 text-blue-800 capitalize">
                                     {p.status}
