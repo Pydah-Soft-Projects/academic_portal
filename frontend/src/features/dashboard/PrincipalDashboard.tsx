@@ -197,6 +197,21 @@ export type PrincipalDashboardData = {
       cancelled: number;
       pending: number;
     };
+    affectedClassesList?: Array<{
+      id: number;
+      status: "adjusted" | "cancelled" | "scheduled";
+      facultyName: string;
+      subjectName: string;
+      subjectCode: string | null;
+      startTime: string | null;
+      endTime: string | null;
+      sectionName: string | null;
+      yearOfStudy: number | null;
+      slotLabel: string | null;
+      slotType: string | null;
+      branchName: string | null;
+      branchId: number;
+    }>;
     employeeWiseDetails?: Array<{
       staffLinkId?: number;
       empNo: string;
@@ -2833,6 +2848,7 @@ export function PrincipalDashboard({
                   {/* TAB 5: Class Adjustments */}
                   {facultyModalTab === "adjustments" && (
                     <div className="space-y-3">
+                      {/* Summary KPI cards */}
                       <div className="p-4 bg-slate-50 rounded-xl text-xs space-y-2 border border-slate-200">
                         <span className="font-bold text-slate-800 text-sm block">
                           Classes Affected Today: {current.facultyAttendanceAndAdjustment.classesAffected.total}
@@ -2864,6 +2880,103 @@ export function PrincipalDashboard({
                           </div>
                         </div>
                       </div>
+
+                      {/* Per-session breakdown list */}
+                      {(() => {
+                        const list = current.facultyAttendanceAndAdjustment.affectedClassesList ?? [];
+                        const adjusted = list.filter((c) => c.status === "adjusted");
+                        const cancelled = list.filter((c) => c.status === "cancelled");
+                        const pending = list.filter((c) => c.status === "scheduled");
+
+                        if (list.length === 0) {
+                          return (
+                            <div className="text-center py-8 text-slate-400 text-xs italic">
+                              No affected classes data available for today.
+                            </div>
+                          );
+                        }
+
+                        const renderRows = (rows: typeof list, label: string, badgeClass: string, textClass: string) => {
+                          if (rows.length === 0) return null;
+                          return (
+                            <div>
+                              <div className={`flex items-center gap-2 mb-2`}>
+                                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${badgeClass}`}>
+                                  {label} ({rows.length})
+                                </span>
+                              </div>
+                              <div className="overflow-x-auto rounded-xl border border-slate-200">
+                                <table className="w-full text-xs min-w-[520px]">
+                                  <thead>
+                                    <tr className="border-b border-slate-200 bg-slate-50/80">
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Slot / Time</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Subject</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Faculty</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Section / Dept</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Status</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {rows.map((row) => (
+                                      <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
+                                        <td className="py-2 px-3">
+                                          <div className="font-bold text-slate-800">{row.slotLabel || "—"}</div>
+                                          {row.startTime && row.endTime && (
+                                            <div className="text-[10px] text-slate-500 font-mono">
+                                              {row.startTime}–{row.endTime}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="py-2 px-3">
+                                          <div className="font-semibold text-slate-900">{row.subjectName}</div>
+                                          {row.subjectCode && (
+                                            <div className="text-[10px] text-slate-500 font-mono">{row.subjectCode}</div>
+                                          )}
+                                        </td>
+                                        <td className="py-2 px-3 font-medium text-slate-700">{row.facultyName}</td>
+                                        <td className="py-2 px-3">
+                                          <div className="text-slate-700">
+                                            {row.sectionName ? `${row.sectionName}` : ""}
+                                            {row.yearOfStudy ? ` · Year ${row.yearOfStudy}` : ""}
+                                          </div>
+                                          {row.branchName && (
+                                            <div className="text-[10px] text-slate-500">{row.branchName}</div>
+                                          )}
+                                        </td>
+                                        <td className="py-2 px-3">
+                                          <span
+                                            className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                              row.status === "cancelled"
+                                                ? "bg-rose-100 text-rose-700"
+                                                : row.status === "adjusted"
+                                                  ? "bg-emerald-100 text-emerald-700"
+                                                  : "bg-amber-100 text-amber-700"
+                                            }`}
+                                          >
+                                            {row.status === "cancelled"
+                                              ? "Cancelled"
+                                              : row.status === "adjusted"
+                                                ? "Adjusted"
+                                                : "Pending"}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          );
+                        };
+
+                        return (
+                          <div className="space-y-4">
+                            {renderRows(adjusted, "Timetable Adjustments", "bg-emerald-100 text-emerald-800", "text-emerald-700")}
+                            {renderRows(cancelled, "Cancelled Classes", "bg-rose-100 text-rose-800", "text-rose-700")}
+                            {renderRows(pending, "Pending (Unposted) Classes", "bg-amber-100 text-amber-800", "text-amber-700")}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>

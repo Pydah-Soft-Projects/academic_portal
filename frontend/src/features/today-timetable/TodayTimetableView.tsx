@@ -19,10 +19,12 @@ import {
   Shield,
   Lock,
   Users,
+  User,
   BookOpen,
   CheckCircle,
   CalendarOff,
   ArrowRightLeft,
+  Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
@@ -964,41 +966,47 @@ function PeriodEditModal({
   };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs animate-in fade-in duration-150">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 md:p-6 backdrop-blur-xs animate-in fade-in duration-150">
       <button type="button" className="absolute inset-0" onClick={onClose} aria-label="Close" />
-      <div className="relative z-10 w-full max-w-3xl rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+      <div className="relative z-10 w-full max-w-4xl lg:max-w-5xl max-h-[92vh] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 bg-slate-50/90 px-6 py-4">
+        <div className="flex items-center justify-between border-b border-slate-200/80 bg-white px-5 sm:px-6 py-4 shrink-0">
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-bold text-slate-800 text-base">Period Details ({slot.label})</h3>
-              <span className="text-xs font-semibold text-slate-600 bg-slate-200/80 px-2 py-0.5 rounded">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-bold text-slate-900 text-base sm:text-lg">Period Details ({slot.label})</h3>
+              <span className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
                 {slot.startTime}–{slot.endTime}
               </span>
+              {isMasterSplit && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-indigo-50 border border-indigo-200 text-indigo-700">
+                  <Users className="h-3.5 w-3.5 text-indigo-600" />
+                  Split Period ({masterEntries.length} Batches)
+                </span>
+              )}
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">
+            <p className="text-xs text-slate-500 mt-1">
               {dayLabel}, {formatDate(fromYMD(date))}
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-2 text-slate-400 hover:bg-slate-200 transition-colors"
+            className="rounded-xl p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="p-6 space-y-4 max-h-[calc(85vh-130px)] overflow-y-auto">
+        {/* Scrollable Body Content */}
+        <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
           {/* Status Banner */}
           {isCurrentHoliday ? (
-            <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-950 flex items-start gap-2.5 shadow-2xs">
+            <div className="rounded-xl border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-950 flex items-start gap-2.5 shadow-2xs">
               <CalendarOff className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-bold">Declared Holiday for {formatDate(fromYMD(date))}</p>
-                <p className="text-[11px] text-amber-800 mt-0.5">
-                  This class has been declared as a holiday ({currentOverride?.customLabel || currentOverride?.subjectName || "Holiday"}). Master Timetable remains unchanged.
+                <p className="text-[11.5px] text-amber-800 mt-0.5">
+                  This period has been marked as a holiday ({currentOverride?.customLabel || currentOverride?.subjectName || "Holiday"}). Master Timetable remains unchanged.
                 </p>
               </div>
             </div>
@@ -1007,58 +1015,52 @@ function PeriodEditModal({
               <CheckCircle className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-bold">Split Moved to Single Class for {formatDate(fromYMD(date))}</p>
-                <p className="text-[11px] text-indigo-800 mt-0.5">
-                  Master timetable split sections have been merged into a single combined class for all students on this date. Master Timetable remains unchanged.
+                <p className="text-[11.5px] text-indigo-800 mt-0.5">
+                  Master timetable split sections are merged into one combined session for all students on this date. Master Timetable remains unchanged.
                 </p>
               </div>
             </div>
           ) : isMasterSplit && !currentOverride ? (
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 text-xs text-indigo-950 flex items-start gap-2.5 shadow-2xs">
-              <Users className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <div className="flex items-center justify-between">
-                  <p className="font-bold">Split Sections in Master Timetable ({masterEntries.length} Batches)</p>
-                  <span className="rounded bg-indigo-200/90 px-2 py-0.5 text-[10px] font-bold text-indigo-900">
-                    Master Split
-                  </span>
+            <div className="rounded-xl border border-indigo-200/80 bg-gradient-to-r from-indigo-50/80 via-blue-50/40 to-slate-50 p-3 text-xs text-indigo-950 flex items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 shrink-0">
+                  <Users className="h-4 w-4" />
                 </div>
-                <p className="text-[11px] text-indigo-800 mt-0.5">
-                  Master Timetable runs parallel batches for this slot. You can move this split to a single common period for {formatDate(fromYMD(date))}.
-                </p>
+                <div>
+                  <p className="font-bold text-indigo-950">
+                    Master Timetable runs parallel batches for this slot
+                  </p>
+                  <p className="text-[11px] text-indigo-800/90 mt-0.5">
+                    To merge the batches into one common class today, choose a batch or custom subject in the Changed Period panel.
+                  </p>
+                </div>
               </div>
+              <span className="shrink-0 rounded-md bg-indigo-200/80 px-2 py-0.5 text-[10.5px] font-bold text-indigo-900">
+                {masterEntries.length} Parallel Batches
+              </span>
             </div>
           ) : isPeriodModified ? (
-            <div className="rounded-xl border border-rose-200 bg-rose-50/80 p-3 text-xs text-rose-900 flex items-start gap-2.5">
+            <div className="rounded-xl border border-rose-200 bg-rose-50/80 p-3 text-xs text-rose-900 flex items-start gap-2.5 shadow-2xs">
               <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-bold">Period Modified for {formatDate(fromYMD(date))}</p>
-                <p className="text-[11px] text-rose-700 mt-0.5">
-                  This class has been altered from the Master Timetable schedule. Master Timetable remains unchanged.
+                <p className="text-[11.5px] text-rose-700 mt-0.5">
+                  This class has been altered from the Master Timetable schedule for today. Master Timetable remains unchanged.
                 </p>
               </div>
             </div>
-          ) : (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 p-3 text-xs text-emerald-900 flex items-start gap-2.5">
-              <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Period Matches Master Timetable</p>
-                <p className="text-[11px] text-emerald-700 mt-0.5">
-                  Today&apos;s schedule matches the baseline master timetable for this period.
-                </p>
-              </div>
-            </div>
-          )}
+          ) : null}
 
           {/* Multi-Period Range Selector (allows editing P7, P8, P9 together) */}
           {subsequentSlots.length > 1 && canEdit && (
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-3 shadow-2xs">
+            <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3 shadow-2xs">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <div className="flex items-center gap-1.5">
-                  <Clock className="h-4 w-4 text-indigo-700" />
-                  <span className="text-xs font-bold text-indigo-950">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-slate-600" />
+                  <span className="text-xs font-bold text-slate-800">
                     Apply change to multiple periods on {dayLabel}:
                   </span>
-                  <span className="rounded bg-indigo-200/90 px-1.5 py-0.2 text-[10.5px] font-bold text-indigo-900">
+                  <span className="rounded bg-navy-100 text-navy-900 px-1.5 py-0.2 text-[10.5px] font-bold">
                     {selectedSlotIds.length} Period{selectedSlotIds.length > 1 ? "s" : ""}
                   </span>
                 </div>
@@ -1073,10 +1075,10 @@ function PeriodEditModal({
                         type="button"
                         onClick={() => setSelectedSlotIds(subsequentSlots.slice(0, count).map((s) => s.id))}
                         className={cn(
-                          "rounded-md px-2 py-0.5 text-[11px] font-bold transition-all border cursor-pointer",
+                          "rounded-md px-2.5 py-0.5 text-[11px] font-bold transition-all border cursor-pointer",
                           isCurrent
-                            ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
-                            : "bg-white text-indigo-700 border-indigo-200 hover:bg-indigo-100",
+                            ? "bg-navy-900 text-white border-navy-900 shadow-xs"
+                            : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100",
                         )}
                       >
                         {count} Period{count > 1 ? "s" : ""}
@@ -1086,7 +1088,7 @@ function PeriodEditModal({
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-1.5 pt-1">
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
                 {subsequentSlots.slice(0, 8).map((cSlot) => {
                   const isSelected = selectedSlotIds.includes(cSlot.id);
                   const isBase = cSlot.id === slot.id;
@@ -1104,13 +1106,13 @@ function PeriodEditModal({
                         }
                       }}
                       className={cn(
-                        "flex items-center gap-1 rounded-lg px-2.5 py-1 text-xs font-bold transition-all border cursor-pointer",
+                        "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold transition-all border cursor-pointer",
                         isSelected
-                          ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
-                          : "bg-white text-slate-700 border-slate-200 hover:border-indigo-300",
+                          ? "bg-navy-900 text-white border-navy-900 shadow-xs"
+                          : "bg-white text-slate-700 border-slate-200 hover:border-slate-300 hover:bg-slate-50",
                       )}
                     >
-                      <span>{cSlot.label}</span>
+                      <span className="font-bold">{cSlot.label}</span>
                       <span className="text-[10px] opacity-75">({cSlot.startTime})</span>
                       {isSelected ? <Check className="h-3 w-3 ml-0.5" /> : null}
                     </button>
@@ -1121,13 +1123,13 @@ function PeriodEditModal({
           )}
 
           {/* SIDE-BY-SIDE 2 CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
             {/* CARD 1: Actual Period (Master Timetable Baseline) */}
-            <div className="rounded-xl border-2 border-slate-200 bg-slate-50/70 p-4 flex flex-col justify-between">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 flex flex-col justify-between space-y-4">
               <div>
-                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-200">
-                  <div className="flex items-center gap-2">
-                    <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-700">
+                <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-200/80">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-1.5 rounded-lg bg-emerald-100 text-emerald-800">
                       <BookOpen className="h-4 w-4" />
                     </div>
                     <div>
@@ -1135,70 +1137,63 @@ function PeriodEditModal({
                       <p className="text-[11px] text-slate-500">Master Timetable Baseline</p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-slate-200/80 text-slate-700 border border-slate-300">
                     {isMasterSplit ? `Split (${masterEntries.length} Batches)` : "Master Baseline"}
                   </span>
                 </div>
 
                 {isMasterSplit ? (
-                  <div className="space-y-2.5">
-                    <div className="rounded-lg bg-indigo-50/80 border border-indigo-200 p-2 text-xs text-indigo-950 font-semibold flex items-center justify-between">
-                      <span className="flex items-center gap-1.5">
-                        <Users className="h-3.5 w-3.5 text-indigo-600" />
-                        Split batches in master timetable:
-                      </span>
-                      <span className="rounded bg-indigo-200 px-1.5 py-0.2 text-[10px] font-bold text-indigo-900">
-                        {masterEntries.length} Parallel Batches
-                      </span>
-                    </div>
-
-                    <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
-                      {masterEntries.map((ent, eIdx) => {
-                        const bLabel = ent.batchLabel || `Batch ${eIdx + 1}`;
-                        return (
-                          <div key={eIdx} className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1 shadow-2xs">
-                            <div className="flex items-center justify-between">
-                              <span className="rounded bg-navy-900 text-white font-bold px-2 py-0.2 text-[9.5px] uppercase tracking-wider">
-                                {bLabel}
+                  <div className="space-y-3">
+                    {masterEntries.map((ent, eIdx) => {
+                      const bLabel = ent.batchLabel || `Batch ${eIdx + 1}`;
+                      return (
+                        <div key={eIdx} className="rounded-xl border border-slate-200 bg-white p-3 space-y-1.5 shadow-2xs">
+                          <div className="flex items-center justify-between">
+                            <span className="rounded bg-navy-950 text-white font-bold px-2 py-0.5 text-[9.5px] uppercase tracking-wider">
+                              {bLabel}
+                            </span>
+                            {ent.roomLabel && (
+                              <span className="text-[10.5px] font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2 py-0.5 rounded-md">
+                                Room: {ent.roomLabel}
                               </span>
-                              {ent.roomLabel && (
-                                <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
-                                  Room: {ent.roomLabel}
-                                </span>
-                              )}
-                            </div>
-                            <div>
-                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Subject</span>
-                              <p className="text-xs font-bold text-slate-900">
-                                {ent.customLabel || ent.subjectName || ent.subjectCode || "Free / Unassigned"}
-                              </p>
-                              {ent.subjectCode && ent.subjectCode !== ent.subjectName && (
-                                <p className="text-[10.5px] text-slate-500 font-medium">Code: {ent.subjectCode}</p>
-                              )}
-                            </div>
+                            )}
+                          </div>
+                          <div>
+                            <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Subject</span>
+                            <p className="text-xs font-bold text-slate-900 mt-0.5">
+                              {ent.customLabel || ent.subjectName || ent.subjectCode || "Free / Unassigned"}
+                            </p>
+                            {ent.subjectCode && ent.subjectCode !== ent.subjectName && (
+                              <p className="text-[11px] text-slate-500 font-medium">Code: {ent.subjectCode}</p>
+                            )}
+                          </div>
+                          <div className="pt-1 border-t border-slate-100 flex items-center justify-between">
                             <div>
                               <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Faculty</span>
-                              <p className="text-xs font-semibold text-slate-800">
-                                {ent.facultyName || "No faculty assigned"}
+                              <p className="text-xs font-semibold text-slate-800 flex items-center gap-1 mt-0.5">
+                                <User className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span>{ent.facultyName || "No faculty assigned"}</span>
                               </p>
-                              {ent.facultyHrmsId && (
-                                <p className="text-[10px] text-slate-500">ID: {ent.facultyHrmsId}</p>
-                              )}
                             </div>
+                            {ent.facultyHrmsId && (
+                              <span className="text-[10px] text-slate-400 font-medium self-end">
+                                ID: {ent.facultyHrmsId}
+                              </span>
+                            )}
                           </div>
-                        );
-                      })}
-                    </div>
+                        </div>
+                      );
+                    })}
 
                     <div className="pt-1">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timing & Slot</span>
-                      <p className="text-xs font-medium text-slate-700 mt-0.5">
+                      <p className="text-xs font-semibold text-slate-700 mt-0.5">
                         {slot.label} · {slot.startTime}–{slot.endTime}
                       </p>
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Scheduled Subject</span>
                       <p className="text-sm font-bold text-slate-900 mt-0.5">
@@ -1211,17 +1206,18 @@ function PeriodEditModal({
 
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Assigned Faculty</span>
-                      <p className="text-sm font-semibold text-slate-800 mt-0.5">
-                        {masterEntry?.facultyName || "No faculty assigned"}
+                      <p className="text-sm font-semibold text-slate-800 mt-0.5 flex items-center gap-1.5">
+                        <User className="h-3.5 w-3.5 text-slate-400" />
+                        <span>{masterEntry?.facultyName || "No faculty assigned"}</span>
                       </p>
                       {masterEntry?.facultyHrmsId && (
-                        <p className="text-xs text-slate-500 mt-0.5">ID: {masterEntry.facultyHrmsId}</p>
+                        <p className="text-xs text-slate-500 mt-0.5 ml-5">ID: {masterEntry.facultyHrmsId}</p>
                       )}
                     </div>
 
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timing & Slot</span>
-                      <p className="text-xs font-medium text-slate-700 mt-0.5">
+                      <p className="text-xs font-semibold text-slate-700 mt-0.5">
                         {slot.label} · {slot.startTime}–{slot.endTime}
                       </p>
                     </div>
@@ -1229,7 +1225,7 @@ function PeriodEditModal({
                 )}
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-200/80 text-[11px] text-slate-500 flex items-center gap-1.5">
+              <div className="pt-3 border-t border-slate-200/80 text-[11px] text-slate-500 flex items-center gap-1.5">
                 <Shield className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                 <span>Master timetable baseline cannot be modified here.</span>
               </div>
@@ -1238,15 +1234,17 @@ function PeriodEditModal({
             {/* CARD 2: Changed Period (Today's Schedule) */}
             <div
               className={cn(
-                "rounded-xl border-2 p-4 flex flex-col justify-between",
+                "rounded-2xl border p-4 sm:p-5 flex flex-col justify-between space-y-4 shadow-xs",
                 isPeriodModified
-                  ? "border-rose-300 bg-rose-50/50"
-                  : "border-indigo-200 bg-indigo-50/30",
+                  ? "border-rose-300 bg-rose-50/40"
+                  : isMasterSplit
+                  ? "border-indigo-200 bg-indigo-50/20"
+                  : "border-slate-200 bg-white",
               )}
             >
               <div>
                 <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-200/80">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2.5">
                     <div
                       className={cn(
                         "p-1.5 rounded-lg",
@@ -1262,19 +1260,19 @@ function PeriodEditModal({
                   </div>
                   <span
                     className={cn(
-                      "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border",
+                      "text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border",
                       isMasterSplit
                         ? currentOverride
                           ? "bg-indigo-100 text-indigo-900 border-indigo-300"
                           : "bg-indigo-50 text-indigo-800 border-indigo-200"
                         : isPeriodModified
                         ? "bg-rose-100 text-rose-800 border-rose-200"
-                        : "bg-indigo-100 text-indigo-800 border-indigo-200",
+                        : "bg-slate-100 text-slate-700 border-slate-200",
                     )}
                   >
                     {isMasterSplit
                       ? currentOverride
-                        ? "Single Class (Split Moved to Single)"
+                        ? "Single (Combined)"
                         : "Move Split to Single"
                       : isPeriodModified
                       ? "Changed"
@@ -1283,33 +1281,35 @@ function PeriodEditModal({
                 </div>
 
                 {canEdit ? (
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
                     {/* When master is split, render the Move Split to Single quick-actions panel */}
                     {isMasterSplit && (
-                      <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/90 to-blue-50/70 p-3 space-y-2 shadow-2xs">
+                      <div className="rounded-xl border border-indigo-200/90 bg-gradient-to-b from-indigo-50/70 to-white p-3.5 space-y-2.5 shadow-2xs">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5">
-                            <ArrowRightLeft className="h-4 w-4 text-indigo-700" />
+                            <div className="p-1 rounded-md bg-indigo-100 text-indigo-700">
+                              <ArrowRightLeft className="h-3.5 w-3.5" />
+                            </div>
                             <span className="text-xs font-bold text-indigo-950">
-                              Move Split Sections to Single Class
+                              Move Split to Single Class
                             </span>
                           </div>
-                          <span className="rounded bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 shadow-2xs">
-                            Combine All Batches
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9.5px] font-bold text-indigo-900 uppercase tracking-wider">
+                            Quick Pick
                           </span>
                         </div>
 
                         <p className="text-[11px] text-slate-600 leading-snug">
-                          Select which batch schedule to apply to all students today, or choose any subject below:
+                          Select a batch schedule to apply to all students today, or customize below:
                         </p>
 
-                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        <div className="grid grid-cols-1 gap-2 pt-0.5">
                           {masterEntries.map((ent, idx) => {
                             const bLabel = ent.batchLabel || `Batch ${idx + 1}`;
                             const subTitle = ent.customLabel || ent.subjectName || ent.subjectCode || `Batch ${idx + 1}`;
                             const isSelected =
                               (ent.customLabel
-                                ? periodType === "special" && customLabel === ent.customLabel
+                                ? periodType === "special" && customLabel.trim().toUpperCase() === ent.customLabel.trim().toUpperCase()
                                 : periodType === "subject" && ent.subjectId != null && String(ent.subjectId) === subjectId) &&
                               hrmsEmployeeId === (ent.facultyHrmsId || "");
 
@@ -1337,16 +1337,44 @@ function PeriodEditModal({
                                   );
                                 }}
                                 className={cn(
-                                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-all border cursor-pointer",
+                                  "w-full flex items-center justify-between rounded-xl border p-2.5 text-left transition-all cursor-pointer",
                                   isSelected
-                                    ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
-                                    : "bg-white text-indigo-900 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 shadow-2xs",
+                                    ? "border-indigo-600 bg-indigo-50/80 ring-2 ring-indigo-200/70 shadow-xs"
+                                    : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/80 shadow-2xs",
                                 )}
-                                title={`Apply ${bLabel} schedule (${subTitle}) to all students`}
                               >
-                                <span>Use {bLabel}:</span>
-                                <span className="max-w-[130px] truncate underline decoration-indigo-300">{subTitle}</span>
-                                {isSelected ? <Check className="h-3 w-3 shrink-0 ml-0.5" /> : null}
+                                <div className="min-w-0 flex-1 pr-2">
+                                  <div className="flex items-center gap-1.5 mb-0.5">
+                                    <span
+                                      className={cn(
+                                        "rounded px-1.5 py-0.2 text-[9px] font-bold uppercase tracking-wider",
+                                        isSelected ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700 border border-slate-200",
+                                      )}
+                                    >
+                                      {bLabel}
+                                    </span>
+                                    <span className="text-xs font-bold text-slate-900 truncate">
+                                      {subTitle}
+                                    </span>
+                                  </div>
+                                  {ent.facultyName && (
+                                    <p className="text-[11px] text-slate-600 truncate flex items-center gap-1">
+                                      <User className="h-2.5 w-2.5 text-slate-400" />
+                                      <span>{ent.facultyName}</span>
+                                      {ent.facultyHrmsId && <span className="text-slate-400">({ent.facultyHrmsId})</span>}
+                                    </p>
+                                  )}
+                                </div>
+                                <div
+                                  className={cn(
+                                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all",
+                                    isSelected
+                                      ? "border-indigo-600 bg-indigo-600 text-white"
+                                      : "border-slate-300 bg-white text-transparent",
+                                  )}
+                                >
+                                  <Check className="h-3 w-3 stroke-[3]" />
+                                </div>
                               </button>
                             );
                           })}
@@ -1354,44 +1382,47 @@ function PeriodEditModal({
                       </div>
                     )}
 
-                    {/* Period Mode Selector: Subject vs Special Class */}
+                    {/* Period Mode Selector: Subject vs Special Class vs Holiday */}
                     <div>
-                      <div className="flex rounded-lg border border-slate-200 bg-slate-100/90 p-0.5 text-xs mb-2.5">
+                      <div className="flex rounded-xl border border-slate-200 bg-slate-100/90 p-1 text-xs mb-3">
                         <button
                           type="button"
                           onClick={() => setPeriodType("subject")}
                           className={cn(
-                            "flex-1 rounded-md py-1 text-center font-bold transition-all cursor-pointer",
+                            "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
                             periodType === "subject"
                               ? "bg-white text-navy-900 shadow-xs"
                               : "text-slate-600 hover:text-slate-900",
                           )}
                         >
-                          Subject Class
+                          <BookOpen className="h-3.5 w-3.5" />
+                          <span>Subject Class</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => setPeriodType("special")}
                           className={cn(
-                            "flex-1 rounded-md py-1 text-center font-bold transition-all cursor-pointer",
+                            "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
                             periodType === "special"
                               ? "bg-white text-purple-900 shadow-xs ring-1 ring-purple-200"
                               : "text-slate-600 hover:text-slate-900",
                           )}
                         >
-                          Special Class
+                          <Sparkles className="h-3.5 w-3.5 text-purple-600" />
+                          <span>Special Class</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => setPeriodType("holiday")}
                           className={cn(
-                            "flex-1 rounded-md py-1 text-center font-bold transition-all cursor-pointer",
+                            "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
                             periodType === "holiday"
-                              ? "bg-white text-amber-900 shadow-xs ring-1 ring-amber-300 font-bold"
+                              ? "bg-white text-amber-900 shadow-xs ring-1 ring-amber-300"
                               : "text-slate-600 hover:text-slate-900",
                           )}
                         >
-                          Holiday
+                          <CalendarOff className="h-3.5 w-3.5 text-amber-600" />
+                          <span>Holiday</span>
                         </button>
                       </div>
 
@@ -1405,7 +1436,7 @@ function PeriodEditModal({
                             placeholder="e.g. Festival Holiday, Sports Day, Special Leave…"
                             value={holidayTitle}
                             onChange={(e) => setHolidayTitle(e.target.value)}
-                            className="h-9 w-full rounded-lg border border-amber-300 bg-white px-2.5 text-xs font-bold text-amber-950 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 mb-2"
+                            className="h-10 w-full rounded-xl border border-amber-300 bg-white px-3 text-xs font-bold text-amber-950 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200 mb-2"
                           />
                         </div>
                       ) : periodType === "subject" ? (
@@ -1414,7 +1445,7 @@ function PeriodEditModal({
                             Subject for {formatDate(fromYMD(date))}
                           </label>
                           <select
-                            className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                            className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer"
                             value={subjectId}
                             onChange={(e) => setSubjectId(e.target.value)}
                           >
@@ -1436,7 +1467,7 @@ function PeriodEditModal({
                             placeholder="e.g. CRT, LIBRARY, SPORTS…"
                             value={customLabel}
                             onChange={(e) => setCustomLabel(e.target.value.toUpperCase())}
-                            className="h-9 w-full rounded-lg border border-purple-300 bg-white px-2.5 text-xs font-bold text-purple-950 uppercase outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 mb-2"
+                            className="h-10 w-full rounded-xl border border-purple-300 bg-white px-3 text-xs font-bold text-purple-950 uppercase outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200 mb-2"
                           />
                           <div className="flex flex-wrap gap-1">
                             {["CRT", "LIBRARY", "SPORTS", "SEMINAR", "PLACEMENT", "PROJECT", "MENTORING", "FREE"].map((lbl) => (
@@ -1445,7 +1476,7 @@ function PeriodEditModal({
                                 type="button"
                                 onClick={() => setCustomLabel(lbl)}
                                 className={cn(
-                                  "rounded px-2 py-0.5 text-[10.5px] font-bold transition-all border cursor-pointer",
+                                  "rounded-md px-2 py-0.5 text-[10.5px] font-bold transition-all border cursor-pointer",
                                   customLabel === lbl
                                     ? "bg-purple-700 text-white border-purple-700 shadow-xs"
                                     : "bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100",
@@ -1465,16 +1496,21 @@ function PeriodEditModal({
                         Staff / Faculty for {formatDate(fromYMD(date))}
                       </label>
                       {selectedFaculty && !facultyOpen ? (
-                        <div className="flex items-center justify-between rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-xs">
-                          <div>
-                            <p className="font-semibold text-indigo-900">{selectedFaculty.name}</p>
-                            <p className="text-[10px] text-slate-500">
-                              {selectedFaculty.hrmsEmployeeId} · {selectedFaculty.department}
-                            </p>
+                        <div className="flex items-center justify-between rounded-xl border border-indigo-200 bg-white p-2.5 text-xs shadow-2xs">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 shrink-0">
+                              <User className="h-3.5 w-3.5" />
+                            </div>
+                            <div>
+                              <p className="font-bold text-slate-900">{selectedFaculty.name}</p>
+                              <p className="text-[10px] text-slate-500">
+                                {selectedFaculty.hrmsEmployeeId} {selectedFaculty.department ? `· ${selectedFaculty.department}` : ""}
+                              </p>
+                            </div>
                           </div>
                           <button
                             type="button"
-                            className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
+                            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline px-2 py-1 rounded cursor-pointer"
                             onClick={() => {
                               setHrmsEmployeeId("");
                               setFacultySearch("");
@@ -1485,33 +1521,41 @@ function PeriodEditModal({
                           </button>
                         </div>
                       ) : (
-                        <div className="relative rounded-lg border border-slate-300 bg-white">
-                          <input
-                            type="search"
-                            className="h-9 w-full px-2.5 text-xs outline-none rounded-lg"
-                            placeholder="Type to search faculty name or ID…"
-                            value={facultySearch}
-                            autoFocus={facultyOpen}
-                            onChange={(e) => {
-                              setFacultySearch(e.target.value);
-                              setFacultyOpen(true);
-                            }}
-                          />
+                        <div className="relative">
+                          <div className="relative rounded-xl border border-slate-300 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+                            <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                            <input
+                              type="search"
+                              className="h-10 w-full pl-9 pr-3 text-xs outline-none rounded-xl"
+                              placeholder="Type to search faculty name or ID…"
+                              value={facultySearch}
+                              autoFocus={facultyOpen}
+                              onChange={(e) => {
+                                setFacultySearch(e.target.value);
+                                setFacultyOpen(true);
+                              }}
+                            />
+                          </div>
                           {filteredFaculty.length > 0 && (
-                            <ul className="absolute top-full left-0 right-0 z-30 mt-1 max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg">
+                            <ul className="absolute top-full left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl divide-y divide-slate-100">
                               {filteredFaculty.map((f) => (
                                 <li key={f.hrmsEmployeeId}>
                                   <button
                                     type="button"
-                                    className="w-full px-2.5 py-1.5 text-left text-xs hover:bg-indigo-50 cursor-pointer"
+                                    className="w-full px-3 py-2 text-left text-xs hover:bg-indigo-50/70 transition-colors cursor-pointer flex items-center justify-between"
                                     onClick={() => {
                                       setHrmsEmployeeId(f.hrmsEmployeeId);
                                       setFacultySearch("");
                                       setFacultyOpen(false);
                                     }}
                                   >
-                                    <span className="font-semibold text-slate-800">{f.name}</span>
-                                    <span className="ml-1.5 text-[10px] text-slate-500">{f.hrmsEmployeeId}</span>
+                                    <div>
+                                      <span className="font-bold text-slate-800">{f.name}</span>
+                                      {f.department && <span className="ml-1.5 text-[10.5px] text-slate-500">· {f.department}</span>}
+                                    </div>
+                                    <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                      {f.hrmsEmployeeId}
+                                    </span>
                                   </button>
                                 </li>
                               ))}
@@ -1528,15 +1572,15 @@ function PeriodEditModal({
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g., Moved split to single class, Leave substitution"
+                        placeholder="e.g., Moved split to single class, Special combined lab"
                         value={remarks}
                         onChange={(e) => setRemarks(e.target.value)}
-                        className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs outline-none focus:border-indigo-500"
+                        className="h-9 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
                       />
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-3.5">
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Subject</span>
                       <p className="text-sm font-bold text-slate-900 mt-0.5">
@@ -1545,8 +1589,9 @@ function PeriodEditModal({
                     </div>
                     <div>
                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Faculty</span>
-                      <p className="text-sm font-semibold text-slate-800 mt-0.5">
-                        {currentOverride?.facultyName || masterEntry?.facultyName || "No faculty assigned"}
+                      <p className="text-sm font-semibold text-slate-800 mt-0.5 flex items-center gap-1.5">
+                        <User className="h-3.5 w-3.5 text-slate-400" />
+                        <span>{currentOverride?.facultyName || masterEntry?.facultyName || "No faculty assigned"}</span>
                       </p>
                     </div>
                     {currentOverride?.remarks && (
@@ -1565,7 +1610,7 @@ function PeriodEditModal({
                 )}
               </div>
 
-              <div className="mt-4 pt-3 border-t border-slate-200/80 text-[11px] text-slate-500">
+              <div className="pt-3 border-t border-slate-200/80 text-[11px] text-slate-500">
                 {canEdit ? (
                   <span>Affects {formatDate(fromYMD(date))} only and will be logged in Activity.</span>
                 ) : (
@@ -1577,17 +1622,17 @@ function PeriodEditModal({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50 px-6 py-3.5">
+        <div className="flex items-center justify-between border-t border-slate-200/80 bg-slate-50/90 px-5 sm:px-6 py-3.5 shrink-0">
           {canEdit && currentOverride ? (
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-900 cursor-pointer"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-700 hover:text-rose-900 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
               onClick={handleRevert}
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              <RotateCcw className="h-3.5 w-3.5 text-rose-600" />
               <span>
                 {isMasterSplit
-                  ? "Revert to Master Timetable (Restore Split Sections)"
+                  ? "Revert to Master Timetable (Restore Split Batches)"
                   : "Revert to Master Timetable"}
               </span>
             </button>
@@ -1595,26 +1640,42 @@ function PeriodEditModal({
             <span />
           )}
 
-          <div className="flex gap-2">
-            <Button variant="secondary" onClick={onClose}>
+          <div className="flex items-center gap-2.5 ml-auto">
+            <button
+              type="button"
+              onClick={onClose}
+              className="h-9 px-4 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all cursor-pointer shadow-2xs"
+            >
               {canEdit ? "Cancel" : "Close"}
-            </Button>
+            </button>
             {canEdit && (
-              <Button onClick={handleSave}>
-                {isMasterSplit && !currentOverride
-                  ? selectedSlotIds.length > 1
-                    ? `Move Split to Single (${selectedSlotIds.length} Periods)`
-                    : "Move Split to Single Class"
-                  : selectedSlotIds.length > 1
-                  ? `Save Changed Periods (${selectedSlotIds.length})`
-                  : "Save Change"}
-              </Button>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="h-9 px-4.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                {isMasterSplit && !currentOverride ? (
+                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {isMasterSplit && !currentOverride
+                    ? selectedSlotIds.length > 1
+                      ? `Move Split to Single (${selectedSlotIds.length} Periods)`
+                      : "Move Split to Single Class"
+                    : selectedSlotIds.length > 1
+                    ? `Save Changed Periods (${selectedSlotIds.length})`
+                    : "Save Change"}
+                </span>
+              </button>
             )}
           </div>
         </div>
       </div>
     </div>
   );
+
 }
 
 type PeriodSlotItem = {

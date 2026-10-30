@@ -13,6 +13,7 @@ import {
   getMasterVsChangedTimetableReport,
   declareDailyTimetableHoliday,
 } from "../services/today-timetable.service.js";
+import { invalidateDashboardCache } from "../services/principal-dashboard.service.js";
 
 export const todayTimetableRouter = Router();
 
@@ -212,6 +213,7 @@ todayTimetableRouter.post("/override", requirePermission("today_timetable.edit",
       });
     }
 
+    invalidateDashboardCache();
     res.json(lastResult ?? { success: true });
   } catch (error) {
     sendAuthzError(res, error, next);
@@ -282,6 +284,7 @@ todayTimetableRouter.post("/holiday", requirePermission("today_timetable.edit", 
       actorName: req.authUser?.name || req.authUser?.username || "Authorized User",
     });
 
+    invalidateDashboardCache();
     res.json(result);
   } catch (error) {
     sendAuthzError(res, error, next);

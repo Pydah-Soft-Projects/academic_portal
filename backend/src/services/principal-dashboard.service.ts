@@ -6,6 +6,7 @@ import {
   isTeachingGroup,
   HRMS_EMPLOYEE_PROJECTION,
 } from "./hrms-staff.service.js";
+import { ensureSessionsForDate } from "./class-sessions.service.js";
 import type { AuthzContext } from "../authz/authorization.service.js";
 
 export type PrincipalDashboardFilters = {
@@ -165,6 +166,25 @@ export async function getPrincipalDashboardData(
   const activeBranchIds = scopedBranches.map((b) => b.id);
   const branchInSql = activeBranchIds.length > 0 ? activeBranchIds.map(() => "?").join(",") : "0";
 
+  const todayIso = new Date().toISOString().slice(0, 10);
+  if (activeBranchIds.length > 0 && selectedDateStr <= todayIso) {
+    try {
+      await ensureSessionsForDate(selectedDateStr, {
+        collegeIds: allowedCollegeIds.length > 0 ? allowedCollegeIds : undefined,
+        courseId: filters.courseId,
+        branchId: filters.branchId,
+        branchIds: activeBranchIds,
+        academicYear: filters.academicYear,
+        semester:
+          filters.semester && filters.semester !== "all"
+            ? Number(filters.semester)
+            : undefined,
+      });
+    } catch (error) {
+      console.warn("Could not ensure principal dashboard class sessions", error);
+    }
+  }
+
   let minActiveSemStart = new Date(Date.now() - 150 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
   for (const r of courseSemRanges) {
     if (r.sem_start && r.sem_start < minActiveSemStart) {
@@ -188,7 +208,7 @@ export async function getPrincipalDashboardData(
     id: number;
     branch_id: number;
     status: string;
-    faculty_staff_link_id: number;
+    faculty_staff_link_id: number | null;
     display_name: string | null;
     subject_name: string | null;
     subject_code: string | null;
@@ -196,6 +216,33 @@ export async function getPrincipalDashboardData(
     end_time: string | null;
     post_id: number | null;
     posted_at: string | null;
+    section_name: string | null;
+    year_of_study: number | null;
+    slot_label: string | null;
+    slot_type: string | null;
+    branch_name: string | null;
+  };
+
+  type DailyTimetableActivityRow = RowDataPacket & {
+    id: number;
+    timetable_date: string;
+    college_id: number;
+    branch_id: number;
+    batch: string;
+    semester: number;
+    section_name: string | null;
+    timing_slot_id: number;
+    slot_label: string | null;
+    slot_time: string | null;
+    master_subject_id: number | null;
+    master_subject_code: string | null;
+    master_subject_name: string | null;
+    master_faculty_name: string | null;
+    new_subject_id: number | null;
+    new_subject_code: string | null;
+    new_subject_name: string | null;
+    new_faculty_name: string | null;
+    change_type: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
   };
 
   type AssignedFacultyStaffRow = RowDataPacket & {
@@ -338,6 +385,7 @@ export async function getPrincipalDashboardData(
     userRows,
     prevStuRows,
     prevFacRows,
+    dailyActivityRows,
   ] = await Promise.all([
     // 1. Scoped Teaching Faculty
     hasActiveBranches
@@ -380,11 +428,18 @@ export async function getPrincipalDashboardData(
             cs.subject_code,
             cs.start_time,
             cs.end_time,
+            cs.section_name,
+            cs.year_of_study,
+            ts.label as slot_label,
+            ts.slot_type,
+            cb.name as branch_name,
             ap.id as post_id,
             ap.posted_at
           FROM ap_class_sessions cs
-          JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
+          LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
           LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+          LEFT JOIN ap_timing_template_slots ts ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
+          LEFT JOIN course_branches cb ON cb.id = cs.branch_id
           WHERE ${dateClause} AND cs.branch_id IN (${branchInSql})
           `,
           [...dateParams, ...activeBranchIds],
@@ -403,10 +458,11 @@ export async function getPrincipalDashboardData(
           `
           SELECT execution_status, replacement_faculty_staff_link_id, COUNT(*) as cnt
           FROM ap_faculty_substitution_details
-          WHERE session_date = ? AND branch_id IN (${branchInSql})
+          WHERE session_date ${isDateRange ? "BETWEEN ? AND ?" : "= ?"}
+            AND branch_id IN (${branchInSql})
           GROUP BY execution_status, replacement_faculty_staff_link_id
           `,
-          [selectedDateStr, ...activeBranchIds],
+          [...(isDateRange ? [startDateStr, endDateStr] : [selectedDateStr]), ...activeBranchIds],
         ).catch(() => [])
       : Promise.resolve([]),
 
@@ -812,6 +868,27 @@ export async function getPrincipalDashboardData(
           [...activeBranchIds, selectedDateStr],
         ).catch(() => [{ prev_scheduled: 0, prev_present: 0 }])
       : Promise.resolve([{ prev_scheduled: 0, prev_present: 0 }]),
+
+    hasActiveBranches
+      ? queryAcademic<DailyTimetableActivityRow[]>(
+          `
+          SELECT
+            id, timetable_date, college_id, branch_id, batch, semester, section_name,
+            timing_slot_id, slot_label, slot_time,
+            master_subject_id, master_subject_code, master_subject_name, master_faculty_name,
+            new_subject_id, new_subject_code, new_subject_name, new_faculty_name,
+            change_type
+          FROM ap_daily_timetable_activities
+          WHERE timetable_date ${isDateRange ? "BETWEEN ? AND ?" : "= ?"}
+            AND branch_id IN (${branchInSql})
+          ORDER BY id ASC
+          `,
+          [...(isDateRange ? [startDateStr, endDateStr] : [selectedDateStr]), ...activeBranchIds],
+        ).catch((error) => {
+          console.warn("Could not load daily timetable changes for principal dashboard", error);
+          return [];
+        })
+      : Promise.resolve([]),
   ]);
 
   // Fallback for assigned staff if specific class sessions had none
@@ -855,17 +932,34 @@ export async function getPrincipalDashboardData(
 
   for (const s of todaySessions) {
     if (s.status === "posted" || s.status === "completed" || s.post_id != null) {
-      presentFacultyIds.add(s.faculty_staff_link_id);
+      if (s.faculty_staff_link_id != null) presentFacultyIds.add(s.faculty_staff_link_id);
       postedSessionsCount++;
-    } else if (s.status === "cancelled") {
-      cancelledFacultyIds.add(s.faculty_staff_link_id);
+    } else if (s.status === "cancelled" || s.status === "holiday") {
+      if (s.faculty_staff_link_id != null) cancelledFacultyIds.add(s.faculty_staff_link_id);
       cancelledSessionsCount++;
       branchCancelledMap.set(s.branch_id, (branchCancelledMap.get(s.branch_id) || 0) + 1);
     } else if (s.status === "scheduled") {
-      scheduledFacultyIds.add(s.faculty_staff_link_id);
+      if (s.faculty_staff_link_id != null) scheduledFacultyIds.add(s.faculty_staff_link_id);
       scheduledSessionsCount++;
     }
   }
+
+  const latestDailyActivityMap = new Map<string, DailyTimetableActivityRow>();
+  for (const activity of dailyActivityRows) {
+    const key = [
+      activity.timetable_date,
+      activity.college_id,
+      activity.branch_id,
+      activity.semester,
+      activity.batch.trim().toLowerCase(),
+      (activity.section_name || "").trim().toLowerCase(),
+      activity.timing_slot_id,
+    ].join("_");
+    latestDailyActivityMap.set(key, activity);
+  }
+  const dailyAdjustedActivities = [...latestDailyActivityMap.values()].filter(
+    (activity) => activity.change_type !== "HOLIDAY",
+  );
 
   // Substitutions / Leave Requests on Date
   let facultyLeaveCount = 0;
@@ -882,6 +976,7 @@ export async function getPrincipalDashboardData(
     }
     facultyLeaveCount += Number(sub.cnt);
   }
+  adjustedClassesCount += dailyAdjustedActivities.length;
 
   // Pending approval requests in ap_requests
   let pendingRequestsCount = 0;
@@ -2170,6 +2265,49 @@ export async function getPrincipalDashboardData(
   }
 
   // Build Faculty Attendance & Class Adjustment metrics
+  const branchNameMap = new Map<number, string>();
+  for (const b of scopedBranches) branchNameMap.set(b.id, b.name);
+
+  // Build per-session detail list for affected classes (cancelled + scheduled/pending)
+  const affectedClassesList = [
+    ...todaySessions
+      .filter((s) => s.status === "cancelled" || s.status === "holiday" || s.status === "scheduled")
+      .map((s) => ({
+        id: s.id,
+        status: s.status === "cancelled" || s.status === "holiday" ? "cancelled" as const : "scheduled" as const,
+        facultyName: s.display_name || "Unknown",
+        subjectName: s.subject_name || "—",
+        subjectCode: s.subject_code || null,
+        startTime: s.start_time || null,
+        endTime: s.end_time || null,
+        sectionName: s.section_name || null,
+        yearOfStudy: s.year_of_study || null,
+        slotLabel: s.slot_label || null,
+        slotType: s.slot_type || null,
+        branchName: s.branch_name || branchNameMap.get(s.branch_id) || null,
+        branchId: s.branch_id,
+      })),
+    ...dailyAdjustedActivities.map((activity) => {
+      const [startTime, endTime] = (activity.slot_time || "").split(" - ", 2);
+      const reverted = activity.change_type === "REVERTED_TO_MASTER";
+      return {
+        id: activity.id,
+        status: "adjusted" as const,
+        facultyName: (reverted ? activity.master_faculty_name : activity.new_faculty_name) || "Unknown",
+        subjectName: (reverted ? activity.master_subject_name : activity.new_subject_name) || "—",
+        subjectCode: (reverted ? activity.master_subject_code : activity.new_subject_code) || null,
+        startTime: startTime || null,
+        endTime: endTime || null,
+        sectionName: activity.section_name || null,
+        yearOfStudy: null,
+        slotLabel: activity.slot_label || `Slot ${activity.timing_slot_id}`,
+        slotType: null,
+        branchName: branchNameMap.get(activity.branch_id) || null,
+        branchId: activity.branch_id,
+      };
+    }),
+  ];
+
   const facultyAttendanceAndAdjustment = {
     facultyStatus: {
       present: livePresent,
@@ -2188,6 +2326,7 @@ export async function getPrincipalDashboardData(
       cancelled: cancelledSessionsCount,
       pending: scheduledSessionsCount,
     },
+    affectedClassesList,
     employeeWiseDetails,
     hrmsLeaves: hrmsLeavesList,
     hrmsOds: hrmsOdsList,
