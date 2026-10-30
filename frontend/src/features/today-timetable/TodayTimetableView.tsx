@@ -22,6 +22,7 @@ import {
   BookOpen,
   CheckCircle,
   CalendarOff,
+  ArrowRightLeft,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
@@ -735,6 +736,7 @@ function PeriodEditModal({
   slot,
   date,
   dayLabel,
+  masterCell,
   masterEntry,
   currentOverride,
   candidateSlots = [],
@@ -748,6 +750,7 @@ function PeriodEditModal({
   candidateSlots?: Array<{ id: number; label: string; startTime: string; endTime: string; slotType?: string; isAssignable?: boolean }>;
   date: string;
   dayLabel: string;
+  masterCell?: SlotCell | null;
   masterEntry: SlotCellEntry | null;
   currentOverride: PeriodOverride | null;
   subjects: PlannerResponse["subjects"];
@@ -758,9 +761,21 @@ function PeriodEditModal({
     isRevert: boolean;
     remarks: string;
     slotIds?: number[];
+    isMoveSplitToSingle?: boolean;
+    masterSubjectName?: string;
+    masterFacultyName?: string;
   }) => void;
   onClose: () => void;
 }) {
+  const masterEntries = useMemo(() => {
+    if (masterCell?.entries && masterCell.entries.length > 0) {
+      return masterCell.entries;
+    }
+    return masterEntry ? [masterEntry] : [];
+  }, [masterCell, masterEntry]);
+
+  const isMasterSplit = masterEntries.length > 1;
+
   const currentSlotIndex = useMemo(() => {
     if (!candidateSlots || candidateSlots.length === 0) return -1;
     return candidateSlots.findIndex((s) => s.id === slot.id);
@@ -823,7 +838,8 @@ function PeriodEditModal({
 
   const isPeriodModified = Boolean(
     currentOverride &&
-      (currentOverride.subjectId !== (masterEntry?.subjectId != null ? String(masterEntry.subjectId) : "") ||
+      (isMasterSplit ||
+        currentOverride.subjectId !== (masterEntry?.subjectId != null ? String(masterEntry.subjectId) : "") ||
         currentOverride.hrmsEmployeeId !== (masterEntry?.facultyHrmsId || "") ||
         (currentOverride.customLabel || "").trim().toLowerCase() !== (masterEntry?.customLabel || "").trim().toLowerCase()),
   );
@@ -831,6 +847,26 @@ function PeriodEditModal({
   const handleSave = () => {
     if (!canEdit) return;
     const fac = faculty.find((f) => f.hrmsEmployeeId === hrmsEmployeeId);
+
+    const masterSplitSubjectSummary = isMasterSplit
+      ? `Split: ` +
+        masterEntries
+          .map(
+            (e, idx) =>
+              `${e.batchLabel || `Batch ${idx + 1}`}: ${e.customLabel || e.subjectName || e.subjectCode || "Free"}`,
+          )
+          .join(" | ")
+      : undefined;
+
+    const masterSplitFacultySummary = isMasterSplit
+      ? masterEntries
+          .map((e, idx) => `${e.batchLabel || `B${idx + 1}`}: ${e.facultyName || "None"}`)
+          .join(" | ")
+      : undefined;
+
+    const autoRemarks =
+      remarks.trim() ||
+      (isMasterSplit ? "Moved split sections to single class" : "");
 
     if (periodType === "holiday") {
       const cleanHoliday = holidayTitle.trim() || "Declared Holiday";
@@ -845,19 +881,22 @@ function PeriodEditModal({
           customLabel: cleanHoliday,
           hrmsEmployeeId: "",
           facultyName: "",
-          remarks: remarks || `Holiday: ${cleanHoliday}`,
+          remarks: autoRemarks || `Holiday: ${cleanHoliday}`,
         },
         isRevert: false,
-        remarks: remarks || `Holiday: ${cleanHoliday}`,
+        remarks: autoRemarks || `Holiday: ${cleanHoliday}`,
         slotIds: selectedSlotIds,
+        isMoveSplitToSingle: isMasterSplit,
+        masterSubjectName: masterSplitSubjectSummary,
+        masterFacultyName: masterSplitFacultySummary,
       });
       return;
     }
 
     if (periodType === "special") {
       const cleanCustom = customLabel.trim();
-      if (!cleanCustom && !hrmsEmployeeId) {
-        onSave({ override: null, isRevert: true, remarks, slotIds: selectedSlotIds });
+      if (!cleanCustom && !hrmsEmployeeId && !isMasterSplit) {
+        onSave({ override: null, isRevert: true, remarks: autoRemarks, slotIds: selectedSlotIds });
         return;
       }
       onSave({
@@ -867,15 +906,18 @@ function PeriodEditModal({
           slotTime: `${slot.startTime}–${slot.endTime}`,
           subjectId: "",
           subjectCode: "",
-          subjectName: cleanCustom,
-          customLabel: cleanCustom,
+          subjectName: cleanCustom || "Special Class",
+          customLabel: cleanCustom || "Special Class",
           hrmsEmployeeId,
           facultyName: fac?.name ?? "",
-          remarks,
+          remarks: autoRemarks,
         },
         isRevert: false,
-        remarks,
+        remarks: autoRemarks,
         slotIds: selectedSlotIds,
+        isMoveSplitToSingle: isMasterSplit,
+        masterSubjectName: masterSplitSubjectSummary,
+        masterFacultyName: masterSplitFacultySummary,
       });
       return;
     }
@@ -883,8 +925,8 @@ function PeriodEditModal({
     const sub = subjects.find((s) => String(s.id) === subjectId);
 
     // If completely cleared, revert to master
-    if (!sub && !hrmsEmployeeId) {
-      onSave({ override: null, isRevert: true, remarks, slotIds: selectedSlotIds });
+    if (!sub && !hrmsEmployeeId && !isMasterSplit) {
+      onSave({ override: null, isRevert: true, remarks: autoRemarks, slotIds: selectedSlotIds });
       return;
     }
 
@@ -898,17 +940,27 @@ function PeriodEditModal({
         subjectName: sub?.name ?? "",
         hrmsEmployeeId,
         facultyName: fac?.name ?? "",
-        remarks,
+        remarks: autoRemarks,
       },
       isRevert: false,
-      remarks,
+      remarks: autoRemarks,
       slotIds: selectedSlotIds,
+      isMoveSplitToSingle: isMasterSplit,
+      masterSubjectName: masterSplitSubjectSummary,
+      masterFacultyName: masterSplitFacultySummary,
     });
   };
 
   const handleRevert = () => {
     if (!canEdit) return;
-    onSave({ override: null, isRevert: true, remarks: "Reverted to master timetable", slotIds: selectedSlotIds });
+    onSave({
+      override: null,
+      isRevert: true,
+      remarks: isMasterSplit
+        ? "Reverted to master timetable (restored split sections)"
+        : "Reverted to master timetable",
+      slotIds: selectedSlotIds,
+    });
   };
 
   return (
@@ -947,6 +999,31 @@ function PeriodEditModal({
                 <p className="font-bold">Declared Holiday for {formatDate(fromYMD(date))}</p>
                 <p className="text-[11px] text-amber-800 mt-0.5">
                   This class has been declared as a holiday ({currentOverride?.customLabel || currentOverride?.subjectName || "Holiday"}). Master Timetable remains unchanged.
+                </p>
+              </div>
+            </div>
+          ) : isMasterSplit && currentOverride ? (
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 text-xs text-indigo-950 flex items-start gap-2.5 shadow-2xs">
+              <CheckCircle className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-bold">Split Moved to Single Class for {formatDate(fromYMD(date))}</p>
+                <p className="text-[11px] text-indigo-800 mt-0.5">
+                  Master timetable split sections have been merged into a single combined class for all students on this date. Master Timetable remains unchanged.
+                </p>
+              </div>
+            </div>
+          ) : isMasterSplit && !currentOverride ? (
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/80 p-3 text-xs text-indigo-950 flex items-start gap-2.5 shadow-2xs">
+              <Users className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <p className="font-bold">Split Sections in Master Timetable ({masterEntries.length} Batches)</p>
+                  <span className="rounded bg-indigo-200/90 px-2 py-0.5 text-[10px] font-bold text-indigo-900">
+                    Master Split
+                  </span>
+                </div>
+                <p className="text-[11px] text-indigo-800 mt-0.5">
+                  Master Timetable runs parallel batches for this slot. You can move this split to a single common period for {formatDate(fromYMD(date))}.
                 </p>
               </div>
             </div>
@@ -1059,38 +1136,97 @@ function PeriodEditModal({
                     </div>
                   </div>
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 border border-emerald-200">
-                    Master Baseline
+                    {isMasterSplit ? `Split (${masterEntries.length} Batches)` : "Master Baseline"}
                   </span>
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Scheduled Subject</span>
-                    <p className="text-sm font-bold text-slate-900 mt-0.5">
-                      {masterEntry?.customLabel || masterEntry?.subjectName || masterEntry?.subjectCode || "Free / Unassigned Period"}
-                    </p>
-                    {masterEntry?.subjectCode && masterEntry.subjectCode !== masterEntry.subjectName && (
-                      <p className="text-xs text-slate-500 mt-0.5 font-medium">Code: {masterEntry.subjectCode}</p>
-                    )}
-                  </div>
+                {isMasterSplit ? (
+                  <div className="space-y-2.5">
+                    <div className="rounded-lg bg-indigo-50/80 border border-indigo-200 p-2 text-xs text-indigo-950 font-semibold flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Users className="h-3.5 w-3.5 text-indigo-600" />
+                        Split batches in master timetable:
+                      </span>
+                      <span className="rounded bg-indigo-200 px-1.5 py-0.2 text-[10px] font-bold text-indigo-900">
+                        {masterEntries.length} Parallel Batches
+                      </span>
+                    </div>
 
-                  <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Assigned Faculty</span>
-                    <p className="text-sm font-semibold text-slate-800 mt-0.5">
-                      {masterEntry?.facultyName || "No faculty assigned"}
-                    </p>
-                    {masterEntry?.facultyHrmsId && (
-                      <p className="text-xs text-slate-500 mt-0.5">ID: {masterEntry.facultyHrmsId}</p>
-                    )}
-                  </div>
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                      {masterEntries.map((ent, eIdx) => {
+                        const bLabel = ent.batchLabel || `Batch ${eIdx + 1}`;
+                        return (
+                          <div key={eIdx} className="rounded-lg border border-slate-200 bg-white p-2.5 space-y-1 shadow-2xs">
+                            <div className="flex items-center justify-between">
+                              <span className="rounded bg-navy-900 text-white font-bold px-2 py-0.2 text-[9.5px] uppercase tracking-wider">
+                                {bLabel}
+                              </span>
+                              {ent.roomLabel && (
+                                <span className="text-[10px] font-medium text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
+                                  Room: {ent.roomLabel}
+                                </span>
+                              )}
+                            </div>
+                            <div>
+                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Subject</span>
+                              <p className="text-xs font-bold text-slate-900">
+                                {ent.customLabel || ent.subjectName || ent.subjectCode || "Free / Unassigned"}
+                              </p>
+                              {ent.subjectCode && ent.subjectCode !== ent.subjectName && (
+                                <p className="text-[10.5px] text-slate-500 font-medium">Code: {ent.subjectCode}</p>
+                              )}
+                            </div>
+                            <div>
+                              <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Faculty</span>
+                              <p className="text-xs font-semibold text-slate-800">
+                                {ent.facultyName || "No faculty assigned"}
+                              </p>
+                              {ent.facultyHrmsId && (
+                                <p className="text-[10px] text-slate-500">ID: {ent.facultyHrmsId}</p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
 
-                  <div>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timing & Slot</span>
-                    <p className="text-xs font-medium text-slate-700 mt-0.5">
-                      {slot.label} · {slot.startTime}–{slot.endTime}
-                    </p>
+                    <div className="pt-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timing & Slot</span>
+                      <p className="text-xs font-medium text-slate-700 mt-0.5">
+                        {slot.label} · {slot.startTime}–{slot.endTime}
+                      </p>
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Scheduled Subject</span>
+                      <p className="text-sm font-bold text-slate-900 mt-0.5">
+                        {masterEntry?.customLabel || masterEntry?.subjectName || masterEntry?.subjectCode || "Free / Unassigned Period"}
+                      </p>
+                      {masterEntry?.subjectCode && masterEntry.subjectCode !== masterEntry.subjectName && (
+                        <p className="text-xs text-slate-500 mt-0.5 font-medium">Code: {masterEntry.subjectCode}</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Assigned Faculty</span>
+                      <p className="text-sm font-semibold text-slate-800 mt-0.5">
+                        {masterEntry?.facultyName || "No faculty assigned"}
+                      </p>
+                      {masterEntry?.facultyHrmsId && (
+                        <p className="text-xs text-slate-500 mt-0.5">ID: {masterEntry.facultyHrmsId}</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Timing & Slot</span>
+                      <p className="text-xs font-medium text-slate-700 mt-0.5">
+                        {slot.label} · {slot.startTime}–{slot.endTime}
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="mt-4 pt-3 border-t border-slate-200/80 text-[11px] text-slate-500 flex items-center gap-1.5">
@@ -1127,17 +1263,97 @@ function PeriodEditModal({
                   <span
                     className={cn(
                       "text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border",
-                      isPeriodModified
+                      isMasterSplit
+                        ? currentOverride
+                          ? "bg-indigo-100 text-indigo-900 border-indigo-300"
+                          : "bg-indigo-50 text-indigo-800 border-indigo-200"
+                        : isPeriodModified
                         ? "bg-rose-100 text-rose-800 border-rose-200"
                         : "bg-indigo-100 text-indigo-800 border-indigo-200",
                     )}
                   >
-                    {isPeriodModified ? "Changed" : "Matches Master"}
+                    {isMasterSplit
+                      ? currentOverride
+                        ? "Single Class (Split Moved to Single)"
+                        : "Move Split to Single"
+                      : isPeriodModified
+                      ? "Changed"
+                      : "Matches Master"}
                   </span>
                 </div>
 
                 {canEdit ? (
                   <div className="space-y-3">
+                    {/* When master is split, render the Move Split to Single quick-actions panel */}
+                    {isMasterSplit && (
+                      <div className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50/90 to-blue-50/70 p-3 space-y-2 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <ArrowRightLeft className="h-4 w-4 text-indigo-700" />
+                            <span className="text-xs font-bold text-indigo-950">
+                              Move Split Sections to Single Class
+                            </span>
+                          </div>
+                          <span className="rounded bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 shadow-2xs">
+                            Combine All Batches
+                          </span>
+                        </div>
+
+                        <p className="text-[11px] text-slate-600 leading-snug">
+                          Select which batch schedule to apply to all students today, or choose any subject below:
+                        </p>
+
+                        <div className="flex flex-wrap gap-1.5 pt-0.5">
+                          {masterEntries.map((ent, idx) => {
+                            const bLabel = ent.batchLabel || `Batch ${idx + 1}`;
+                            const subTitle = ent.customLabel || ent.subjectName || ent.subjectCode || `Batch ${idx + 1}`;
+                            const isSelected =
+                              (ent.customLabel
+                                ? periodType === "special" && customLabel === ent.customLabel
+                                : periodType === "subject" && ent.subjectId != null && String(ent.subjectId) === subjectId) &&
+                              hrmsEmployeeId === (ent.facultyHrmsId || "");
+
+                            return (
+                              <button
+                                key={idx}
+                                type="button"
+                                onClick={() => {
+                                  if (ent.customLabel) {
+                                    setPeriodType("special");
+                                    setCustomLabel(ent.customLabel);
+                                    setSubjectId("");
+                                  } else {
+                                    setPeriodType("subject");
+                                    setSubjectId(ent.subjectId ? String(ent.subjectId) : "");
+                                    setCustomLabel("");
+                                  }
+                                  setHrmsEmployeeId(ent.facultyHrmsId || "");
+                                  setFacultySearch("");
+                                  setFacultyOpen(false);
+                                  setRemarks(
+                                    remarks.trim() && !remarks.includes("Moved split")
+                                      ? remarks
+                                      : `Moved split to single class (${bLabel} schedule applied to all students)`
+                                  );
+                                }}
+                                className={cn(
+                                  "flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold transition-all border cursor-pointer",
+                                  isSelected
+                                    ? "bg-indigo-600 text-white border-indigo-600 shadow-xs"
+                                    : "bg-white text-indigo-900 border-indigo-200 hover:bg-indigo-100 hover:border-indigo-300 shadow-2xs",
+                                )}
+                                title={`Apply ${bLabel} schedule (${subTitle}) to all students`}
+                              >
+                                <span>Use {bLabel}:</span>
+                                <span className="max-w-[130px] truncate underline decoration-indigo-300">{subTitle}</span>
+                                {isSelected ? <Check className="h-3 w-3 shrink-0 ml-0.5" /> : null}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Period Mode Selector: Subject vs Special Class */}
                     <div>
                       <div className="flex rounded-lg border border-slate-200 bg-slate-100/90 p-0.5 text-xs mb-2.5">
@@ -1258,7 +1474,7 @@ function PeriodEditModal({
                           </div>
                           <button
                             type="button"
-                            className="text-[11px] font-bold text-indigo-600 hover:underline"
+                            className="text-[11px] font-bold text-indigo-600 hover:underline cursor-pointer"
                             onClick={() => {
                               setHrmsEmployeeId("");
                               setFacultySearch("");
@@ -1287,7 +1503,7 @@ function PeriodEditModal({
                                 <li key={f.hrmsEmployeeId}>
                                   <button
                                     type="button"
-                                    className="w-full px-2.5 py-1.5 text-left text-xs hover:bg-indigo-50"
+                                    className="w-full px-2.5 py-1.5 text-left text-xs hover:bg-indigo-50 cursor-pointer"
                                     onClick={() => {
                                       setHrmsEmployeeId(f.hrmsEmployeeId);
                                       setFacultySearch("");
@@ -1312,7 +1528,7 @@ function PeriodEditModal({
                       </label>
                       <input
                         type="text"
-                        placeholder="e.g., Leave substitution, Special revision session"
+                        placeholder="e.g., Moved split to single class, Leave substitution"
                         value={remarks}
                         onChange={(e) => setRemarks(e.target.value)}
                         className="h-8 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-xs outline-none focus:border-indigo-500"
@@ -1365,11 +1581,15 @@ function PeriodEditModal({
           {canEdit && currentOverride ? (
             <button
               type="button"
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-900"
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 hover:text-amber-900 cursor-pointer"
               onClick={handleRevert}
             >
               <RotateCcw className="h-3.5 w-3.5" />
-              <span>Revert to Master Timetable</span>
+              <span>
+                {isMasterSplit
+                  ? "Revert to Master Timetable (Restore Split Sections)"
+                  : "Revert to Master Timetable"}
+              </span>
             </button>
           ) : (
             <span />
@@ -1381,7 +1601,11 @@ function PeriodEditModal({
             </Button>
             {canEdit && (
               <Button onClick={handleSave}>
-                {selectedSlotIds.length > 1
+                {isMasterSplit && !currentOverride
+                  ? selectedSlotIds.length > 1
+                    ? `Move Split to Single (${selectedSlotIds.length} Periods)`
+                    : "Move Split to Single Class"
+                  : selectedSlotIds.length > 1
                   ? `Save Changed Periods (${selectedSlotIds.length})`
                   : "Save Change"}
               </Button>
@@ -1422,6 +1646,7 @@ function TodayPeriodGrid({
   isChanged: (slotId: number) => boolean;
   onSlotClick: (
     slot: { id: number; label: string; startTime: string; endTime: string },
+    masterCell: SlotCell | null,
     masterEntry: SlotCellEntry | null,
   ) => void;
 }) {
@@ -1536,7 +1761,7 @@ function TodayPeriodGrid({
                 <button
                   key={slot.id}
                   type="button"
-                  onClick={() => onSlotClick(slot, masterEntry)}
+                  onClick={() => onSlotClick(slot, masterCell, masterEntry)}
                   className="group relative flex flex-col justify-between rounded-xl border border-purple-200 bg-purple-50/50 p-2.5 text-left min-h-[110px] shadow-2xs hover:shadow-md hover:border-purple-300 transition-all cursor-pointer"
                   title={`Click to view details for ${slot.label}`}
                 >
@@ -1574,7 +1799,7 @@ function TodayPeriodGrid({
                 <button
                   key={slot.id}
                   type="button"
-                  onClick={() => onSlotClick(slot, masterEntry)}
+                  onClick={() => onSlotClick(slot, masterCell, masterEntry)}
                   className="group relative flex flex-col justify-between rounded-xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50/70 p-2.5 text-left min-h-[110px] shadow-2xs hover:shadow-md hover:border-amber-400 ring-1 ring-amber-200 transition-all cursor-pointer"
                   title={`Holiday declared: ${displaySubjectName || "Holiday"}`}
                 >
@@ -1614,7 +1839,7 @@ function TodayPeriodGrid({
               <button
                 key={slot.id}
                 type="button"
-                onClick={() => onSlotClick(slot, masterEntry)}
+                onClick={() => onSlotClick(slot, masterCell, masterEntry)}
                 className={cn(
                   "group relative flex flex-col justify-between rounded-xl border p-2.5 text-left min-h-[110px] shadow-2xs transition-all cursor-pointer",
                   !hasContent
@@ -1629,7 +1854,7 @@ function TodayPeriodGrid({
                   <div className="flex flex-col items-center justify-center h-full w-full my-auto text-center">
                     <span className="text-xs text-slate-400 italic">Free Period</span>
                   </div>
-                ) : isMultiBatch ? (
+                ) : isMultiBatch && !override ? (
                   <div className="w-full space-y-1.5 divide-y divide-slate-100">
                     {masterEntries.map((ent, eIdx) => (
                       <div key={eIdx} className={cn("text-left", eIdx > 0 ? "pt-1" : "")}>
@@ -1651,6 +1876,11 @@ function TodayPeriodGrid({
                   </div>
                 ) : (
                   <div>
+                    {isMultiBatch && override && (
+                      <span className="mb-1 inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 text-[8px] font-bold text-indigo-900 uppercase">
+                        Single (Combined)
+                      </span>
+                    )}
                     <p
                       className={cn(
                         "text-xs font-bold uppercase leading-snug line-clamp-2",
@@ -1684,7 +1914,12 @@ function TodayPeriodGrid({
                   {changed ? (
                     <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.2 text-[9px] font-extrabold text-rose-700 border border-rose-200">
                       <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-                      <span>Changed</span>
+                      <span>{isMultiBatch ? "Single · Changed" : "Changed"}</span>
+                    </span>
+                  ) : isMultiBatch ? (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-indigo-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                      <span>Split ({masterEntries.length} Batches)</span>
                     </span>
                   ) : hasContent ? (
                     <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-700">
@@ -1721,6 +1956,7 @@ function TodayPeriodGrid({
                 ? [masterCell.entry]
                 : [];
             const masterEntry = masterEntries[0] ?? null;
+            const isMultiBatch = masterEntries.length > 1;
             const override = getOverride(slot.id);
             const changed = isChanged(slot.id);
 
@@ -1777,7 +2013,7 @@ function TodayPeriodGrid({
                 <button
                   key={slot.id}
                   type="button"
-                  onClick={() => onSlotClick(slot, masterEntry)}
+                  onClick={() => onSlotClick(slot, masterCell, masterEntry)}
                   className="rounded-xl border-2 border-amber-300 bg-gradient-to-br from-amber-50 to-orange-50/70 p-3 flex flex-col justify-between text-left min-h-[96px] shadow-2xs hover:shadow-md ring-1 ring-amber-200 transition-all cursor-pointer"
                 >
                   <div>
@@ -1813,7 +2049,7 @@ function TodayPeriodGrid({
               <button
                 key={slot.id}
                 type="button"
-                onClick={() => onSlotClick(slot, masterEntry)}
+                onClick={() => onSlotClick(slot, masterCell, masterEntry)}
                 className={cn(
                   "rounded-xl border p-3 flex flex-col justify-between text-left min-h-[96px] shadow-2xs hover:shadow-md transition-all cursor-pointer",
                   changed
@@ -1840,8 +2076,33 @@ function TodayPeriodGrid({
                       </p>
                       <p className="text-[10px] text-purple-600 mt-0.5">Free / Special</p>
                     </div>
+                  ) : isMultiBatch && !override ? (
+                    <div className="w-full space-y-1 divide-y divide-slate-100">
+                      {masterEntries.map((ent, eIdx) => (
+                        <div key={eIdx} className={cn("text-left", eIdx > 0 ? "pt-1" : "")}>
+                          <div className="flex items-center gap-1">
+                            <span className="rounded bg-navy-100 text-navy-800 font-bold px-1 py-0.2 text-[8px] uppercase">
+                              {ent.batchLabel || `B${eIdx + 1}`}
+                            </span>
+                            <span className="text-xs font-bold text-navy-900 truncate" title={ent.subjectName || ent.subjectCode || ""}>
+                              {ent.subjectName || ent.subjectCode}
+                            </span>
+                          </div>
+                          {ent.facultyName && (
+                            <span className="text-[10px] text-slate-600 truncate block mt-0.5">
+                              {ent.facultyName}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   ) : hasContent ? (
                     <div>
+                      {isMultiBatch && override && (
+                        <span className="mb-1 inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 text-[8px] font-bold text-indigo-900 uppercase">
+                          Single (Combined)
+                        </span>
+                      )}
                       <p className="text-xs font-bold uppercase text-navy-900 line-clamp-2">
                         {displaySubjectName || "Unassigned"}
                       </p>
@@ -1863,12 +2124,17 @@ function TodayPeriodGrid({
                   {changed ? (
                     <span className="inline-flex items-center gap-1 text-[9px] font-extrabold text-rose-700">
                       <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-                      Changed
+                      <span>{isMultiBatch ? "Single · Changed" : "Changed"}</span>
+                    </span>
+                  ) : isMultiBatch ? (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-indigo-700">
+                      <span className="h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                      <span>Split ({masterEntries.length} Batches)</span>
                     </span>
                   ) : hasContent ? (
                     <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-emerald-700">
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                      Actual
+                      <span>Actual</span>
                     </span>
                   ) : (
                     <span className="text-[9px] text-slate-400">Available</span>
@@ -1968,6 +2234,7 @@ export function TodayTimetableView() {
 
   const [editingSlot, setEditingSlot] = useState<{
     slot: { id: number; label: string; startTime: string; endTime: string };
+    masterCell?: SlotCell | null;
     masterEntry: SlotCellEntry | null;
     cohort?: AllBatchesCohort;
   } | null>(null);
@@ -2293,13 +2560,6 @@ export function TodayTimetableView() {
     [planner, selectedDayName],
   );
 
-  function getMasterEntry(slotId: number): SlotCellEntry | null {
-    const cell = dayGrid[slotId];
-    if (!cell) return null;
-    if (Array.isArray(cell.entries) && cell.entries.length > 0) return cell.entries[0];
-    return cell.entry;
-  }
-
   function getSingleMasterCell(slotId: number): SlotCell | null {
     return dayGrid[slotId] ?? null;
   }
@@ -2309,18 +2569,21 @@ export function TodayTimetableView() {
     return dayCellMap[slotId] ?? null;
   }
 
-  function getCohortMasterEntry(cohort: AllBatchesCohort, slotId: number): SlotCellEntry | null {
-    const dayCellMap = (cohort.planner?.grid?.[selectedDayName] ?? {}) as Record<number, SlotCell>;
-    const cell = dayCellMap[slotId];
-    if (!cell) return null;
-    if (Array.isArray(cell.entries) && cell.entries.length > 0) return cell.entries[0];
-    return cell.entry;
-  }
-
   function isCohortPeriodChanged(cohort: AllBatchesCohort, slotId: number): boolean {
     const override = cohort.overrides?.[slotId];
     if (!override) return false;
-    const master = getCohortMasterEntry(cohort, slotId);
+    const cell = getCohortMasterCell(cohort, slotId);
+    const masterEntries =
+      cell?.entries && cell.entries.length > 0
+        ? cell.entries
+        : cell?.entry
+        ? [cell.entry]
+        : [];
+    if (masterEntries.length > 1) {
+      // Master has split sections; override turns it into a single combined period
+      return true;
+    }
+    const master = masterEntries[0] ?? null;
     if (!master) {
       return Boolean(override.subjectId || override.hrmsEmployeeId || override.customLabel || override.subjectName);
     }
@@ -2345,7 +2608,18 @@ export function TodayTimetableView() {
   function isPeriodChanged(slotId: number): boolean {
     const override = overrides[slotId];
     if (!override) return false;
-    const master = getMasterEntry(slotId);
+    const cell = getSingleMasterCell(slotId);
+    const masterEntries =
+      cell?.entries && cell.entries.length > 0
+        ? cell.entries
+        : cell?.entry
+        ? [cell.entry]
+        : [];
+    if (masterEntries.length > 1) {
+      // Master has split sections; override turns it into a single combined period
+      return true;
+    }
+    const master = masterEntries[0] ?? null;
     if (!master) {
       return Boolean(override.subjectId || override.hrmsEmployeeId || override.customLabel || override.subjectName);
     }
@@ -2388,9 +2662,12 @@ export function TodayTimetableView() {
     isRevert: boolean;
     remarks: string;
     slotIds?: number[];
+    isMoveSplitToSingle?: boolean;
+    masterSubjectName?: string;
+    masterFacultyName?: string;
   }) => {
     if (!editingSlot || isPastDate || !canChangeTimetable) return;
-    const { slot, masterEntry, cohort } = editingSlot;
+    const { slot, masterCell, masterEntry, cohort } = editingSlot;
 
     const newOverride = payload.override;
     const isRevert = payload.isRevert;
@@ -2468,6 +2745,33 @@ export function TodayTimetableView() {
         (cohort?.planner?.context as { courseId?: number } | undefined)?.courseId ||
         (filters.courseId !== "all" ? Number(filters.courseId) : (selectedBranch?.courseId || 1));
 
+      const masterEntries =
+        masterCell?.entries && masterCell.entries.length > 0
+          ? masterCell.entries
+          : masterEntry
+          ? [masterEntry]
+          : [];
+
+      const masterSubName =
+        payload.masterSubjectName ||
+        (masterEntries.length > 1
+          ? `Split: ` +
+            masterEntries
+              .map(
+                (e, idx) =>
+                  `${e.batchLabel || `Batch ${idx + 1}`}: ${e.customLabel || e.subjectName || e.subjectCode || "Free"}`,
+              )
+              .join(" | ")
+          : masterEntry?.customLabel || masterEntry?.subjectName);
+
+      const masterFacName =
+        payload.masterFacultyName ||
+        (masterEntries.length > 1
+          ? masterEntries
+              .map((e, idx) => `${e.batchLabel || `B${idx + 1}`}: ${e.facultyName || "None"}`)
+              .join(" | ")
+          : masterEntry?.facultyName);
+
       const body = {
         date: selectedDate,
         collegeId: targetCollegeId,
@@ -2484,9 +2788,9 @@ export function TodayTimetableView() {
 
         masterSubjectId: masterEntry?.subjectId,
         masterSubjectCode: masterEntry?.subjectCode,
-        masterSubjectName: masterEntry?.customLabel || masterEntry?.subjectName,
+        masterSubjectName: masterSubName,
         masterFacultyHrmsId: masterEntry?.facultyHrmsId,
-        masterFacultyName: masterEntry?.facultyName,
+        masterFacultyName: masterFacName,
 
         newSubjectId: newOverride?.subjectId ? Number(newOverride.subjectId) : null,
         newSubjectCode: newOverride?.subjectCode ?? null,
@@ -2494,7 +2798,7 @@ export function TodayTimetableView() {
         newFacultyHrmsId: newOverride?.hrmsEmployeeId ?? null,
         newFacultyName: newOverride?.facultyName ?? null,
 
-        remarks: payload.remarks || null,
+        remarks: payload.remarks || (payload.isMoveSplitToSingle ? "Moved split sections to single class" : null),
         changeType: isRevert ? "REVERTED_TO_MASTER" : "PERIOD_CHANGE",
       };
 
@@ -2837,8 +3141,8 @@ export function TodayTimetableView() {
                       getMasterCell={(slotId) => getCohortMasterCell(cohort, slotId)}
                       getOverride={(slotId) => cohort.overrides?.[slotId] ?? null}
                       isChanged={(slotId) => isCohortPeriodChanged(cohort, slotId)}
-                      onSlotClick={(slot, masterEntry) =>
-                        setEditingSlot({ slot, masterEntry, cohort })
+                      onSlotClick={(slot, masterCell, masterEntry) =>
+                        setEditingSlot({ slot, masterCell, masterEntry, cohort })
                       }
                     />
                   )}
@@ -2881,7 +3185,7 @@ export function TodayTimetableView() {
                   getMasterCell={(slotId) => getSingleMasterCell(slotId)}
                   getOverride={(slotId) => overrides[slotId] ?? null}
                   isChanged={(slotId) => isPeriodChanged(slotId)}
-                  onSlotClick={(slot, masterEntry) => setEditingSlot({ slot, masterEntry })}
+                  onSlotClick={(slot, masterCell, masterEntry) => setEditingSlot({ slot, masterCell, masterEntry })}
                 />
               )}
             </>
@@ -2952,6 +3256,7 @@ export function TodayTimetableView() {
           }
           date={selectedDate}
           dayLabel={selectedDayName}
+          masterCell={editingSlot.masterCell}
           masterEntry={editingSlot.masterEntry}
           currentOverride={
             editingSlot.cohort

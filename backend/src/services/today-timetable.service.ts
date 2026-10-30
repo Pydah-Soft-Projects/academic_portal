@@ -368,11 +368,53 @@ export async function applyDailyTimetableOverridesForDate(timetableDate: string)
     }
 
     const isRevert = changeType === "REVERTED_TO_MASTER";
-    const targetHrmsId = isRevert ? act.master_faculty_hrms_id : act.new_faculty_hrms_id;
-    const targetFacName = isRevert ? act.master_faculty_name : act.new_faculty_name;
-    const targetSubjectId = isRevert ? act.master_subject_id : act.new_subject_id;
-    const targetSubjectCode = isRevert ? act.master_subject_code : act.new_subject_code;
-    const targetSubjectName = isRevert ? act.master_subject_name : act.new_subject_name;
+    const secName = act.section_name && act.section_name !== "all" ? act.section_name : null;
+
+    if (isRevert) {
+      await executeAcademic(
+        `
+        UPDATE ap_class_sessions cs
+        JOIN ap_timetable_plans p ON p.id = cs.plan_id
+        LEFT JOIN ap_timetable_entries te ON te.id = cs.timetable_entry_id
+        SET cs.faculty_staff_link_id = te.faculty_staff_link_id,
+            cs.subject_id = te.subject_id,
+            cs.subject_code = te.subject_code,
+            cs.subject_name = COALESCE(te.custom_label, te.subject_name),
+            cs.status = IF(cs.status = 'posted', cs.status, 'scheduled')
+        WHERE cs.session_date = ?
+          AND (cs.timing_slot_id = ? OR cs.period_slot_id = ?)
+          AND cs.college_id = ?
+          AND cs.branch_id = ?
+          AND cs.semester_number = ?
+          AND (? IS NULL OR p.batch = ? OR p.batch = CONCAT('Batch ', ?) OR p.batch = REPLACE(?, 'Batch ', ''))
+          AND (? IS NULL OR cs.section_name = ? OR cs.section_name = CONCAT('Section ', ?) OR cs.section_name = REPLACE(?, 'Section ', ''))
+          AND cs.status <> 'posted'
+        `,
+        [
+          timetableDate,
+          act.timing_slot_id,
+          act.timing_slot_id,
+          act.college_id,
+          act.branch_id,
+          act.semester,
+          act.batch ? act.batch : null,
+          act.batch ? act.batch : null,
+          act.batch ? act.batch : null,
+          act.batch ? act.batch : null,
+          secName,
+          secName,
+          secName,
+          secName,
+        ],
+      );
+      continue;
+    }
+
+    const targetHrmsId = act.new_faculty_hrms_id;
+    const targetFacName = act.new_faculty_name;
+    const targetSubjectId = act.new_subject_id;
+    const targetSubjectCode = act.new_subject_code;
+    const targetSubjectName = act.new_subject_name;
 
     let targetStaffLinkId: number | null = null;
     if (targetHrmsId) {
@@ -390,8 +432,6 @@ export async function applyDailyTimetableOverridesForDate(timetableDate: string)
         targetStaffLinkId = Number(insertRes.insertId);
       }
     }
-
-    const secName = act.section_name && act.section_name !== "all" ? act.section_name : null;
 
     await executeAcademic(
       `
