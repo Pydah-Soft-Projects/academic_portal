@@ -445,6 +445,21 @@ export function PrincipalDashboard({
     setDeptPage(1);
   }, [overviewYearFilter]);
 
+  // Lock body & main container scroll when any modal is active to prevent double vertical scrollbars
+  useEffect(() => {
+    if (activeModal) {
+      const mainEl = document.querySelector("main");
+      const originalBodyOverflow = document.body.style.overflow;
+      const originalMainOverflow = mainEl ? mainEl.style.overflow : "";
+      document.body.style.overflow = "hidden";
+      if (mainEl) mainEl.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = originalBodyOverflow;
+        if (mainEl) mainEl.style.overflow = originalMainOverflow;
+      };
+    }
+  }, [activeModal]);
+
   const totalDeptPages = useMemo(() => {
     const total = current?.departmentOverview?.length || 0;
     return Math.max(1, Math.ceil(total / DEPT_PAGE_SIZE));
@@ -492,7 +507,7 @@ export function PrincipalDashboard({
   if (!current) return null;
 
   return (
-    <div className="space-y-4 sm:space-y-5 pb-12 font-sans bg-[#f8fafc] -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6 min-h-screen">
+    <div className="space-y-4 sm:space-y-5 pb-6 font-sans bg-[#f8fafc] -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6">
       {/* 2. TOP METRIC CARDS ROW (6 CARDS) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
         
@@ -2513,13 +2528,13 @@ export function PrincipalDashboard({
                       <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
                         <table className="w-full text-left text-xs table-fixed">
                           <colgroup>
-                            <col className="w-[75px]" />
-                            <col className="w-[20%]" />
-                            <col className="w-[12%]" />
+                            <col className="w-[8%]" />
                             <col className="w-[20%]" />
                             <col className="w-[13%]" />
-                            <col className="w-[11%]" />
-                            <col className="w-[24%]" />
+                            <col className="w-[22%]" />
+                            <col className="w-[12%]" />
+                            <col className="w-[10%]" />
+                            <col className="w-[15%]" />
                           </colgroup>
                           <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                             <tr>
@@ -2542,7 +2557,7 @@ export function PrincipalDashboard({
                             ) : (
                               filteredEmployees.map((emp) => (
                                 <tr key={emp.empNo} className="hover:bg-slate-50/70 transition-colors">
-                                  <td className="py-2.5 px-3 font-mono text-[11px] font-bold text-slate-700 whitespace-nowrap">
+                                  <td className="py-2.5 px-3 font-mono text-[11px] font-bold text-slate-700">
                                     {emp.empNo}
                                   </td>
                                   <td className="py-2.5 px-3">
@@ -2565,8 +2580,8 @@ export function PrincipalDashboard({
                                           {emp.slotsCount} Slots ({emp.slotsPosted || 0} Posted)
                                         </span>
                                         {emp.subjects && emp.subjects.length > 0 && (
-                                          <span className="text-[10.5px] text-slate-500 block leading-snug whitespace-normal" title={emp.subjects.join(", ")}>
-                                            {emp.subjects.slice(0, 3).join(", ")}{emp.subjects.length > 3 ? ` +${emp.subjects.length - 3} more` : ""}
+                                          <span className="text-[10.5px] text-slate-500 block leading-snug whitespace-normal break-words" title={emp.subjects.join(", ")}>
+                                            {emp.subjects.join(", ")}
                                           </span>
                                         )}
                                       </div>
@@ -2574,7 +2589,7 @@ export function PrincipalDashboard({
                                       <span className="text-[10.5px] text-slate-400 italic">No slots today</span>
                                     )}
                                   </td>
-                                  <td className="py-2.5 px-3 whitespace-nowrap">
+                                  <td className="py-2.5 px-3">
                                     {emp.status === "present" && (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
                                         <Fingerprint className="h-3 w-3 text-emerald-600 shrink-0" />
@@ -2608,7 +2623,7 @@ export function PrincipalDashboard({
                                       </span>
                                     )}
                                   </td>
-                                  <td className="py-2.5 px-3 font-mono text-[11px] whitespace-nowrap">
+                                  <td className="py-2.5 px-3 font-mono text-[11px]">
                                     {emp.checkInTime ? (
                                       <div className="space-y-0.5">
                                         <span className="text-emerald-700 font-semibold block">In: {emp.checkInTime}</span>
@@ -2637,12 +2652,12 @@ export function PrincipalDashboard({
                     <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
                       <table className="w-full text-left text-xs table-fixed">
                         <colgroup>
-                          <col className="w-[80px]" />
+                          <col className="w-[9%]" />
                           <col className="w-[20%]" />
                           <col className="w-[14%]" />
+                          <col className="w-[13%]" />
                           <col className="w-[14%]" />
-                          <col className="w-[16%]" />
-                          <col className="w-[24%]" />
+                          <col className="w-[18%]" />
                           <col className="w-[12%]" />
                         </colgroup>
                         <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
@@ -2701,14 +2716,14 @@ export function PrincipalDashboard({
                     <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
                       <table className="w-full text-left text-xs table-fixed">
                         <colgroup>
-                          <col className="w-[80px]" />
+                          <col className="w-[8%]" />
                           <col className="w-[18%]" />
                           <col className="w-[12%]" />
                           <col className="w-[12%]" />
-                          <col className="w-[15%]" />
-                          <col className="w-[18%]" />
-                          <col className="w-[15%]" />
-                          <col className="w-[10%]" />
+                          <col className="w-[14%]" />
+                          <col className="w-[16%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[8%]" />
                         </colgroup>
                         <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
                           <tr>
@@ -2767,12 +2782,12 @@ export function PrincipalDashboard({
                     <div className="flex-1 min-h-0 border border-slate-200 rounded-xl overflow-y-auto overflow-x-hidden">
                       <table className="w-full text-left text-xs table-fixed">
                         <colgroup>
-                          <col className="w-[80px]" />
+                          <col className="w-[9%]" />
                           <col className="w-[20%]" />
-                          <col className="w-[14%]" />
-                          <col className="w-[14%]" />
+                          <col className="w-[13%]" />
                           <col className="w-[12%]" />
-                          <col className="w-[28%]" />
+                          <col className="w-[12%]" />
+                          <col className="w-[22%]" />
                           <col className="w-[12%]" />
                         </colgroup>
                         <thead className="bg-slate-50 text-slate-600 font-semibold sticky top-0 z-10 border-b border-slate-200 shadow-2xs">
