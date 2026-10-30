@@ -94,10 +94,14 @@ type BranchPlanEntry = {
   rotationPattern?: string | null;
 };
 
+export type SectionCombinationMode = "all" | "custom";
+
 type BranchOverview = {
   branchId: number;
   branchName: string;
   branchCode: string | null;
+  hasSections?: boolean;
+  sections?: string[];
   plan: null | {
     id: number;
     status: string;
@@ -232,6 +236,9 @@ export function CombinedTimetableCreationView() {
   const [year, setYear] = useState<number>(1);
   const [semester, setSemester] = useState<number>(1);
   const [section, setSection] = useState<string>("all");
+  const [sectionMode, setSectionMode] = useState<SectionCombinationMode>("all");
+  const [selectedSections, setSelectedSections] = useState<string[]>([]);
+  const [branchSelectedSections, setBranchSelectedSections] = useState<Record<number, string[]>>({});
 
   // Multi-selected branches checklist
   const [selectedBranchIds, setSelectedBranchIds] = useState<number[]>([]);
@@ -361,6 +368,152 @@ export function CombinedTimetableCreationView() {
     return masters.branches.filter((b) => b.courseId === courseId);
   }, [masters, courseId]);
 
+  // Selected branch objects helper
+  const selectedBranches = useMemo(() => {
+    return branchesForCourse.filter((b) => selectedBranchIds.includes(b.id));
+  }, [branchesForCourse, selectedBranchIds]);
+
+  // Detected sections across course
+  const availableSectionsForCourse = useMemo(() => {
+    const names = new Set<string>();
+    for (const b of branchesOverview) {
+      if (b.sections && Array.isArray(b.sections)) {
+        for (const s of b.sections) {
+          if (s && s.toLowerCase() !== "all") names.add(s);
+        }
+      }
+    }
+    if (masters?.sections && courseId) {
+      const courseBranchIds = new Set(
+        masters.branches.filter((b) => b.courseId === courseId).map((b) => b.id),
+      );
+      for (const s of masters.sections) {
+        if (courseBranchIds.has(s.branchId) && s.name && s.name.toLowerCase() !== "all") {
+          names.add(s.name);
+        }
+      }
+    }
+    const list = Array.from(names).sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true }),
+    );
+    return list.length > 0 ? list : ["A", "B"];
+  }, [branchesOverview, masters, courseId]);
+
+  // Branch sections breakdown and validation for currently selected branches
+  const branchSectionStatus = useMemo(() => {
+    return selectedBranches.map((b) => {
+      const bo = branchesOverview.find((o) => o.branchId === b.id);
+      const boSections = bo?.sections && bo.sections.length > 0 ? bo.sections : null;
+      const masterSections = masters?.sections
+        ?.filter((s) => s.branchId === b.id)
+        ?.map((s) => s.name) ?? [];
+      const sections = boSections || masterSections;
+      const hasSec = (bo?.hasSections ?? Boolean(b.hasSections)) && sections.length > 0;
+      return {
+        branchId: b.id,
+        branchName: b.name,
+        branchCode: b.code,
+        hasSections: hasSec,
+        sections,
+        sectionCount: sections.length,
+      };
+    });
+  }, [selectedBranches, branchesOverview, masters]);
+
+  const anySelectedBranchHasSections = branchSectionStatus.some((b) => b.hasSections);
+
+  // Effective sections callback for a branch
+  const getEffectiveBranchSections = useCallback(
+    (b: { branchId: number; hasSections: boolean; sections: string[] }) => {
+      if (!b.hasSections) return [];
+      const specific = branchSelectedSections[b.branchId];
+      if (specific && specific.length > 0) {
+        return specific;
+      }
+      return b.sections;
+    },
+    [branchSelectedSections]
+  );
+
+  const handleToggleBranchSection = (branchId: number, sec: string) => {
+    setBranchSelectedSections((prev) => {
+      const branchInfo = branchSectionStatus.find((b) => b.branchId === branchId);
+      const allSecs = branchInfo?.sections ?? [];
+      const current = prev[branchId] && prev[branchId].length > 0 ? prev[branchId] : allSecs;
+
+      let next: string[];
+      if (current.includes(sec)) {
+        if (current.length <= 1) return prev; // Keep at least one section for this branch
+        next = current.filter((s) => s !== sec);
+      } else {
+        next = [...current, sec].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      }
+      return {
+        ...prev,
+        [branchId]: next,
+      };
+    });
+  };
+
+  // Section validation summary for save & live UI
+  const sectionValidationSummary = useMemo(() => {
+    if (!anySelectedBranchHasSections) {
+      return {
+        modeLabel: "Standard Branch Mode",
+        description: "Standard branch schedules (no sections)",
+        totalPlans: selectedBranches.length,
+        branchPlans: selectedBranches.map((b) => ({
+          branchId: b.id,
+          branchName: b.code || b.name,
+          sections: ["Full Branch (No Sections)"],
+          rawSections: [] as string[],
+        })),
+        isWarning: false,
+      };
+    }
+
+    let totalPlans = 0;
+    const branchPlans = branchSectionStatus.map((b) => {
+      if (!b.hasSections) {
+        totalPlans += 1;
+        return {
+          branchId: b.branchId,
+          branchName: b.branchCode || b.branchName,
+          sections: ["Full Branch (No Sections)"],
+          rawSections: [] as string[],
+          note: "Branch has no sections configured",
+        };
+      }
+      const effective = getEffectiveBranchSections(b);
+      totalPlans += effective.length;
+      const isPartial = effective.length < b.sections.length;
+      const isOverridden = Boolean(branchSelectedSections[b.branchId]);
+      return {
+        branchId: b.branchId,
+        branchName: b.branchCode || b.branchName,
+        sections: effective.map((s) => `Section ${s}`),
+        rawSections: effective,
+        hasOverride: isOverridden,
+        note: isPartial
+          ? `Only Section(s) ${effective.join(", ")} selected`
+          : undefined,
+      };
+    });
+
+    const summaryList = branchPlans
+      .filter((bp) => bp.rawSections.length > 0)
+      .map((bp) => `${bp.branchName} (${bp.rawSections.join(", ")})`)
+      .join(" + ");
+
+    return {
+      modeLabel: "Branch-Wise Sections",
+      description: summaryList || "All active sections",
+      totalPlans,
+      branchPlans,
+      isWarning: branchPlans.some((b) => Boolean(b.note)),
+    };
+  }, [anySelectedBranchHasSections, selectedBranches, branchSectionStatus, getEffectiveBranchSections, branchSelectedSections]);
+
   // Default select only the first branch; user will manually select additional branches
   useEffect(() => {
     if (branchesForCourse.length > 0) {
@@ -410,7 +563,15 @@ export function CombinedTimetableCreationView() {
         year: String(year),
         semester: String(semester),
       });
-      if (section && section !== "all") {
+      if (Object.keys(branchSelectedSections).length > 0) {
+        params.set("branchSections", JSON.stringify(branchSelectedSections));
+      }
+      if (selectedSections.length > 0) {
+        params.set("sections", selectedSections.join(","));
+        if (selectedSections.length === 1) {
+          params.set("section", selectedSections[0]);
+        }
+      } else if (section && section !== "all") {
         params.set("section", section);
       }
 
@@ -433,7 +594,7 @@ export function CombinedTimetableCreationView() {
     } finally {
       setLoadingOverview(false);
     }
-  }, [collegeId, courseId, academicYear, year, semester, section]);
+  }, [collegeId, courseId, academicYear, year, semester, section, selectedSections, branchSelectedSections]);
 
   // Trigger overview reload when filters change
   useEffect(() => {
@@ -827,6 +988,15 @@ export function CombinedTimetableCreationView() {
     if (selectedBranchIds.length === 0) {
       setSaveStatus({
         type: "error",
+        message: "Please select at least one branch before publishing.",
+      });
+      return;
+    }
+
+
+    if (selectedBranchIds.length === 0) {
+      setSaveStatus({
+        type: "error",
         message: "Please select at least one branch in the checklist to apply the timetable to.",
       });
       return;
@@ -937,8 +1107,11 @@ export function CombinedTimetableCreationView() {
           academicYear,
           year,
           semester,
-          section: section && section !== "all" ? section : null,
-          notes: `Combined timetable across ${selectedBranchIds.length} branches (${selectedBranches.map((b) => b.code || b.name).join(", ")})`,
+          section: selectedSections.length === 1 ? selectedSections[0] : (section && section !== "all" ? section : null),
+          sections: selectedSections.length > 0 ? selectedSections : (section && section !== "all" ? [section] : null),
+          sectionMode,
+          branchSections: Object.keys(branchSelectedSections).length > 0 ? branchSelectedSections : null,
+          notes: `Combined timetable across ${selectedBranchIds.length} branches (${selectedBranches.map((b) => b.code || b.name).join(", ")}) [${sectionValidationSummary.description}]`,
           assignments: assignmentList,
           publish,
         }),
@@ -977,10 +1150,7 @@ export function CombinedTimetableCreationView() {
     }
   };
 
-  // Selected branch names helper
-  const selectedBranches = useMemo(() => {
-    return branchesForCourse.filter((b) => selectedBranchIds.includes(b.id));
-  }, [branchesForCourse, selectedBranchIds]);
+
 
   return (
     <div className="space-y-6 pb-20">
@@ -1135,6 +1305,13 @@ export function CombinedTimetableCreationView() {
                 {selectedBranches.map((b) => b.code || b.name).join(" + ") || "None"}
               </span>
             </div>
+            {sectionValidationSummary.totalPlans > 0 && (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-purple-50 px-2.5 py-0.5 text-xs font-semibold text-purple-900 border border-purple-200">
+                <span className="font-bold">{sectionValidationSummary.totalPlans} Plan{sectionValidationSummary.totalPlans === 1 ? "" : "s"}</span>
+                <span className="text-purple-400">•</span>
+                <span className="text-purple-700 font-medium">{sectionValidationSummary.description}</span>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -1209,6 +1386,52 @@ export function CombinedTimetableCreationView() {
                     <span className="font-bold leading-tight">
                       {branch.name}
                     </span>
+                    {overview?.hasSections && overview.sections && overview.sections.length > 0 ? (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="rounded bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.2 text-[9.5px] font-bold">
+                          {overview.sections.length} sec ({overview.sections.join(",")})
+                        </span>
+                        {isChecked && (
+                          <div
+                            className="flex items-center gap-1 bg-white/90 border border-purple-200 rounded-md px-1 py-0.5 shadow-2xs"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[9.5px] font-bold text-slate-500 uppercase">Sec:</span>
+                            {overview.sections.map((sec) => {
+                              const effSecs = getEffectiveBranchSections({
+                                branchId: branch.id,
+                                hasSections: true,
+                                sections: overview.sections!,
+                              });
+                              const isSecActive = effSecs.includes(sec);
+                              return (
+                                <button
+                                  key={sec}
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleBranchSection(branch.id, sec);
+                                  }}
+                                  className={cn(
+                                    "px-1.5 py-0.2 rounded text-[10px] font-bold border transition-colors cursor-pointer",
+                                    isSecActive
+                                      ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                                      : "bg-slate-50 text-slate-500 border-slate-200 hover:border-slate-300"
+                                  )}
+                                  title={`Toggle Section ${sec} for ${branch.code || branch.name}`}
+                                >
+                                  {sec}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    ) : branch.hasSections ? (
+                      <span className="rounded bg-purple-50 text-purple-700 border border-purple-200 px-1.5 py-0.2 text-[9.5px] font-bold">
+                        Has sec
+                      </span>
+                    ) : null}
                   </div>
 
                   {/* Status Indicator */}
@@ -1294,14 +1517,15 @@ export function CombinedTimetableCreationView() {
             )}
             {saveStatus.details && saveStatus.details.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-2 pt-1">
-                {saveStatus.details.map((d) => {
+                {saveStatus.details.map((d, idx) => {
                   const bName = branchesForCourse.find((b) => b.id === d.branchId)?.name ?? `Branch ${d.branchId}`;
+                  const dAny = d as any;
                   return (
                     <span
-                      key={d.branchId}
+                      key={`${d.branchId}-${dAny.section || "none"}-${idx}`}
                       className="rounded-md border border-emerald-300 bg-emerald-100/80 px-2 py-0.5 text-[11px] font-semibold text-emerald-950"
                     >
-                      ✓ {bName}: Plan #{d.planId} ({d.status} v{d.versionNo})
+                      ✓ {bName}{dAny.section ? ` (Section ${dAny.section})` : ""}: Plan #{d.planId} ({d.status} v{d.versionNo})
                     </span>
                   );
                 })}
@@ -1607,6 +1831,9 @@ export function CombinedTimetableCreationView() {
           academicYear={currentAcademicYear || academicYear}
           year={year}
           semester={semester}
+          selectedSections={selectedSections}
+          branchSections={branchSelectedSections}
+          section={section}
           onSave={handleSaveSlotAssignment}
           onClear={() => handleClearSlotAssignment(activeSlotModal.day, activeSlotModal.slot.id)}
         />
@@ -1630,6 +1857,7 @@ export function CombinedTimetableCreationView() {
           onTabChange={setReviewTab}
           subjectSlotsSummary={subjectSlotsSummary}
           facultyWorkloadSummary={facultyWorkloadSummary}
+          sectionValidationSummary={sectionValidationSummary}
         />
       )}
     </div>
@@ -1654,6 +1882,9 @@ type PeriodEditModalProps = {
   academicYear: string;
   year: number | null;
   semester: number | null;
+  selectedSections?: string[];
+  branchSections?: Record<number, string[]>;
+  section?: string;
   onSave: (assignment: LocalPeriodAssignment) => void;
   onClear: () => void;
 };
@@ -1672,6 +1903,9 @@ function PeriodEditModal({
   academicYear,
   year,
   semester,
+  selectedSections,
+  branchSections,
+  section,
   onSave,
   onClear,
 }: PeriodEditModalProps) {
@@ -1896,6 +2130,18 @@ function PeriodEditModal({
       });
       if (year != null) params.set("year", String(year));
       if (academicYear) params.set("academicYear", academicYear);
+      if (branchSections && Object.keys(branchSections).length > 0) {
+        params.set("branchSections", JSON.stringify(branchSections));
+      }
+      const secParam =
+        selectedSections && selectedSections.length > 0
+          ? selectedSections.join(",")
+          : section && section !== "all"
+          ? section
+          : "";
+      if (secParam) {
+        params.set("section", secParam);
+      }
 
       const res = await apiFetch(`/timetables/roster?${params.toString()}`);
       if (!res.ok) {
@@ -1910,7 +2156,7 @@ function PeriodEditModal({
     } finally {
       setIsLoadingStudents(false);
     }
-  }, [collegeId, courseId, semester, year, academicYear, participatingBranchIds]);
+  }, [collegeId, courseId, semester, year, academicYear, participatingBranchIds, selectedSections, branchSections, section]);
 
   // Handle advancing to Step 2
   const handleProceedToStep2 = async () => {
@@ -3523,6 +3769,17 @@ type PublishReviewModalProps = {
     unassignedSlots: number;
     totalFacultyHours: string;
   };
+  sectionValidationSummary?: {
+    modeLabel: string;
+    description: string;
+    totalPlans: number;
+    branchPlans: Array<{
+      branchName: string;
+      sections: string[];
+      note?: string;
+    }>;
+    isWarning?: boolean;
+  };
 };
 
 function PublishReviewModal({
@@ -3541,6 +3798,7 @@ function PublishReviewModal({
   onTabChange,
   subjectSlotsSummary,
   facultyWorkloadSummary,
+  sectionValidationSummary,
 }: PublishReviewModalProps) {
   if (!isOpen) return null;
 
@@ -3598,6 +3856,11 @@ function PublishReviewModal({
             <span className="rounded-md bg-indigo-100/90 border border-indigo-300 px-2.5 py-0.5 font-bold text-indigo-900">
               Target Branches ({selectedBranches.length}): {selectedBranches.map((b) => b.code || b.name).join(" + ")}
             </span>
+            {sectionValidationSummary && (
+              <span className="rounded-md bg-purple-100/90 border border-purple-300 px-2.5 py-0.5 font-bold text-purple-900">
+                Section Scope: {sectionValidationSummary.modeLabel} ({sectionValidationSummary.totalPlans} Plans)
+              </span>
+            )}
           </div>
         </div>
 
@@ -3646,6 +3909,32 @@ function PublishReviewModal({
 
         {/* Modal Scrollable Body */}
         <div className="p-5 overflow-y-auto space-y-4 max-h-[calc(90vh-270px)]">
+          {sectionValidationSummary && (
+            <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-bold text-xs text-indigo-950 flex items-center gap-1.5">
+                  <Layers className="h-4 w-4 text-indigo-600" />
+                  Timetable Plans Distribution ({sectionValidationSummary.modeLabel})
+                </span>
+                <span className="rounded-md bg-white border border-indigo-200 px-2 py-0.5 text-[10.5px] font-bold text-indigo-900">
+                  {sectionValidationSummary.totalPlans} plan{sectionValidationSummary.totalPlans === 1 ? "" : "s"} will be published
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                {sectionValidationSummary.branchPlans.map((bp, i) => (
+                  <div key={i} className="rounded-lg border border-indigo-100 bg-white p-2 text-xs">
+                    <span className="font-bold text-navy-900 block">{bp.branchName}</span>
+                    <span className="text-slate-600 font-medium text-[11px] block">
+                      {bp.sections.join(" & ")}
+                    </span>
+                    {bp.note && (
+                      <span className="text-[10px] text-amber-700 block mt-0.5">ℹ️ {bp.note}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {/* Optional unassigned notice */}
           {facultyWorkloadSummary.unassignedSlots > 0 && (
             <div className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50/90 px-3.5 py-2.5 text-xs text-amber-900">

@@ -60,6 +60,17 @@ function filtersFromQuery(req: AuthedRequest) {
       .filter((n) => Number.isFinite(n) && n > 0);
   }
 
+  let branchSections: Record<number, string[]> | undefined;
+  if (typeof req.query.branchSections === "string") {
+    try {
+      branchSections = JSON.parse(req.query.branchSections);
+    } catch {
+      // ignore JSON parse error
+    }
+  } else if (typeof req.query.branchSections === "object" && req.query.branchSections !== null) {
+    branchSections = req.query.branchSections as Record<number, string[]>;
+  }
+
   const scoped = scopedFilters(req, {
     collegeId: num(req.query.collegeId),
     branchId: num(req.query.branchId),
@@ -71,6 +82,7 @@ function filtersFromQuery(req: AuthedRequest) {
     branchId: scoped.branchId,
     branchIds: scoped.branchIds ?? queryBranchIds,
     section: str(req.query.section),
+    branchSections,
     batch: str(req.query.batch),
     year: num(req.query.year),
     semester: num(req.query.semester),
@@ -164,6 +176,22 @@ timetablesRouter.get("/combined/overview", requirePermission("combined_timetable
     const year = num(req.query.year);
     const semester = num(req.query.semester);
     const section = str(req.query.section);
+    let sections: string[] | undefined;
+    if (typeof req.query.sections === "string") {
+      sections = req.query.sections.split(",").map((s) => s.trim()).filter(Boolean);
+    } else if (Array.isArray(req.query.sections)) {
+      sections = (req.query.sections as string[]).map((s) => s.trim()).filter(Boolean);
+    }
+    let branchSections: Record<number, string[]> | undefined;
+    if (typeof req.query.branchSections === "string") {
+      try {
+        branchSections = JSON.parse(req.query.branchSections);
+      } catch {
+        // ignore JSON parse error
+      }
+    } else if (typeof req.query.branchSections === "object" && req.query.branchSections !== null) {
+      branchSections = req.query.branchSections as Record<number, string[]>;
+    }
 
     if (!collegeId || !courseId || !academicYear || semester == null) {
       res.status(400).json({ message: "collegeId, courseId, academicYear, and semester are required." });
@@ -180,6 +208,8 @@ timetablesRouter.get("/combined/overview", requirePermission("combined_timetable
       year: year ?? null,
       semester,
       section: section ?? null,
+      sections: sections ?? null,
+      branchSections: branchSections ?? null,
     });
     res.json(result);
   } catch (error) {
@@ -236,6 +266,9 @@ timetablesRouter.post("/combined/save", requirePermission("combined_timetable.ed
       year?: number | null;
       semester: number;
       section?: string | null;
+      sections?: string[] | null;
+      sectionMode?: "all" | "custom" | null;
+      branchSections?: Record<number, string[]> | null;
       notes?: string | null;
       assignments: unknown[];
       publish?: boolean;
@@ -254,6 +287,9 @@ timetablesRouter.post("/combined/save", requirePermission("combined_timetable.ed
       year: body.year != null ? Number(body.year) : null,
       semester: Number(body.semester),
       section: body.section ? String(body.section) : null,
+      sections: Array.isArray(body.sections) ? body.sections : (body.section && body.section !== "all" ? [body.section] : null),
+      sectionMode: body.sectionMode ?? null,
+      branchSections: body.branchSections ?? null,
       notes: body.notes ? String(body.notes) : null,
       assignments: (body.assignments ?? []) as never[],
       publish: Boolean(body.publish),

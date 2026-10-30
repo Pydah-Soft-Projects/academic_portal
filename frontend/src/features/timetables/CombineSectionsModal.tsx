@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
+  ArrowUpDown,
   Check,
   CheckCircle2,
   Copy,
@@ -55,6 +56,9 @@ export function CombineSectionsModal({
     return filtered.length > 0 ? filtered : ["A", "B"];
   }, [availableSections, initialTickedSections]);
 
+  const isSingleSection = defaultSections.length <= 1;
+  const isDoubleSection = defaultSections.length === 2;
+
   const [mainSection, setMainSection] = useState<string>("A");
   const [targetSections, setTargetSections] = useState<string[]>(["B"]);
   const [autoPublish, setAutoPublish] = useState<boolean>(true);
@@ -89,6 +93,12 @@ export function CombineSectionsModal({
   }, [isOpen, currentSection, defaultSections, initialTickedSections]);
 
   if (!isOpen) return null;
+
+  const handleSwapDoubleSections = () => {
+    if (targetSections[0] && defaultSections.includes(targetSections[0])) {
+      handleSelectMain(targetSections[0]);
+    }
+  };
 
   const handleSelectMain = (sec: string) => {
     setMainSection(sec);
@@ -237,6 +247,35 @@ export function CombineSectionsModal({
             </div>
           )}
 
+          {isSingleSection && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 animate-in fade-in">
+              <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+              <div className="space-y-1">
+                <span className="font-bold block">Single Section Branch Detected</span>
+                <span className="text-amber-800 block text-[11.5px] leading-relaxed">
+                  This branch currently only has Section {defaultSections[0] || "A"}. Synchronizing/combining schedules across sections requires at least two sections to copy between.
+                </span>
+              </div>
+            </div>
+          )}
+
+          {isDoubleSection && !isSingleSection && (
+            <div className="flex items-center justify-between gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3.5 py-2 text-xs">
+              <span className="font-semibold text-indigo-900">
+                Branch Sections (Sections {defaultSections.join(" & ")})
+              </span>
+              <button
+                type="button"
+                onClick={handleSwapDoubleSections}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-[11px] font-bold text-indigo-700 shadow-2xs hover:bg-indigo-50 cursor-pointer transition-colors"
+                title="Swap source and target sections"
+              >
+                <ArrowUpDown className="h-3 w-3" />
+                Swap Direction
+              </button>
+            </div>
+          )}
+
           {/* Step 1: Main (Source) Section */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -285,6 +324,8 @@ export function CombineSectionsModal({
                   </button>
                 );
               })}
+
+
             </div>
           </div>
 
@@ -430,7 +471,7 @@ export function CombineSectionsModal({
           <Button
             type="button"
             onClick={handleExecuteCombine}
-            disabled={loading || targetSections.length === 0 || !mainSection}
+            disabled={loading || isSingleSection || targetSections.length === 0 || !mainSection}
             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-md shadow-indigo-600/20 px-5 cursor-pointer"
           >
             {loading ? (

@@ -40,7 +40,7 @@ type AssignedSectionRow = RowDataPacket & {
   student_count: number;
 };
 
-type BranchSectionMeta = {
+export type BranchSectionMeta = {
   name: string;
   strength?: number;
 };
@@ -50,7 +50,7 @@ type YearSemesterConfigItem = {
   semesters: number;
 };
 
-function parseBranchSections(metadata: unknown): {
+export function parseBranchSections(metadata: unknown): {
   enabled: boolean;
   items: BranchSectionMeta[];
 } {

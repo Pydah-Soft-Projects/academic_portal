@@ -30,7 +30,7 @@ import {
   syncStaffUserRolesForTimetableChanges,
 } from "./user-management.service.js";
 import { ensureSessionsForDate } from "./class-sessions.service.js";
-import { getCurrentAcademicYearLabel } from "./masters.service.js";
+import { getCurrentAcademicYearLabel, parseBranchSections } from "./masters.service.js";
 import { getClassTeacherForSection } from "./class-teacher.service.js";
 import type { PoolConnection } from "mysql2/promise";
 
@@ -2865,6 +2865,8 @@ export type CombinedBranchesOverviewFilters = {
   year?: number | null;
   semester: number;
   section?: string | null;
+  sections?: string[] | null;
+  branchSections?: Record<number, string[]> | null;
 };
 
 export async function getCombinedBranchesOverview(filters: CombinedBranchesOverviewFilters) {
@@ -2906,8 +2908,34 @@ export async function getCombinedBranchesOverview(filters: CombinedBranchesOverv
       ? String(Number(filters.academicYear.slice(0, 4)) - (filters.year - 1))
       : null);
 
-  // 3. Get plans for each branch
+  // 3. Get plans for each branch with section-wise filtering
   const secFilter = filters.section && filters.section !== "all" ? filters.section : null;
+  const rawSections = (filters.sections ?? [])
+    .map((s) => String(s).trim())
+    .filter((s) => s && s.toLowerCase() !== "all");
+
+  if (filters.branchSections && typeof filters.branchSections === "object") {
+    for (const secs of Object.values(filters.branchSections)) {
+      if (Array.isArray(secs)) {
+        for (const s of secs) {
+          const trimmed = String(s).trim();
+          if (trimmed && trimmed.toLowerCase() !== "all" && !rawSections.includes(trimmed)) {
+            rawSections.push(trimmed);
+          }
+        }
+      }
+    }
+  }
+
+  let sectionClause = "(? IS NULL OR p.section_name = ? OR p.section_name IS NULL)";
+  let sectionParams: unknown[] = [secFilter, secFilter];
+
+  if (rawSections.length > 0) {
+    const placeholders = rawSections.map(() => "?").join(",");
+    sectionClause = `(p.section_name IN (${placeholders}) OR p.section_name IS NULL)`;
+    sectionParams = rawSections;
+  }
+
   const planRows = await queryAcademic<(PlanRow & { timing_template_name?: string })[]>(
     `
     SELECT p.*, tt.name AS timing_template_name
@@ -2919,7 +2947,7 @@ export async function getCombinedBranchesOverview(filters: CombinedBranchesOverv
       AND p.branch_id IN (${branchIds.map(() => "?").join(",")})
       AND (? IS NULL OR p.batch = ? OR p.batch = '' OR p.batch IS NULL)
       AND p.semester_number = ?
-      AND (? IS NULL OR p.section_name = ? OR p.section_name IS NULL)
+      AND ${sectionClause}
       AND p.status IN ('published', 'in_review', 'draft')
     ORDER BY FIELD(p.status, 'published', 'in_review', 'draft'), p.version_no DESC, p.id DESC
     `,
@@ -2931,8 +2959,7 @@ export async function getCombinedBranchesOverview(filters: CombinedBranchesOverv
       resolvedBatch,
       resolvedBatch,
       filters.semester,
-      secFilter,
-      secFilter,
+      ...sectionParams,
     ],
   );
 
@@ -2989,10 +3016,16 @@ export async function getCombinedBranchesOverview(filters: CombinedBranchesOverv
       }));
     }
 
+    const parsedSec = parseBranchSections(branch.metadata);
+    const hasSections = parsedSec.enabled && parsedSec.items.length > 0;
+    const branchSections = parsedSec.items.map((i) => i.name);
+
     branchDetails.push({
       branchId: branch.id,
       branchName: branch.name,
       branchCode: branch.code,
+      hasSections,
+      sections: branchSections,
       plan: plan
         ? {
             id: plan.id,
@@ -3150,7 +3183,7 @@ export async function getCombinedSubjects(filters: {
   });
 }
 
-export async function saveCombinedTimetable(input: {
+export type SaveCombinedTimetableInput = {
   collegeId: number;
   courseId: number;
   branchIds: number[];
@@ -3159,16 +3192,40 @@ export async function saveCombinedTimetable(input: {
   year?: number | null;
   semester: number;
   section?: string | null;
+  sections?: string[] | null;
+  sectionMode?: "all" | "custom" | null;
+  branchSections?: Record<number, string[]> | null;
   notes?: string | null;
   assignments: AssignmentInput[];
   publish?: boolean;
   actorUserId?: number | null;
   ipAddress?: string | null;
-}) {
+};
+
+export async function saveCombinedTimetable(input: SaveCombinedTimetableInput) {
   const branchIds = (input.branchIds ?? []).map(Number).filter((id) => id > 0);
   if (branchIds.length === 0) {
     throw new Error("Please select at least one branch for the combination.");
   }
+
+  // Load branch records to know metadata / sections configuration
+  const branchRows = await queryStudent<
+    (RowDataPacket & {
+      id: number;
+      name: string;
+      code: string | null;
+      course_id: number;
+      metadata?: string | unknown;
+    })[]
+  >(
+    `
+    SELECT id, name, code, course_id, metadata
+    FROM course_branches
+    WHERE id IN (${branchIds.map(() => "?").join(",")})
+    `,
+    branchIds,
+  );
+  const branchMap = new Map(branchRows.map((b) => [b.id, b]));
 
   const resolvedBatch =
     input.batch?.trim() ||
@@ -3178,13 +3235,59 @@ export async function saveCombinedTimetable(input: {
 
   const results: Array<{
     branchId: number;
+    branchName: string;
+    branchCode: string | null;
+    section: string | null;
     planId: number;
     status: string;
     versionNo: number;
     assignedCount: number;
   }> = [];
 
+  // Normalize requested sections
+  const rawSections = (input.sections ?? [])
+    .map((s) => String(s).trim())
+    .filter((s) => s && s.toLowerCase() !== "all");
+
   for (const branchId of branchIds) {
+    const branch = branchMap.get(branchId);
+    const branchName = branch?.name ?? `Branch ${branchId}`;
+    const branchCode = branch?.code ?? null;
+    const parsedMeta = branch ? parseBranchSections(branch.metadata) : { enabled: false, items: [] };
+    const branchHasSections = parsedMeta.enabled && parsedMeta.items.length > 0;
+    const branchSectionNames = parsedMeta.items.map((i) => i.name);
+
+    // Determine target section(s) for this branch
+    let targetSectionsForBranch: (string | null)[] = [];
+    if (branchHasSections) {
+      if (
+        input.branchSections &&
+        input.branchSections[branchId] &&
+        Array.isArray(input.branchSections[branchId]) &&
+        input.branchSections[branchId].length > 0
+      ) {
+        // Branch-specific section selection takes highest priority
+        const specific = input.branchSections[branchId];
+        const matched = branchSectionNames.filter((sec) =>
+          specific.some((s) => s.toLowerCase() === sec.toLowerCase())
+        );
+        targetSectionsForBranch = matched.length > 0 ? matched : branchSectionNames;
+      } else if (rawSections.length > 0) {
+        const matched = branchSectionNames.filter((sec) =>
+          rawSections.some((rs) => rs.toLowerCase() === sec.toLowerCase())
+        );
+        targetSectionsForBranch = matched.length > 0 ? matched : branchSectionNames;
+      } else if (input.section && input.section !== "all") {
+        targetSectionsForBranch = [input.section];
+      } else {
+        // "all" mode: save for all sections this branch has
+        targetSectionsForBranch = branchSectionNames;
+      }
+    } else {
+      // Single cohort branch with no sections
+      targetSectionsForBranch = [null];
+    }
+
     const branchAssignments = input.assignments.filter((a) => {
       if (Array.isArray(a.participatingBranchIds) && a.participatingBranchIds.length > 0) {
         return a.participatingBranchIds.includes(branchId);
@@ -3192,53 +3295,77 @@ export async function saveCombinedTimetable(input: {
       return true;
     });
 
-    const draftResult = await saveTimetableDraft({
-      collegeId: input.collegeId,
-      courseId: input.courseId,
-      branchId,
-      academicYear: input.academicYear,
-      batch: resolvedBatch,
-      year: input.year ?? null,
-      semester: input.semester,
-      section: input.section && input.section !== "all" ? input.section : null,
-      notes: input.notes ?? `Combined classes across ${branchIds.length} branches`,
-      assignments: branchAssignments,
-      actorUserId: input.actorUserId,
-      ipAddress: input.ipAddress,
-    });
+    for (const targetSec of targetSectionsForBranch) {
+      const draftResult = await saveTimetableDraft({
+        collegeId: input.collegeId,
+        courseId: input.courseId,
+        branchId,
+        academicYear: input.academicYear,
+        batch: resolvedBatch,
+        year: input.year ?? null,
+        semester: input.semester,
+        section: targetSec,
+        notes: input.notes ?? `Combined classes across ${branchIds.length} branches`,
+        assignments: branchAssignments,
+        actorUserId: input.actorUserId,
+        ipAddress: input.ipAddress,
+      });
 
-    let finalStatus = draftResult.status;
-    let finalVersion = draftResult.versionNo;
+      let finalStatus = draftResult.status;
+      let finalVersion = draftResult.versionNo;
 
-    if (input.publish) {
-      try {
-        const pubResult = await publishTimetablePlan(draftResult.planId, {
-          actorUserId: input.actorUserId,
-          ipAddress: input.ipAddress,
-        });
-        finalStatus = pubResult.status;
-        finalVersion = pubResult.versionNo;
-      } catch (pubErr) {
-        console.warn(`Could not auto-publish combined timetable for branch ${branchId}:`, pubErr);
+      if (input.publish) {
+        try {
+          const pubResult = await publishTimetablePlan(draftResult.planId, {
+            actorUserId: input.actorUserId,
+            ipAddress: input.ipAddress,
+          });
+          finalStatus = pubResult.status;
+          finalVersion = pubResult.versionNo;
+        } catch (pubErr) {
+          console.warn(`Could not auto-publish combined timetable for branch ${branchId} section ${targetSec}:`, pubErr);
+        }
       }
-    }
 
-    results.push({
-      branchId,
-      planId: draftResult.planId,
-      status: finalStatus,
-      versionNo: finalVersion,
-      assignedCount: input.assignments.length,
-    });
+      results.push({
+        branchId,
+        branchName,
+        branchCode,
+        section: targetSec,
+        planId: draftResult.planId,
+        status: finalStatus,
+        versionNo: finalVersion,
+        assignedCount: branchAssignments.length,
+      });
+    }
   }
+
+  const branchSummaryItems = branchIds
+    .map((bid) => {
+      const b = branchMap.get(bid);
+      const bName = b?.code || b?.name || `Branch #${bid}`;
+      const secs = input.branchSections?.[bid];
+      if (secs && secs.length > 0) {
+        return `${bName} (${secs.join(", ")})`;
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  const sectionSummary = branchSummaryItems.length > 0
+    ? branchSummaryItems.join(" + ")
+    : rawSections.length > 0
+    ? `Custom Sections (${rawSections.join(", ")})`
+    : (input.section && input.section !== "all" ? `Section ${input.section}` : "All Sections");
 
   return {
     success: true,
     totalBranches: branchIds.length,
+    totalPlans: results.length,
     totalAssignments: input.assignments.length,
     published: Boolean(input.publish),
     results,
-    message: `Successfully ${input.publish ? "published" : "saved draft"} combined timetable for ${branchIds.length} branches (${input.assignments.length} periods assigned).`,
+    message: `Successfully ${input.publish ? "published" : "saved draft"} combined timetable across ${branchIds.length} branches (${sectionSummary}) with ${results.length} timetable plan${results.length === 1 ? "" : "s"}.`,
   };
 }
 
@@ -3663,16 +3790,47 @@ export async function getTimetableRoster(
     WHERE ${where.length > 0 ? where.join(" AND ") : "1=1"}
   `;
 
-  // First attempt: with section if provided and not "all"
+  // First attempt: with branchSections or section if provided
   let rows: (RowDataPacket & TimetableRosterStudent)[] = [];
-  const hasSection = Boolean(filters.section && filters.section !== "all");
+  const branchSecEntries = filters.branchSections
+    ? Object.entries(filters.branchSections).filter(([, secs]) => Array.isArray(secs) && secs.length > 0)
+    : [];
 
-  if (hasSection) {
-    const sectionSql = `${baseSql} AND (s.section COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci OR ss.section_name COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
+  if (branchSecEntries.length > 0) {
+    const branchSecClauses: string[] = [];
+    const branchSecParams: unknown[] = [];
+    for (const [bidStr, secs] of branchSecEntries) {
+      const bid = Number(bidStr);
+      const ph = secs.map(() => "?").join(", ");
+      branchSecClauses.push(
+        `(s.branch_id = ? AND (s.section COLLATE utf8mb4_unicode_ci IN (${ph}) OR ss.section_name COLLATE utf8mb4_unicode_ci IN (${ph})))`
+      );
+      branchSecParams.push(bid, ...secs, ...secs);
+    }
+    const sectionSql = `${baseSql} AND (${branchSecClauses.join(" OR ")}) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
     rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
       sectionSql,
-      [...params, filters.section, filters.section],
+      [...params, ...branchSecParams],
     );
+  } else if (Boolean(filters.section && filters.section !== "all")) {
+    const hasSection = true;
+    const rawSec = String(filters.section).trim();
+    const secList = rawSec.split(",").map((s) => s.trim()).filter((s) => s && s.toLowerCase() !== "all");
+    if (secList.length > 1) {
+      const placeholders = secList.map(() => "?").join(", ");
+      const sectionSql = `${baseSql} AND (s.section COLLATE utf8mb4_unicode_ci IN (${placeholders}) OR ss.section_name COLLATE utf8mb4_unicode_ci IN (${placeholders})) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
+      rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
+        sectionSql,
+        [...params, ...secList, ...secList],
+      );
+    } else {
+      const targetSec = secList[0] || rawSec;
+      const sectionSql = `${baseSql} AND (s.section COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci OR ss.section_name COLLATE utf8mb4_unicode_ci = ? COLLATE utf8mb4_unicode_ci) ORDER BY cb.name ASC, COALESCE(s.pin_no, s.admission_number, s.id) ASC LIMIT 2000`;
+      rows = await queryStudent<(RowDataPacket & TimetableRosterStudent)[]>(
+        sectionSql,
+        [...params, targetSec, targetSec],
+      );
+    }
   }
 
   // Fallback 1: if section had 0 students (or no section specified), query without section filter
