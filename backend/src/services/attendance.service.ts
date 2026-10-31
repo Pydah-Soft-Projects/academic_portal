@@ -44,6 +44,9 @@ type SessionListRow = RowDataPacket & {
   faculty_staff_link_id: number | null;
   faculty_name: string | null;
   room_label: string | null;
+  batch_label: string | null;
+  student_ids: string | number[] | null;
+  student_count: number | null;
   slot_label: string | null;
   status: string;
   post_id: number | null;
@@ -162,6 +165,8 @@ function mapSessionCard(
     courseId: row.course_id,
     branchId: row.branch_id,
     batch: row.batch,
+    batchLabel: row.batch_label ?? null,
+    studentCount: row.student_count != null ? Number(row.student_count) : null,
     year: row.year_of_study,
     semester: row.semester_number,
     facultyStaffLinkId: row.faculty_staff_link_id,
@@ -203,7 +208,8 @@ function mergeSessionCards(
         ? `id_${card.subjectId}`
         : `name_${(card.subjectName || "").toLowerCase().trim()}`;
     const branchKey = card.branchId != null ? String(card.branchId) : "";
-    const key = `${card.date}|${card.startTime}|${card.endTime || ""}|${card.facultyStaffLinkId}|${subKey}|${branchKey}`;
+    const batchKey = (card.batchLabel || "").trim().toLowerCase();
+    const key = `${card.date}|${card.startTime}|${card.endTime || ""}|${card.facultyStaffLinkId}|${subKey}|${branchKey}|${batchKey}`;
 
     const existing = map.get(key);
     if (existing) {
@@ -255,6 +261,8 @@ function mergeSessionCards(
       sections: uniqueSections,
       sessionIds,
       roomLabel,
+      batchLabel: primary.batchLabel,
+      studentCount: primary.studentCount,
       posted: allPosted,
       sessionStatus: anyHoliday ? "holiday" : allPosted ? "posted" : "scheduled",
       isMySession: anyIsMySession,
@@ -394,6 +402,9 @@ export async function listAttendanceSessions(filters: AttendanceListFilters) {
       cs.faculty_staff_link_id,
       sl.display_name AS faculty_name,
       cs.room_label,
+      COALESCE(cs.batch_label, te.batch_label) AS batch_label,
+      COALESCE(cs.student_ids, te.student_ids) AS student_ids,
+      COALESCE(cs.student_count, te.student_count) AS student_count,
       ts.label AS slot_label,
       cs.status,
       ap.id AS post_id,
@@ -403,6 +414,7 @@ export async function listAttendanceSessions(filters: AttendanceListFilters) {
       ap.leave_count
     FROM ap_class_sessions cs
     INNER JOIN ap_timetable_plans p ON p.id = cs.plan_id
+    LEFT JOIN ap_timetable_entries te ON te.id = cs.timetable_entry_id
     LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
     LEFT JOIN ap_timing_template_slots ts
       ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
@@ -592,6 +604,9 @@ async function loadSessionContext(sessionId: number) {
       cs.faculty_staff_link_id,
       sl.display_name AS faculty_name,
       cs.room_label,
+      COALESCE(cs.batch_label, te.batch_label) AS batch_label,
+      COALESCE(cs.student_ids, te.student_ids) AS student_ids,
+      COALESCE(cs.student_count, te.student_count) AS student_count,
       ts.label AS slot_label,
       cs.status,
       ap.id AS post_id,
@@ -601,6 +616,7 @@ async function loadSessionContext(sessionId: number) {
       ap.leave_count
     FROM ap_class_sessions cs
     INNER JOIN ap_timetable_plans p ON p.id = cs.plan_id
+    LEFT JOIN ap_timetable_entries te ON te.id = cs.timetable_entry_id
     LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
     LEFT JOIN ap_timing_template_slots ts
       ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
@@ -613,7 +629,52 @@ async function loadSessionContext(sessionId: number) {
   return rows[0] ?? null;
 }
 
+function parseStudentIds(val: unknown): number[] {
+  if (!val) return [];
+  if (Array.isArray(val)) {
+    return val.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+  }
+  if (typeof val === "string") {
+    try {
+      const parsed = JSON.parse(val);
+      if (Array.isArray(parsed)) {
+        return parsed.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+      }
+    } catch {
+      return val
+        .split(",")
+        .map((x) => Number(x.trim()))
+        .filter((n) => Number.isFinite(n) && n > 0);
+    }
+  }
+  return [];
+}
+
 async function loadRosterStudents(row: SessionListRow) {
+  const explicitStudentIds = parseStudentIds(row.student_ids);
+
+  // If explicit batch student IDs were assigned, query them directly
+  if (explicitStudentIds.length > 0) {
+    const where = [
+      `s.id IN (${explicitStudentIds.map(() => "?").join(",")})`,
+      "TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci",
+    ];
+    return queryStudent<StudentRow[]>(
+      `
+      SELECT s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester,
+             s.student_status,
+             CASE WHEN s.student_photo IS NOT NULL AND TRIM(s.student_photo) <> '' THEN 1 ELSE 0 END AS has_photo
+      FROM students s
+      LEFT JOIN student_sections ss ON ss.student_id = s.id
+      WHERE ${where.join(" AND ")}
+      GROUP BY s.id, s.admission_number, s.pin_no, s.student_name, s.course, s.branch, s.current_year, s.current_semester, s.student_status
+      ORDER BY COALESCE(NULLIF(TRIM(s.pin_no), ''), s.admission_number), s.student_name
+      LIMIT 500
+      `,
+      explicitStudentIds,
+    );
+  }
+
   const where = [
     "s.branch_id = ?",
     "TRIM(COALESCE(s.student_status, '')) COLLATE utf8mb4_unicode_ci = 'Regular' COLLATE utf8mb4_unicode_ci",
@@ -695,6 +756,13 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
     row.branch_id,
   ];
 
+  if (row.batch_label) {
+    where.push("COALESCE(cs.batch_label, te.batch_label, '') = ?");
+    params.push(row.batch_label);
+  } else {
+    where.push("(COALESCE(cs.batch_label, te.batch_label) IS NULL OR COALESCE(cs.batch_label, te.batch_label) = '')");
+  }
+
   if (row.subject_id != null && row.subject_code) {
     where.push("(cs.subject_id = ? OR cs.subject_code = ?)");
     params.push(row.subject_id, row.subject_code);
@@ -729,6 +797,9 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
       cs.faculty_staff_link_id,
       sl.display_name AS faculty_name,
       cs.room_label,
+      COALESCE(cs.batch_label, te.batch_label) AS batch_label,
+      COALESCE(cs.student_ids, te.student_ids) AS student_ids,
+      COALESCE(cs.student_count, te.student_count) AS student_count,
       ts.label AS slot_label,
       cs.status,
       ap.id AS post_id,
@@ -738,6 +809,7 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
       ap.leave_count
     FROM ap_class_sessions cs
     INNER JOIN ap_timetable_plans p ON p.id = cs.plan_id
+    LEFT JOIN ap_timetable_entries te ON te.id = cs.timetable_entry_id
     LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
     LEFT JOIN ap_timing_template_slots ts
       ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
@@ -904,6 +976,7 @@ export async function getAttendanceSession(sessionId: number) {
       section: combinedSection,
       sections: uniqueSections,
       roomLabel,
+      batchLabel: row.batch_label ?? null,
       time: [primaryMapped.startTime, primaryMapped.endTime].filter(Boolean).join(" – ") || "—",
       studentCount: allMergedStudents.length,
       posted: allPosted,

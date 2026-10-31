@@ -48,6 +48,8 @@ export type AttendanceSessionCard = {
   facultyStaffLinkId?: number | null;
   facultyName: string | null;
   roomLabel: string | null;
+  batchLabel?: string | null;
+  studentCount?: number | null;
   sessionStatus: string;
   posted: boolean;
   isMySession?: boolean;
@@ -905,6 +907,11 @@ export function AttendanceTodayView() {
                           ★ My Slot
                         </span>
                       ) : null}
+                      {item.batchLabel ? (
+                        <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-300">
+                          {item.batchLabel}
+                        </span>
+                      ) : null}
                       {item.sections && item.sections.length > 1 ? (
                         <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
                           Combined ({item.sections.length} Sec)
@@ -939,6 +946,7 @@ export function AttendanceTodayView() {
                   <p className="text-[10.5px] sm:text-xs font-medium text-slate-600 mt-0.5 truncate">
                     {item.subjectCode ?? "—"}
                     {item.section ? ` • ${formatSectionDisplay(item.section, item.sections)}` : ""}
+                    {item.batchLabel ? ` • ${item.batchLabel}` : ""}
                     {item.branchName ? ` • ${item.branchName}` : ""}
                   </p>
                   <p className="mt-1 text-[10px] sm:text-xs text-slate-500 truncate">

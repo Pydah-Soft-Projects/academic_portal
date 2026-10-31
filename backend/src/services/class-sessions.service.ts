@@ -525,12 +525,16 @@ export async function getClassSessionById(sessionId: number) {
     `
     SELECT
       cs.*,
+      COALESCE(cs.batch_label, te.batch_label) AS batch_label,
+      COALESCE(cs.student_ids, te.student_ids) AS student_ids,
+      COALESCE(cs.student_count, te.student_count) AS student_count,
       p.version_no AS plan_version,
       sl.display_name AS faculty_name,
       sl.hrms_employee_id AS faculty_hrms_id,
       ts.label AS slot_label
     FROM ap_class_sessions cs
     LEFT JOIN ap_timetable_plans p ON p.id = cs.plan_id
+    LEFT JOIN ap_timetable_entries te ON te.id = cs.timetable_entry_id
     LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
     LEFT JOIN ap_timing_template_slots ts
       ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)

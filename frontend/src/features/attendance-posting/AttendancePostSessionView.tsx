@@ -43,6 +43,7 @@ type Payload = {
     section: string | null;
     sections?: string[];
     slotLabel: string | null;
+    batchLabel?: string | null;
     time: string;
     date: string;
     facultyName: string | null;
@@ -315,7 +316,7 @@ export function AttendancePostSessionView() {
               <span className="whitespace-nowrap">{payload.session.time}</span>
             </div>
           }
-          description={`${formatSectionDisplay(payload.session.section, payload.session.sections)} • ${payload.session.date}${payload.session.slotLabel ? ` • ${payload.session.slotLabel}` : ""}${payload.session.sections && payload.session.sections.length > 1 ? ` • Combined (${payload.session.sections.length} Sections)` : ""}`}
+          description={`${formatSectionDisplay(payload.session.section, payload.session.sections)}${payload.session.batchLabel ? ` • ${payload.session.batchLabel}` : ""} • ${payload.session.date}${payload.session.slotLabel ? ` • ${payload.session.slotLabel}` : ""}${payload.session.sections && payload.session.sections.length > 1 ? ` • Combined (${payload.session.sections.length} Sections)` : ""}`}
           actions={
             <>
               <Link href="/attendance-posting">
@@ -338,8 +339,13 @@ export function AttendancePostSessionView() {
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <StatusBadge status={payload.posted ? "Posted" : "Pending"} />
+              {payload.session.batchLabel ? (
+                <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300">
+                  {payload.session.batchLabel}
+                </span>
+              ) : null}
               <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
-                Regular Students ({students.length})
+                {payload.session.batchLabel ? `${payload.session.batchLabel} Students` : "Regular Students"} ({students.length})
               </span>
               {payload.session.sections && payload.session.sections.length > 1 ? (
                 <span className="inline-flex items-center text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
