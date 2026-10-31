@@ -45,6 +45,8 @@ export type TimetablePlannerFilters = {
   year?: number;
   semester?: number;
   academicYear?: string;
+  statuses?: string[];
+  preferPublished?: boolean;
 };
 
 type ContextRow = RowDataPacket & {
@@ -750,8 +752,11 @@ async function findPlan(filters: Required<
     TimetablePlannerFilters,
     "collegeId" | "courseId" | "branchId" | "academicYear" | "semester"
   >
-> & { batch?: string; section?: string | null; year?: number | null; statuses?: string[] }) {
+> & { batch?: string; section?: string | null; year?: number | null; statuses?: string[]; preferPublished?: boolean }) {
   const statuses = filters.statuses ?? ["draft", "in_review", "published"];
+  const statusOrderSql = filters.preferPublished
+    ? "FIELD(status,'published','in_review','draft')"
+    : "FIELD(status,'draft','in_review','published')";
 
   const where: string[] = [
     "academic_year_label = ?",
@@ -791,7 +796,7 @@ async function findPlan(filters: Required<
     ORDER BY
       ${filters.year != null ? "CASE WHEN year_of_study = ? THEN 0 ELSE 1 END," : ""}
       ${filters.batch && filters.batch !== "all" ? "CASE WHEN batch = ? THEN 0 ELSE 1 END," : ""}
-      FIELD(status,'draft','in_review','published'),
+      ${statusOrderSql},
       version_no DESC,
       id DESC
     LIMIT 1
@@ -1260,6 +1265,8 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
     batch,
     semester,
     section: sectionLabel,
+    statuses: filters.statuses,
+    preferPublished: filters.preferPublished,
     year,
   });
 

@@ -455,6 +455,7 @@ export async function getPrincipalDashboardData(
           LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
           LEFT JOIN ap_timing_template_slots ts ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
           WHERE ${dateClause} AND cs.branch_id IN (${branchInSql})
+            AND (tp.status IS NULL OR tp.status NOT IN ('superseded', 'archived') OR ap.id IS NOT NULL)
           `,
           [...dateParams, ...activeBranchIds],
         )

@@ -874,6 +874,8 @@ export async function getAllBatchesDailyTimetableData(filters: {
           year: cohort.year,
           semester: cohort.semester,
           section: cohort.section || undefined,
+          statuses: ["published"],
+          preferPublished: true,
           academicYear: filters.academicYear,
         }),
         getDailyTimetableData({

@@ -2285,13 +2285,34 @@ export function TodayTimetableView() {
   // Selected semester tab (e.g. 'all', '1-1', '1-2', etc.)
   const [selectedSemesterTab, setSelectedSemesterTab] = useState<string>("all");
 
+  // Synchronize AcademicFilterBar (Year & Semester dropdowns) with selectedSemesterTab
+  useEffect(() => {
+    if (filters.year !== "all" && filters.semester !== "all") {
+      const target = `${filters.year}-${filters.semester}`;
+      if (selectedSemesterTab !== target) {
+        setSelectedSemesterTab(target);
+      }
+    } else if (filters.year === "all" && filters.semester === "all") {
+      if (selectedSemesterTab !== "all") {
+        setSelectedSemesterTab("all");
+      }
+    }
+  }, [filters.year, filters.semester]);
+
   const filteredBatchesData = useMemo(() => {
-    if (selectedSemesterTab === "all") return allBatchesData;
-    const [yearStr, semStr] = selectedSemesterTab.split("-");
-    const y = Number(yearStr);
-    const s = Number(semStr);
-    return allBatchesData.filter((b) => b.year === y && b.semester === s);
-  }, [allBatchesData, selectedSemesterTab]);
+    return allBatchesData.filter((b) => {
+      if (selectedSemesterTab !== "all") {
+        const [yearStr, semStr] = selectedSemesterTab.split("-");
+        const y = Number(yearStr);
+        const s = Number(semStr);
+        if (b.year !== y || b.semester !== s) return false;
+      } else {
+        if (filters.year !== "all" && b.year !== Number(filters.year)) return false;
+        if (filters.semester !== "all" && b.semester !== Number(filters.semester)) return false;
+      }
+      return true;
+    });
+  }, [allBatchesData, selectedSemesterTab, filters.year, filters.semester]);
 
   const [editingSlot, setEditingSlot] = useState<{
     slot: { id: number; label: string; startTime: string; endTime: string };
@@ -2950,7 +2971,10 @@ export function TodayTimetableView() {
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2">Semester:</span>
             <button
               type="button"
-              onClick={() => setSelectedSemesterTab("all")}
+              onClick={() => {
+                setSelectedSemesterTab("all");
+                setFilters({ year: "all", semester: "all" });
+              }}
               className={cn(
                 "px-3.5 py-1 text-xs font-bold rounded-lg transition-all border",
                 selectedSemesterTab === "all"
@@ -2969,7 +2993,10 @@ export function TodayTimetableView() {
                 <button
                   key={pill.label}
                   type="button"
-                  onClick={() => setSelectedSemesterTab(pill.label)}
+                  onClick={() => {
+                    setSelectedSemesterTab(pill.label);
+                    setFilters({ year: pill.year, semester: pill.semester });
+                  }}
                   className={cn(
                     "px-3.5 py-1 text-xs font-bold rounded-lg transition-all border",
                     isSelected
@@ -3015,10 +3042,10 @@ export function TodayTimetableView() {
                   <BookOpen className="h-3 w-3" />
                   <span>
                     {filters.collegeId === "all"
-                      ? "All Colleges · All Batches"
+                      ? "All Colleges · All Classes"
                       : filters.branchId === "all"
-                      ? "All Branches · All Batches"
-                      : "All Running Batches"}
+                      ? "All Branches · All Classes"
+                      : "All Active Semesters"}
                   </span>
                 </span>
               ) : studentProgressInfo ? (
@@ -3150,15 +3177,15 @@ export function TodayTimetableView() {
                   {/* Cohort Header */}
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-lg bg-navy-900 px-2.5 py-1 text-xs font-bold text-white shadow-xs">
-                        Batch {cohort.batch}
-                      </span>
-                      <span className="rounded-lg bg-indigo-100 px-2.5 py-1 text-xs font-extrabold text-indigo-800 border border-indigo-200">
+                      <span className="rounded-lg bg-indigo-600 px-2.5 py-1 text-xs font-black text-white shadow-xs">
                         {cohort.yearSemLabel}
                       </span>
-                      {cohort.planner?.context?.college && (
+                      <span className="text-sm font-bold text-slate-900">
+                        Year {cohort.year}, Semester {cohort.semester}
+                      </span>
+                      {cohort.section && (
                         <span className="rounded-md bg-blue-50 px-2 py-0.5 text-xs font-bold text-blue-800 border border-blue-200">
-                          {cohort.planner.context.college}
+                          Section {cohort.section}
                         </span>
                       )}
                       {cohort.planner?.context?.branch && (
@@ -3166,12 +3193,14 @@ export function TodayTimetableView() {
                           {cohort.planner.context.branch}
                         </span>
                       )}
-                      <span className="text-sm font-bold text-slate-800">
-                        Year {cohort.year}, Semester {cohort.semester}
-                      </span>
-                      {cohort.section && (
-                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 border border-slate-200">
-                          Section {cohort.section}
+                      {cohort.planner?.context?.college && (
+                        <span className="rounded-md bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-600 border border-slate-200">
+                          {cohort.planner.context.college}
+                        </span>
+                      )}
+                      {cohort.batch && (
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500 border border-slate-200">
+                          Batch {cohort.batch}
                         </span>
                       )}
                     </div>
