@@ -2,12 +2,14 @@ export function PrincipalDashboardSkeleton() {
   return (
     <div className="space-y-4 sm:space-y-5 pb-12 font-sans bg-[#f8fafc] -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6 min-h-screen animate-pulse">
       {/* 1. TOP METRIC CARDS ROW (6 CARDS) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-3.5">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
         {[1, 2, 3, 4, 5, 6].map((i) => (
-          <div key={i} className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs space-y-2.5">
-            <div className="w-9 h-9 rounded-lg bg-slate-100" />
-            <div className="h-3 w-20 bg-slate-100 rounded" />
-            <div className="h-7 w-24 bg-slate-100 rounded" />
+          <div key={i} className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs space-y-1.5 flex flex-col justify-between">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="h-3 w-16 bg-slate-100 rounded" />
+              <div className="w-6 h-6 rounded-lg bg-slate-100 shrink-0" />
+            </div>
+            <div className="h-6 w-16 bg-slate-100 rounded mt-1" />
             <div className="h-2.5 w-28 bg-slate-100 rounded" />
           </div>
         ))}

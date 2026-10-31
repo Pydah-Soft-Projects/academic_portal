@@ -31,6 +31,7 @@ import {
   Filter,
   Search,
   Fingerprint,
+  ArrowRightLeft,
 } from "lucide-react";
 import {
   BarChart,
@@ -49,6 +50,8 @@ export interface PrincipalDashboardProps {
   roleType?: "principal" | "vice_principal" | "admin";
   customUserName?: string;
 }
+
+const ROMAN_YEARS: Record<number, string> = { 1: "I", 2: "II", 3: "III", 4: "IV" };
 
 export type PrincipalDashboardData = {
   meta: {
@@ -200,17 +203,32 @@ export type PrincipalDashboardData = {
     affectedClassesList?: Array<{
       id: number;
       status: "adjusted" | "cancelled" | "scheduled";
+      changeType?: string | null;
       facultyName: string;
       subjectName: string;
       subjectCode: string | null;
+      masterFacultyName?: string | null;
+      masterFacultyHrmsId?: string | null;
+      newFacultyName?: string | null;
+      newFacultyHrmsId?: string | null;
+      masterSubjectName?: string | null;
+      masterSubjectCode?: string | null;
+      newSubjectName?: string | null;
+      newSubjectCode?: string | null;
       startTime: string | null;
       endTime: string | null;
+      slotTime?: string | null;
+      timingSlotId?: number | null;
       sectionName: string | null;
+      batch?: string | null;
+      semester?: number | null;
       yearOfStudy: number | null;
       slotLabel: string | null;
       slotType: string | null;
       branchName: string | null;
+      branchCode?: string | null;
       branchId: number;
+      remarks?: string | null;
     }>;
     employeeWiseDetails?: Array<{
       staffLinkId?: number;
@@ -240,6 +258,21 @@ export type PrincipalDashboardData = {
         isPosted: boolean;
       }>;
       subjects?: string[];
+      adjustedSlotsCount?: number;
+      unadjustedSlotsCount?: number;
+      isFullyAdjusted?: boolean;
+      isPartiallyAdjusted?: boolean;
+      adjustmentsList?: Array<{
+        id?: number;
+        slotLabel: string;
+        slotTime: string | null;
+        timingSlotId?: number;
+        subjectName: string;
+        adjustedToFacultyName: string | null;
+        adjustedToSubjectName: string | null;
+        changeType: string;
+        remarks: string | null;
+      }>;
       details: string | null;
     }>;
     hrmsLeaves?: Array<{
@@ -345,10 +378,11 @@ export function PrincipalDashboard({
   const [facultyModalTab, setFacultyModalTab] = useState<"employees" | "leaves" | "ods" | "permissions" | "adjustments">("employees");
   const [empStatusFilter, setEmpStatusFilter] = useState<"all" | "present" | "late" | "leave" | "od" | "permission" | "absent">("all");
   const [empGroupFilter, setEmpGroupFilter] = useState<"all" | "teaching" | "non_teaching">("all");
-  const [empSlotFilter, setEmpSlotFilter] = useState<"all" | "has_slots" | "no_slots">("all");
+  const [empSlotFilter, setEmpSlotFilter] = useState<"all" | "has_slots" | "no_slots" | "adjusted" | "not_adjusted">("all");
   const [empSearchQuery, setEmpSearchQuery] = useState("");
   const [pendingCategoryFilter, setPendingCategoryFilter] = useState<"all" | "leave" | "od" | "ccl" | "general">("all");
   const [pendingSearchQuery, setPendingSearchQuery] = useState("");
+  const [adjCategoryFilter, setAdjCategoryFilter] = useState<"all" | "adjusted" | "cancelled" | "pending">("all");
   const [overviewYearFilter, setOverviewYearFilter] = useState<number | "all">("all");
   const [expandedDepts, setExpandedDepts] = useState<Record<string, boolean>>({});
   const [deptPage, setDeptPage] = useState(1);
@@ -423,6 +457,8 @@ export function PrincipalDashboard({
       if (empGroupFilter === "non_teaching" && emp.isTeaching) return false;
       if (empSlotFilter === "has_slots" && (!emp.slotsCount || emp.slotsCount === 0)) return false;
       if (empSlotFilter === "no_slots" && (emp.slotsCount && emp.slotsCount > 0)) return false;
+      if (empSlotFilter === "adjusted" && (!emp.adjustedSlotsCount || emp.adjustedSlotsCount === 0)) return false;
+      if (empSlotFilter === "not_adjusted" && (!emp.slotsCount || emp.slotsCount === 0 || (emp.adjustedSlotsCount != null && emp.adjustedSlotsCount >= emp.slotsCount))) return false;
       if (empSearchQuery.trim()) {
         const q = empSearchQuery.toLowerCase().trim();
         const matchesName = emp.name.toLowerCase().includes(q);
@@ -524,131 +560,158 @@ export function PrincipalDashboard({
   return (
     <div className="space-y-4 sm:space-y-5 pb-6 font-sans bg-[#f8fafc] -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6">
       {/* 2. TOP METRIC CARDS ROW (6 CARDS) */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
         
         {/* Card 1: Student Attendance */}
-        <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs hover:shadow-sm transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <Users className="h-5 w-5" />
+        <div className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate" title="Student Attendance">
+              Student Attendance
+            </span>
+            <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+              <Users className="h-3.5 w-3.5" />
             </div>
           </div>
-          <span className="text-xs font-medium text-slate-500 block">Student Attendance</span>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
               {current.kpis.studentAttendance.value}
             </span>
-            <span className="text-xs font-bold text-emerald-600">
-              {current.kpis.studentAttendance.trend}
-            </span>
+            {current.kpis.studentAttendance.trend && (
+              <span className="text-[10px] sm:text-[11px] font-bold text-emerald-600">
+                {current.kpis.studentAttendance.trend}
+              </span>
+            )}
           </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
+          <span className="text-[10px] sm:text-[10.5px] text-slate-400 mt-0.5 block truncate" title={current.kpis.studentAttendance.subtext}>
             {current.kpis.studentAttendance.subtext}
           </span>
         </div>
 
         {/* Card 2: Faculty Attendance */}
-        <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs hover:shadow-sm transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <UserCheck className="h-5 w-5" />
+        <div className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate" title="Faculty Attendance">
+              Faculty Attendance
+            </span>
+            <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+              <UserCheck className="h-3.5 w-3.5" />
             </div>
           </div>
-          <span className="text-xs font-medium text-slate-500 block">Faculty Attendance</span>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
               {current.kpis.facultyAttendance.value}
             </span>
-            <span className="text-xs font-bold text-emerald-600">
-              {current.kpis.facultyAttendance.trend}
-            </span>
+            {current.kpis.facultyAttendance.trend && (
+              <span className="text-[10px] sm:text-[11px] font-bold text-emerald-600">
+                {current.kpis.facultyAttendance.trend}
+              </span>
+            )}
           </div>
-          <span className="text-[11px] text-slate-400 mt-1 block truncate" title={current.kpis.facultyAttendance.subtext}>
+          <span className="text-[10px] sm:text-[10.5px] text-slate-400 mt-0.5 block truncate" title={current.kpis.facultyAttendance.subtext}>
             {current.kpis.facultyAttendance.subtext}
           </span>
         </div>
 
         {/* Card 3: Students at Risk */}
-        <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs hover:shadow-sm transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center">
-              <GraduationCap className="h-5 w-5" />
+        <div className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate" title="Students at Risk">
+              Students at Risk
+            </span>
+            <div className="w-6 h-6 rounded-lg bg-rose-50 text-rose-500 flex items-center justify-center shrink-0">
+              <GraduationCap className="h-3.5 w-3.5" />
             </div>
           </div>
-          <span className="text-xs font-medium text-slate-500 block">Students at Risk</span>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl sm:text-3xl font-extrabold text-rose-600 tracking-tight">
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-rose-600 tracking-tight">
               {current.kpis.studentsAtRisk.value}
             </span>
           </div>
-          <span className="text-[11px] text-slate-500 mt-0.5 block">
-            {current.kpis.studentsAtRisk.subtext1}
-          </span>
-          <span className="text-[10px] text-slate-400 block truncate">
-            {current.kpis.studentsAtRisk.subtext2}
-          </span>
+          <div className="text-[10px] sm:text-[10.5px] text-slate-400 mt-0.5 truncate flex items-center gap-1">
+            <span className="text-slate-500 font-medium">{current.kpis.studentsAtRisk.subtext1}</span>
+            {current.kpis.studentsAtRisk.subtext2 && (
+              <>
+                <span>•</span>
+                <span className="truncate">{current.kpis.studentsAtRisk.subtext2}</span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Card 4: Subjects Behind Schedule */}
-        <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs hover:shadow-sm transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center">
-              <BookOpen className="h-5 w-5" />
+        <div className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate" title="Subjects Behind Schedule">
+              Behind Schedule
+            </span>
+            <div className="w-6 h-6 rounded-lg bg-amber-50 text-amber-500 flex items-center justify-center shrink-0">
+              <BookOpen className="h-3.5 w-3.5" />
             </div>
           </div>
-          <span className="text-xs font-medium text-slate-500 block">Subjects Behind Schedule</span>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl sm:text-3xl font-extrabold text-amber-500 tracking-tight">
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-amber-500 tracking-tight">
               {current.kpis.subjectsBehindSchedule.value}
             </span>
           </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
+          <span className="text-[10px] sm:text-[10.5px] text-slate-400 mt-0.5 block truncate" title={current.kpis.subjectsBehindSchedule.subtext}>
             {current.kpis.subjectsBehindSchedule.subtext}
           </span>
         </div>
 
         {/* Card 5: Fee Collection */}
-        <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs hover:shadow-sm transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-              <IndianRupee className="h-5 w-5" />
+        <div className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate" title="Fee Collection">
+              Fee Collection
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              {(current.kpis.feeCollection.value == null || current.kpis.feeCollection.value === "null") && (
+                <span className="text-[9px] font-bold uppercase bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
+                  Pending
+                </span>
+              )}
+              <div className="w-6 h-6 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+                <IndianRupee className="h-3.5 w-3.5" />
+              </div>
             </div>
-            {(current.kpis.feeCollection.value === null || current.kpis.feeCollection.value === "null") && (
-              <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
-                Pending
-              </span>
-            )}
           </div>
-          <span className="text-xs font-medium text-slate-500 block">Fee Collection</span>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-              {current.kpis.feeCollection.value != null ? current.kpis.feeCollection.value : "null"}
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+              {current.kpis.feeCollection.value != null && current.kpis.feeCollection.value !== "null"
+                ? current.kpis.feeCollection.value
+                : "—"}
             </span>
           </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
+          <span className="text-[10px] sm:text-[10.5px] text-slate-400 mt-0.5 block truncate" title={current.kpis.feeCollection.subtext}>
             {current.kpis.feeCollection.subtext}
           </span>
         </div>
 
         {/* Card 6: Placement (Eligible) */}
-        <div className="bg-white rounded-xl p-3.5 sm:p-4 border border-slate-200/80 shadow-2xs hover:shadow-sm transition-shadow">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
-              <Briefcase className="h-5 w-5" />
+        <div className="bg-white rounded-xl sm:rounded-2xl p-2.5 sm:p-3 border border-slate-200/90 shadow-2xs hover:shadow-xs transition-all flex flex-col justify-between">
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider truncate" title="Placement (Eligible)">
+              Placement
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              {(current.kpis.placement.value == null || current.kpis.placement.value === "null") && (
+                <span className="text-[9px] font-bold uppercase bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">
+                  Pending
+                </span>
+              )}
+              <div className="w-6 h-6 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
+                <Briefcase className="h-3.5 w-3.5" />
+              </div>
             </div>
-            {(current.kpis.placement.value === null || current.kpis.placement.value === "null") && (
-              <span className="text-[10px] font-semibold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
-                Pending
-              </span>
-            )}
           </div>
-          <span className="text-xs font-medium text-slate-500 block">Placement (Eligible)</span>
-          <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-              {current.kpis.placement.value != null ? current.kpis.placement.value : "null"}
+          <div className="flex items-baseline gap-1.5 mt-1">
+            <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+              {current.kpis.placement.value != null && current.kpis.placement.value !== "null"
+                ? current.kpis.placement.value
+                : "—"}
             </span>
           </div>
-          <span className="text-[11px] text-slate-400 mt-1 block">
+          <span className="text-[10px] sm:text-[10.5px] text-slate-400 mt-0.5 block truncate" title={current.kpis.placement.subtext}>
             {current.kpis.placement.subtext}
           </span>
         </div>
@@ -2530,6 +2593,24 @@ export function PrincipalDashboard({
                         </button>
                         <button
                           type="button"
+                          onClick={() => setEmpSlotFilter("adjusted")}
+                          className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                            empSlotFilter === "adjusted" ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          Slots Adjusted ({current.facultyAttendanceAndAdjustment.employeeWiseDetails?.filter((e) => (e.adjustedSlotsCount || 0) > 0).length || 0})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEmpSlotFilter("not_adjusted")}
+                          className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
+                            empSlotFilter === "not_adjusted" ? "bg-rose-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                          }`}
+                        >
+                          Not Adjusted ({current.facultyAttendanceAndAdjustment.employeeWiseDetails?.filter((e) => (e.slotsCount || 0) > 0 && (!e.adjustedSlotsCount || e.adjustedSlotsCount < (e.slotsCount || 0))).length || 0})
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => setEmpSlotFilter("no_slots")}
                           className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer ${
                             empSlotFilter === "no_slots" ? "bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
@@ -2590,10 +2671,31 @@ export function PrincipalDashboard({
                                   <td className="py-2.5 px-3">
                                     {emp.slotsCount && emp.slotsCount > 0 ? (
                                       <div className="space-y-1">
-                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
-                                          <BookOpen className="h-2.5 w-2.5 text-blue-600 shrink-0" />
-                                          {emp.slotsCount} Slots ({emp.slotsPosted || 0} Posted)
-                                        </span>
+                                        <div className="flex flex-wrap items-center gap-1">
+                                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                                            <BookOpen className="h-2.5 w-2.5 text-blue-600 shrink-0" />
+                                            {emp.slotsCount} Slots ({emp.slotsPosted || 0} Posted)
+                                          </span>
+                                          {/* Adjustment status indicator for absent / leave / od employees */}
+                                          {(emp.status === "absent" || emp.status === "leave" || emp.status === "od") && (
+                                            emp.isFullyAdjusted ? (
+                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                                <CheckCircle2 className="h-2.5 w-2.5 text-emerald-600 shrink-0" />
+                                                All Adjusted
+                                              </span>
+                                            ) : emp.adjustedSlotsCount && emp.adjustedSlotsCount > 0 ? (
+                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                                <ArrowRightLeft className="h-2.5 w-2.5 text-amber-600 shrink-0" />
+                                                {emp.adjustedSlotsCount}/{emp.slotsCount} Adj.
+                                              </span>
+                                            ) : (
+                                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-rose-50 text-rose-700 border border-rose-200">
+                                                <AlertTriangle className="h-2.5 w-2.5 text-rose-600 shrink-0" />
+                                                Not Adjusted
+                                              </span>
+                                            )
+                                          )}
+                                        </div>
                                         {emp.subjects && emp.subjects.length > 0 && (
                                           <span className="text-[10.5px] text-slate-500 block leading-snug whitespace-normal break-words" title={emp.subjects.join(", ")}>
                                             {emp.subjects.join(", ")}
@@ -2651,7 +2753,25 @@ export function PrincipalDashboard({
                                     )}
                                   </td>
                                   <td className="py-2.5 px-3 text-[11px] text-slate-600 leading-relaxed whitespace-normal break-words">
-                                    {emp.details || "—"}
+                                    <div>{emp.details || "—"}</div>
+                                    {emp.adjustmentsList && emp.adjustmentsList.length > 0 && (
+                                      <div className="mt-1 space-y-0.5 bg-slate-50 border border-slate-200/90 rounded p-1.5 text-[10px]">
+                                        <span className="font-bold text-slate-700 block text-[9.5px] uppercase tracking-wider">
+                                          Adjustments ({emp.adjustmentsList.length}):
+                                        </span>
+                                        {emp.adjustmentsList.map((adj, idx) => (
+                                          <div key={idx} className="text-slate-600 leading-tight">
+                                            <span className="font-bold text-blue-700">{adj.slotLabel}</span>: {adj.subjectName}
+                                            {adj.adjustedToFacultyName && (
+                                              <span className="text-slate-500"> &rarr; <span className="font-semibold text-slate-800">{adj.adjustedToFacultyName}</span></span>
+                                            )}
+                                            {adj.adjustedToSubjectName && adj.adjustedToSubjectName !== adj.subjectName && (
+                                              <span className="text-slate-500 text-[9.5px]"> ({adj.adjustedToSubjectName})</span>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
                                   </td>
                                 </tr>
                               ))
@@ -2847,37 +2967,75 @@ export function PrincipalDashboard({
 
                   {/* TAB 5: Class Adjustments */}
                   {facultyModalTab === "adjustments" && (
-                    <div className="space-y-3">
+                    <div className="flex-1 min-h-0 overflow-y-auto space-y-3.5 pr-1 pb-4">
                       {/* Summary KPI cards */}
-                      <div className="p-4 bg-slate-50 rounded-xl text-xs space-y-2 border border-slate-200">
-                        <span className="font-bold text-slate-800 text-sm block">
-                          Classes Affected Today: {current.facultyAttendanceAndAdjustment.classesAffected.total}
-                        </span>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-2">
-                          <div className="p-2 bg-emerald-50 rounded-lg">
-                            <span className="text-[10px] text-slate-500 block">Adjusted</span>
-                            <span className="text-base font-bold text-emerald-600">
+                      <div className="p-3.5 bg-slate-50 rounded-xl text-xs space-y-2 border border-slate-200 shrink-0">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800 text-sm block">
+                            Classes Affected Today: {current.facultyAttendanceAndAdjustment.classesAffected.total}
+                          </span>
+                          {adjCategoryFilter !== "all" && (
+                            <button
+                              type="button"
+                              onClick={() => setAdjCategoryFilter("all")}
+                              className="text-[11px] font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded cursor-pointer transition-colors"
+                            >
+                              Show All Classes &times;
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setAdjCategoryFilter(adjCategoryFilter === "adjusted" ? "all" : "adjusted")}
+                            className={`p-2 rounded-lg text-center transition-all border cursor-pointer ${
+                              adjCategoryFilter === "adjusted"
+                                ? "bg-emerald-100 border-emerald-400 ring-2 ring-emerald-300"
+                                : "bg-emerald-50/80 border-emerald-100 hover:bg-emerald-100/60"
+                            }`}
+                            title="Click to toggle adjusted classes filter"
+                          >
+                            <span className="text-[10px] text-slate-600 block font-medium">Adjusted</span>
+                            <span className="text-base font-bold text-emerald-700">
                               {current.facultyAttendanceAndAdjustment.classesAffected.adjusted}
                             </span>
-                          </div>
-                          <div className="p-2 bg-blue-50 rounded-lg">
-                            <span className="text-[10px] text-slate-500 block">Substitute</span>
-                            <span className="text-base font-bold text-blue-600">
+                          </button>
+                          <div className="p-2 bg-blue-50/80 border border-blue-100 rounded-lg text-center">
+                            <span className="text-[10px] text-slate-600 block font-medium">Substitute</span>
+                            <span className="text-base font-bold text-blue-700">
                               {current.facultyAttendanceAndAdjustment.classesAffected.substitute}
                             </span>
                           </div>
-                          <div className="p-2 bg-rose-50 rounded-lg">
-                            <span className="text-[10px] text-slate-500 block">Cancelled</span>
-                            <span className="text-base font-bold text-rose-600">
+                          <button
+                            type="button"
+                            onClick={() => setAdjCategoryFilter(adjCategoryFilter === "cancelled" ? "all" : "cancelled")}
+                            className={`p-2 rounded-lg text-center transition-all border cursor-pointer ${
+                              adjCategoryFilter === "cancelled"
+                                ? "bg-rose-100 border-rose-400 ring-2 ring-rose-300"
+                                : "bg-rose-50/80 border-rose-100 hover:bg-rose-100/60"
+                            }`}
+                            title="Click to toggle cancelled classes filter"
+                          >
+                            <span className="text-[10px] text-slate-600 block font-medium">Cancelled</span>
+                            <span className="text-base font-bold text-rose-700">
                               {current.facultyAttendanceAndAdjustment.classesAffected.cancelled}
                             </span>
-                          </div>
-                          <div className="p-2 bg-amber-50 rounded-lg">
-                            <span className="text-[10px] text-slate-500 block">Pending</span>
-                            <span className="text-base font-bold text-amber-600">
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAdjCategoryFilter(adjCategoryFilter === "pending" ? "all" : "pending")}
+                            className={`p-2 rounded-lg text-center transition-all border cursor-pointer ${
+                              adjCategoryFilter === "pending"
+                                ? "bg-amber-100 border-amber-400 ring-2 ring-amber-300"
+                                : "bg-amber-50/80 border-amber-100 hover:bg-amber-100/60"
+                            }`}
+                            title="Click to toggle pending classes filter"
+                          >
+                            <span className="text-[10px] text-slate-600 block font-medium">Pending</span>
+                            <span className="text-base font-bold text-amber-700">
                               {current.facultyAttendanceAndAdjustment.classesAffected.pending}
                             </span>
-                          </div>
+                          </button>
                         </div>
                       </div>
 
@@ -2906,44 +3064,122 @@ export function PrincipalDashboard({
                                 </span>
                               </div>
                               <div className="overflow-x-auto rounded-xl border border-slate-200">
-                                <table className="w-full text-xs min-w-[520px]">
+                                <table className="w-full text-xs min-w-[560px]">
                                   <thead>
                                     <tr className="border-b border-slate-200 bg-slate-50/80">
-                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Slot / Time</th>
-                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Subject</th>
-                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Faculty</th>
-                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Section / Dept</th>
-                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px]">Status</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px] w-[14%]">Slot / Timing</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px] w-[25%]">Subject (From &rarr; To)</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px] w-[27%]">Faculty (From &rarr; To)</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px] w-[20%]">Class / Dept</th>
+                                      <th className="py-2 px-3 text-left font-bold text-slate-600 text-[11px] w-[14%]">Status</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-100">
                                     {rows.map((row) => (
                                       <tr key={row.id} className="hover:bg-slate-50/70 transition-colors">
-                                        <td className="py-2 px-3">
-                                          <div className="font-bold text-slate-800">{row.slotLabel || "—"}</div>
-                                          {row.startTime && row.endTime && (
-                                            <div className="text-[10px] text-slate-500 font-mono">
-                                              {row.startTime}–{row.endTime}
+                                        <td className="py-2.5 px-3">
+                                          <div className="font-bold text-slate-900 text-xs">{row.slotLabel || "—"}</div>
+                                          {(row.slotTime || (row.startTime && row.endTime)) && (
+                                            <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                              {row.slotTime || `${row.startTime}–${row.endTime}`}
                                             </div>
                                           )}
                                         </td>
-                                        <td className="py-2 px-3">
-                                          <div className="font-semibold text-slate-900">{row.subjectName}</div>
-                                          {row.subjectCode && (
-                                            <div className="text-[10px] text-slate-500 font-mono">{row.subjectCode}</div>
+                                        <td className="py-2.5 px-3">
+                                          {row.status === "adjusted" && row.masterSubjectName && row.newSubjectName && row.masterSubjectName !== row.newSubjectName ? (
+                                            <div className="space-y-0.5">
+                                              <div className="text-[10px] text-slate-400 flex items-center gap-1 font-medium">
+                                                <span className="uppercase text-[8.5px] font-bold text-slate-400 bg-slate-100 px-1 py-0.2 rounded">Orig</span>
+                                                {row.masterSubjectName === "Free Period" ? (
+                                                  <span className="italic text-slate-500 font-medium">Free Period</span>
+                                                ) : (
+                                                  <span className="line-through truncate max-w-[190px]" title={row.masterSubjectName}>{row.masterSubjectName}</span>
+                                                )}
+                                              </div>
+                                              <div className="text-[11.5px] font-bold text-slate-900 flex items-center gap-1">
+                                                <span className="text-emerald-600 font-bold">&rarr;</span>
+                                                {row.newSubjectName === "Special Period" ? (
+                                                  <span className="inline-flex items-center gap-1 font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[10.5px]">
+                                                    Special Period
+                                                  </span>
+                                                ) : row.newSubjectName === "Free Period" ? (
+                                                  <span className="italic text-slate-500 font-medium">Free Period</span>
+                                                ) : (
+                                                  <span className="truncate max-w-[190px]" title={row.newSubjectName}>{row.newSubjectName}</span>
+                                                )}
+                                              </div>
+                                              {row.newSubjectCode && row.newSubjectCode !== "SPECIAL" && row.newSubjectCode !== "FREE" && (
+                                                <span className="text-[9.5px] font-mono text-slate-400 block">{row.newSubjectCode}</span>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <div>
+                                              {row.newSubjectName === "Special Period" ? (
+                                                <span className="inline-flex items-center gap-1 font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[10.5px]">
+                                                  Special Period
+                                                </span>
+                                              ) : (
+                                                <div className="font-semibold text-slate-900 text-[11.5px]">{row.newSubjectName || row.subjectName}</div>
+                                              )}
+                                              {(row.newSubjectCode || row.subjectCode) && (row.newSubjectCode !== "SPECIAL" && row.newSubjectCode !== "FREE") && (
+                                                <div className="text-[10px] text-slate-500 font-mono">{row.newSubjectCode || row.subjectCode}</div>
+                                              )}
+                                            </div>
                                           )}
                                         </td>
-                                        <td className="py-2 px-3 font-medium text-slate-700">{row.facultyName}</td>
-                                        <td className="py-2 px-3">
-                                          <div className="text-slate-700">
-                                            {row.sectionName ? `${row.sectionName}` : ""}
-                                            {row.yearOfStudy ? ` · Year ${row.yearOfStudy}` : ""}
+                                        <td className="py-2.5 px-3">
+                                          {row.status === "adjusted" && row.masterFacultyName && row.newFacultyName && row.masterFacultyName !== row.newFacultyName ? (
+                                            <div className="space-y-1">
+                                              <div className="flex items-center gap-1.5">
+                                                <span className="text-[8.5px] font-bold uppercase tracking-wider text-rose-600 bg-rose-50 border border-rose-200/80 px-1 py-0.2 rounded shrink-0">From</span>
+                                                {row.masterFacultyName === "Free Period" || row.masterFacultyName.includes("Free Period") ? (
+                                                  <span className="text-slate-500 italic text-[11px]">Free Period (Unassigned)</span>
+                                                ) : (
+                                                  <span className="font-semibold text-slate-700 text-[11px] truncate max-w-[170px]" title={row.masterFacultyName}>
+                                                    {row.masterFacultyName}
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <div className="flex items-center gap-1.5">
+                                                <span className="text-[8.5px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1 py-0.2 rounded shrink-0">To</span>
+                                                <span className="font-bold text-slate-900 text-[11.5px] truncate max-w-[170px]" title={row.newFacultyName}>
+                                                  {row.newFacultyName}
+                                                </span>
+                                              </div>
+                                            </div>
+                                          ) : (
+                                            <div>
+                                              <div className="font-medium text-slate-800 text-[11.5px]">{row.newFacultyName || row.facultyName}</div>
+                                              {row.status === "adjusted" && row.masterFacultyName && row.masterFacultyName === row.newFacultyName && (
+                                                <span className="text-[9.5px] text-slate-400 italic block">Same teacher · subject altered</span>
+                                              )}
+                                              {row.status === "cancelled" && (
+                                                <span className="text-[9.5px] text-rose-500 block">Class cancelled</span>
+                                              )}
+                                            </div>
+                                          )}
+                                        </td>
+                                        <td className="py-2.5 px-3">
+                                          <div className="font-bold text-slate-900 text-[11.5px] flex items-center gap-1.5 flex-wrap">
+                                            {row.sectionName && (
+                                              <span className="text-slate-700 font-bold">Sec {row.sectionName} ·</span>
+                                            )}
+                                            <span className="text-slate-900 font-bold">
+                                              {row.yearOfStudy
+                                                ? `Year ${ROMAN_YEARS[row.yearOfStudy] || row.yearOfStudy}`
+                                                : row.semester
+                                                  ? `Year ${ROMAN_YEARS[Math.ceil(row.semester / 2)] || Math.ceil(row.semester / 2)}`
+                                                  : "Class"}
+                                            </span>
+                                            {row.semester && (
+                                              <span className="text-slate-600 font-medium">· Sem {row.semester}</span>
+                                            )}
                                           </div>
-                                          {row.branchName && (
-                                            <div className="text-[10px] text-slate-500">{row.branchName}</div>
-                                          )}
+                                          <div className="text-[10.5px] font-semibold text-indigo-700 mt-0.5">
+                                            {row.branchCode || row.branchName || "—"}
+                                          </div>
                                         </td>
-                                        <td className="py-2 px-3">
+                                        <td className="py-2.5 px-3">
                                           <span
                                             className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${
                                               row.status === "cancelled"
@@ -2953,12 +3189,21 @@ export function PrincipalDashboard({
                                                   : "bg-amber-100 text-amber-700"
                                             }`}
                                           >
-                                            {row.status === "cancelled"
-                                              ? "Cancelled"
-                                              : row.status === "adjusted"
-                                                ? "Adjusted"
-                                                : "Pending"}
+                                            {row.changeType === "REVERTED_TO_MASTER"
+                                              ? "Reverted"
+                                              : row.changeType === "SUBSTITUTION"
+                                                ? "Substitute"
+                                                : row.status === "cancelled"
+                                                  ? "Cancelled"
+                                                  : row.status === "adjusted"
+                                                    ? "Adjusted"
+                                                    : "Pending"}
                                           </span>
+                                          {row.remarks && (
+                                            <span className="block text-[9.5px] text-slate-400 italic mt-0.5 truncate max-w-[120px]" title={row.remarks}>
+                                              {row.remarks}
+                                            </span>
+                                          )}
                                         </td>
                                       </tr>
                                     ))}
@@ -2969,11 +3214,27 @@ export function PrincipalDashboard({
                           );
                         };
 
+                        const visibleCount =
+                          (adjCategoryFilter === "all" || adjCategoryFilter === "adjusted" ? adjusted.length : 0) +
+                          (adjCategoryFilter === "all" || adjCategoryFilter === "cancelled" ? cancelled.length : 0) +
+                          (adjCategoryFilter === "all" || adjCategoryFilter === "pending" ? pending.length : 0);
+
+                        if (visibleCount === 0) {
+                          return (
+                            <div className="text-center py-8 text-slate-400 text-xs italic bg-slate-50/50 rounded-xl border border-slate-100">
+                              No {adjCategoryFilter} classes found for today.
+                            </div>
+                          );
+                        }
+
                         return (
                           <div className="space-y-4">
-                            {renderRows(adjusted, "Timetable Adjustments", "bg-emerald-100 text-emerald-800", "text-emerald-700")}
-                            {renderRows(cancelled, "Cancelled Classes", "bg-rose-100 text-rose-800", "text-rose-700")}
-                            {renderRows(pending, "Pending (Unposted) Classes", "bg-amber-100 text-amber-800", "text-amber-700")}
+                            {(adjCategoryFilter === "all" || adjCategoryFilter === "adjusted") &&
+                              renderRows(adjusted, "Timetable Adjustments", "bg-emerald-100 text-emerald-800", "text-emerald-700")}
+                            {(adjCategoryFilter === "all" || adjCategoryFilter === "cancelled") &&
+                              renderRows(cancelled, "Cancelled Classes", "bg-rose-100 text-rose-800", "text-rose-700")}
+                            {(adjCategoryFilter === "all" || adjCategoryFilter === "pending") &&
+                              renderRows(pending, "Pending (Unposted) Classes", "bg-amber-100 text-amber-800", "text-amber-700")}
                           </div>
                         );
                       })()}

@@ -237,12 +237,27 @@ export async function getPrincipalDashboardData(
     master_subject_id: number | null;
     master_subject_code: string | null;
     master_subject_name: string | null;
+    master_faculty_hrms_id: string | null;
     master_faculty_name: string | null;
     new_subject_id: number | null;
     new_subject_code: string | null;
     new_subject_name: string | null;
+    new_faculty_hrms_id: string | null;
     new_faculty_name: string | null;
     change_type: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
+    remarks: string | null;
+  };
+
+  type SubstitutionRow = RowDataPacket & {
+    id: number;
+    session_date: string;
+    branch_id: number;
+    timing_slot_id: number;
+    subject_name: string | null;
+    original_faculty_staff_link_id: number | null;
+    replacement_faculty_staff_link_id: number | null;
+    execution_status: string;
+    reason: string | null;
   };
 
   type AssignedFacultyStaffRow = RowDataPacket & {
@@ -458,19 +473,15 @@ export async function getPrincipalDashboardData(
 
     // 3. Substitutions
     hasActiveBranches
-      ? queryAcademic<
-          (RowDataPacket & {
-            execution_status: string;
-            replacement_faculty_staff_link_id: number;
-            cnt: number;
-          })[]
-        >(
+      ? queryAcademic<SubstitutionRow[]>(
           `
-          SELECT execution_status, replacement_faculty_staff_link_id, COUNT(*) as cnt
+          SELECT 
+            id, session_date, branch_id, timing_slot_id, subject_name,
+            original_faculty_staff_link_id, replacement_faculty_staff_link_id,
+            execution_status, reason
           FROM ap_faculty_substitution_details
           WHERE session_date ${isDateRange ? "BETWEEN ? AND ?" : "= ?"}
             AND branch_id IN (${branchInSql})
-          GROUP BY execution_status, replacement_faculty_staff_link_id
           `,
           [...(isDateRange ? [startDateStr, endDateStr] : [selectedDateStr]), ...activeBranchIds],
         ).catch(() => [])
@@ -885,9 +896,9 @@ export async function getPrincipalDashboardData(
           SELECT
             id, timetable_date, college_id, branch_id, batch, semester, section_name,
             timing_slot_id, slot_label, slot_time,
-            master_subject_id, master_subject_code, master_subject_name, master_faculty_name,
-            new_subject_id, new_subject_code, new_subject_name, new_faculty_name,
-            change_type
+            master_subject_id, master_subject_code, master_subject_name, master_faculty_hrms_id, master_faculty_name,
+            new_subject_id, new_subject_code, new_subject_name, new_faculty_hrms_id, new_faculty_name,
+            change_type, remarks
           FROM ap_daily_timetable_activities
           WHERE timetable_date ${isDateRange ? "BETWEEN ? AND ?" : "= ?"}
             AND branch_id IN (${branchInSql})
@@ -910,6 +921,26 @@ export async function getPrincipalDashboardData(
       );
     } catch {
       assignedStaffRows = [];
+    }
+  }
+
+  // Build Plan Year Map for resolving year_of_study from (branch_id, batch, semester)
+  const planYearMap = new Map<string, number>();
+  if (hasActiveBranches) {
+    try {
+      const planYearRows = await queryAcademic<{ branch_id: number; batch: string; semester_number: number; year_of_study: number }[]>(
+        `SELECT DISTINCT branch_id, batch, semester_number, year_of_study FROM ap_timetable_plans WHERE branch_id IN (${branchInSql})`,
+        activeBranchIds,
+      );
+      for (const p of planYearRows) {
+        if (p.year_of_study != null) {
+          const b = String(p.batch || "").trim();
+          planYearMap.set(`${p.branch_id}_${b}_${p.semester_number}`, Number(p.year_of_study));
+          planYearMap.set(`${p.branch_id}_${b}`, Number(p.year_of_study));
+        }
+      }
+    } catch {
+      // ignore
     }
   }
 
@@ -979,12 +1010,12 @@ export async function getPrincipalDashboardData(
 
   for (const sub of subRows) {
     if (sub.execution_status === "applied") {
-      adjustedClassesCount += Number(sub.cnt);
+      adjustedClassesCount++;
       if (sub.replacement_faculty_staff_link_id) {
-        substituteClassesCount += Number(sub.cnt);
+        substituteClassesCount++;
       }
     }
-    facultyLeaveCount += Number(sub.cnt);
+    facultyLeaveCount++;
   }
   adjustedClassesCount += dailyAdjustedActivities.length;
 
@@ -1458,6 +1489,76 @@ export async function getPrincipalDashboardData(
       hrmsEmployeesTotal = assignedStaffRows.length;
       hrmsTeachingTotal = assignedStaffRows.length;
 
+      // Pre-index class adjustments and substitutions by staff
+      type AdjustmentItem = {
+        id: number;
+        slotLabel: string;
+        slotTime: string | null;
+        timingSlotId: number;
+        subjectName: string;
+        adjustedToFacultyName: string | null;
+        adjustedToSubjectName: string | null;
+        changeType: string;
+        remarks: string | null;
+      };
+
+      const adjustmentsByStaffLinkId = new Map<number, AdjustmentItem[]>();
+      const adjustmentsByHrmsId = new Map<string, AdjustmentItem[]>();
+      const adjustmentsByName = new Map<string, AdjustmentItem[]>();
+
+      for (const act of dailyAdjustedActivities) {
+        if (act.change_type === "HOLIDAY") continue;
+        const rawMasterSub = act.master_subject_name?.trim();
+        const rawNewSub = act.new_subject_name?.trim();
+        const subName = rawMasterSub || "Free Period";
+        const adjSubName = rawNewSub || (act.new_faculty_name ? "Special Period" : (rawMasterSub || "Free Period"));
+
+        const adjItem: AdjustmentItem = {
+          id: act.id,
+          slotLabel: act.slot_label || `Slot ${act.timing_slot_id}`,
+          slotTime: act.slot_time || null,
+          timingSlotId: act.timing_slot_id,
+          subjectName: subName,
+          adjustedToFacultyName: act.new_faculty_name || null,
+          adjustedToSubjectName: adjSubName,
+          changeType: act.change_type,
+          remarks: act.remarks || null,
+        };
+
+        const masterHrms = act.master_faculty_hrms_id ? String(act.master_faculty_hrms_id).trim() : null;
+        if (masterHrms) {
+          const list = adjustmentsByHrmsId.get(masterHrms) || [];
+          list.push(adjItem);
+          adjustmentsByHrmsId.set(masterHrms, list);
+        }
+
+        const masterName = act.master_faculty_name ? String(act.master_faculty_name).trim().toLowerCase() : null;
+        if (masterName) {
+          const list = adjustmentsByName.get(masterName) || [];
+          list.push(adjItem);
+          adjustmentsByName.set(masterName, list);
+        }
+      }
+
+      for (const sub of subRows) {
+        if (sub.original_faculty_staff_link_id) {
+          const subItem: AdjustmentItem = {
+            id: sub.id,
+            slotLabel: `Slot ${sub.timing_slot_id}`,
+            slotTime: null,
+            timingSlotId: sub.timing_slot_id,
+            subjectName: sub.subject_name || "—",
+            adjustedToFacultyName: sub.replacement_faculty_staff_link_id ? `Substitute Faculty #${sub.replacement_faculty_staff_link_id}` : null,
+            adjustedToSubjectName: sub.subject_name || null,
+            changeType: "SUBSTITUTION",
+            remarks: sub.reason || null,
+          };
+          const list = adjustmentsByStaffLinkId.get(sub.original_faculty_staff_link_id) || [];
+          list.push(subItem);
+          adjustmentsByStaffLinkId.set(sub.original_faculty_staff_link_id, list);
+        }
+      }
+
       employeeWiseDetails = assignedStaffRows.map((staffRow) => {
         const hrmsId = String(staffRow.hrms_employee_id || staffRow.employee_code || "").trim();
         const profile = empProfileMap.get(hrmsId);
@@ -1474,6 +1575,22 @@ export async function getPrincipalDashboardData(
         const slotsPending = slotInfo?.pendingSlots || 0;
         const assignedSlots = slotInfo?.slots || [];
         const subjectsList = slotInfo?.subjects || (staffRow.department_name ? [staffRow.department_name] : []);
+
+        // Find adjustments matching this faculty member
+        const staffNameKey = String(staffRow.display_name || profile?.name || "").trim().toLowerCase();
+        const rawAdj = [
+          ...(adjustmentsByStaffLinkId.get(staffRow.staff_link_id) || []),
+          ...(hrmsId ? adjustmentsByHrmsId.get(hrmsId) || [] : []),
+          ...(staffRow.employee_code ? adjustmentsByHrmsId.get(String(staffRow.employee_code).trim()) || [] : []),
+          ...(staffNameKey ? adjustmentsByName.get(staffNameKey) || [] : []),
+        ];
+        const uniqueAdjMap = new Map<number, AdjustmentItem>();
+        for (const a of rawAdj) uniqueAdjMap.set(a.id, a);
+        const adjustmentsList = Array.from(uniqueAdjMap.values());
+        const adjustedSlotsCount = adjustmentsList.length;
+        const unadjustedSlotsCount = Math.max(0, slotsCount - adjustedSlotsCount);
+        const isFullyAdjusted = slotsCount > 0 && adjustedSlotsCount >= slotsCount;
+        const isPartiallyAdjusted = slotsCount > 0 && adjustedSlotsCount > 0 && adjustedSlotsCount < slotsCount;
 
         const isTeaching = profile ? isTeachingGroup(profile.employeeGroup) : true;
         const shiftWithIn = daily?.shifts?.find((s: any) => s.inTime != null);
@@ -1503,12 +1620,34 @@ export async function getPrincipalDashboardData(
         } else if (isLeave) {
           status = "leave";
           displayStatus = `Leave (${leaveRec?.leaveType || "CL"})`;
-          details = leaveRec?.purpose ? `Leave: ${leaveRec.purpose}` : "Leave applied on HRMS";
+          const baseLeave = leaveRec?.purpose ? `Leave: ${leaveRec.purpose}` : "Leave applied on HRMS";
+          if (slotsCount > 0) {
+            if (isFullyAdjusted) {
+              details = `${baseLeave} • ${slotsCount} slots scheduled (All adjusted)`;
+            } else if (isPartiallyAdjusted) {
+              details = `${baseLeave} • ${slotsCount} slots scheduled (${adjustedSlotsCount} adjusted, ${unadjustedSlotsCount} not adjusted)`;
+            } else {
+              details = `${baseLeave} • ${slotsCount} slots scheduled (Not adjusted)`;
+            }
+          } else {
+            details = baseLeave;
+          }
           hrmsLeave++;
         } else if (isOd) {
           status = "od";
           displayStatus = `OD (${odRec?.odType || "On Duty"})`;
-          details = odRec?.placeVisited ? `OD: ${odRec.placeVisited}` : (odRec?.purpose || "Official duty");
+          const baseOd = odRec?.placeVisited ? `OD: ${odRec.placeVisited}` : (odRec?.purpose || "Official duty");
+          if (slotsCount > 0) {
+            if (isFullyAdjusted) {
+              details = `${baseOd} • ${slotsCount} slots scheduled (All adjusted)`;
+            } else if (isPartiallyAdjusted) {
+              details = `${baseOd} • ${slotsCount} slots scheduled (${adjustedSlotsCount} adjusted, ${unadjustedSlotsCount} not adjusted)`;
+            } else {
+              details = `${baseOd} • ${slotsCount} slots scheduled (Not adjusted)`;
+            }
+          } else {
+            details = baseOd;
+          }
           hrmsOd++;
         } else if (isPermission) {
           status = "permission";
@@ -1518,7 +1657,17 @@ export async function getPrincipalDashboardData(
         } else {
           status = "absent";
           displayStatus = "Absent";
-          details = slotsCount > 0 ? `No biometric punch • ${slotsCount} slots scheduled` : "No biometric thumb punch";
+          if (slotsCount > 0) {
+            if (isFullyAdjusted) {
+              details = `No biometric punch • ${slotsCount} slots scheduled (All adjusted)`;
+            } else if (isPartiallyAdjusted) {
+              details = `No biometric punch • ${slotsCount} slots scheduled (${adjustedSlotsCount} adjusted, ${unadjustedSlotsCount} not adjusted)`;
+            } else {
+              details = `No biometric punch • ${slotsCount} slots scheduled (Not adjusted)`;
+            }
+          } else {
+            details = "No biometric thumb punch";
+          }
           hrmsAbsent++;
         }
 
@@ -1553,6 +1702,11 @@ export async function getPrincipalDashboardData(
           slotsPending,
           slots: assignedSlots,
           subjects: subjectsList,
+          adjustedSlotsCount,
+          unadjustedSlotsCount,
+          isFullyAdjusted,
+          isPartiallyAdjusted,
+          adjustmentsList,
           details,
         };
       });
@@ -2353,46 +2507,157 @@ export async function getPrincipalDashboardData(
 
   // Build Faculty Attendance & Class Adjustment metrics
   const branchNameMap = new Map<number, string>();
-  for (const b of scopedBranches) branchNameMap.set(b.id, b.name);
+  const branchCodeMap = new Map<number, string>();
+  for (const b of scopedBranches) {
+    branchNameMap.set(b.id, b.name);
+    if (b.code) branchCodeMap.set(b.id, b.code);
+  }
 
-  // Build per-session detail list for affected classes (cancelled + scheduled/pending)
+  // Build per-session detail list for affected classes (cancelled + scheduled/pending + adjusted + substitutes)
   const affectedClassesList = [
     ...todaySessions
       .filter((s) => s.status === "cancelled" || s.status === "holiday" || s.status === "scheduled")
       .map((s) => ({
         id: s.id,
-        status: s.status === "cancelled" || s.status === "holiday" ? "cancelled" as const : "scheduled" as const,
+        status: s.status === "cancelled" || s.status === "holiday" ? ("cancelled" as const) : ("scheduled" as const),
+        changeType: s.status,
         facultyName: s.display_name || "Unknown",
         subjectName: s.subject_name || "—",
         subjectCode: s.subject_code || null,
+        masterFacultyName: s.display_name || null,
+        masterFacultyHrmsId: null,
+        newFacultyName: null,
+        newFacultyHrmsId: null,
+        masterSubjectName: s.subject_name || null,
+        masterSubjectCode: s.subject_code || null,
+        newSubjectName: null,
+        newSubjectCode: null,
         startTime: s.start_time || null,
         endTime: s.end_time || null,
+        slotTime: s.start_time && s.end_time ? `${s.start_time}–${s.end_time}` : null,
+        timingSlotId: null,
         sectionName: s.section_name || null,
+        batch: null,
+        semester: null,
         yearOfStudy: s.year_of_study || null,
         slotLabel: s.slot_label || null,
         slotType: s.slot_type || null,
         branchName: s.branch_name || branchNameMap.get(s.branch_id) || null,
+        branchCode: branchCodeMap.get(s.branch_id) || null,
         branchId: s.branch_id,
+        remarks: null,
       })),
     ...dailyAdjustedActivities.map((activity) => {
-      const [startTime, endTime] = (activity.slot_time || "").split(" - ", 2);
+      const [startTime, endTime] = (activity.slot_time || "").split(/[-–—]/, 2);
       const reverted = activity.change_type === "REVERTED_TO_MASTER";
+
+      const rawMasterSub = activity.master_subject_name?.trim();
+      const rawNewSub = activity.new_subject_name?.trim();
+      const rawMasterFac = activity.master_faculty_name?.trim();
+      const rawNewFac = activity.new_faculty_name?.trim();
+
+      // If master had no subject/faculty, it was a Free Period in master timetable
+      const masterSubjectName = rawMasterSub || "Free Period";
+      const masterFacultyName = rawMasterFac || "Free Period";
+
+      // If new subject is null/empty but faculty or change happened, it's a Special Period
+      let newSubjectName = rawNewSub || null;
+      if (!newSubjectName) {
+        if (rawNewFac || activity.change_type === "PERIOD_CHANGE") {
+          newSubjectName = "Special Period";
+        } else {
+          newSubjectName = rawMasterSub || "Free Period";
+        }
+      }
+
+      const newFacultyName = rawNewFac || (rawMasterFac || "Unassigned");
+      const effectiveFaculty = (reverted ? masterFacultyName : newFacultyName) || "Unknown";
+      const effectiveSubject = (reverted ? masterSubjectName : newSubjectName) || "Special Period";
+
+      const batchTrimmed = String(activity.batch || "").trim();
+      let resolvedYear = planYearMap.get(`${activity.branch_id}_${batchTrimmed}_${activity.semester}`);
+      if (!resolvedYear && batchTrimmed) {
+        resolvedYear = planYearMap.get(`${activity.branch_id}_${batchTrimmed}`);
+      }
+      if (!resolvedYear && batchTrimmed) {
+        const bYear = parseInt(batchTrimmed);
+        if (!isNaN(bYear) && bYear > 2000 && bYear <= 2030) {
+          const curYear = new Date().getFullYear();
+          const diff = curYear - bYear + 1;
+          if (diff >= 1 && diff <= 5) resolvedYear = diff;
+        }
+      }
+      if (!resolvedYear && activity.semester) {
+        resolvedYear = Math.ceil(activity.semester / 2);
+      }
+
       return {
         id: activity.id,
         status: "adjusted" as const,
-        facultyName: (reverted ? activity.master_faculty_name : activity.new_faculty_name) || "Unknown",
-        subjectName: (reverted ? activity.master_subject_name : activity.new_subject_name) || "—",
+        changeType: activity.change_type,
+        facultyName: effectiveFaculty,
+        subjectName: effectiveSubject,
         subjectCode: (reverted ? activity.master_subject_code : activity.new_subject_code) || null,
-        startTime: startTime || null,
-        endTime: endTime || null,
+        masterFacultyName,
+        masterFacultyHrmsId: activity.master_faculty_hrms_id || null,
+        newFacultyName,
+        newFacultyHrmsId: activity.new_faculty_hrms_id || null,
+        masterSubjectName,
+        masterSubjectCode: activity.master_subject_code || (rawMasterSub ? null : "FREE"),
+        newSubjectName,
+        newSubjectCode: activity.new_subject_code || (rawNewSub ? null : "SPECIAL"),
+        startTime: startTime?.trim() || null,
+        endTime: endTime?.trim() || null,
+        slotTime: activity.slot_time || null,
+        timingSlotId: activity.timing_slot_id,
         sectionName: activity.section_name || null,
-        yearOfStudy: null,
+        batch: activity.batch || null,
+        semester: activity.semester || null,
+        yearOfStudy: resolvedYear || null,
         slotLabel: activity.slot_label || `Slot ${activity.timing_slot_id}`,
         slotType: null,
         branchName: branchNameMap.get(activity.branch_id) || null,
+        branchCode: branchCodeMap.get(activity.branch_id) || null,
         branchId: activity.branch_id,
+        remarks: activity.remarks || null,
       };
     }),
+    ...subRows
+      .filter((s) => s.execution_status === "applied")
+      .map((sub) => {
+        const origFaculty = assignedStaffRows.find((st) => st.staff_link_id === sub.original_faculty_staff_link_id);
+        const replFaculty = assignedStaffRows.find((st) => st.staff_link_id === sub.replacement_faculty_staff_link_id);
+        return {
+          id: 1000000 + sub.id,
+          status: "adjusted" as const,
+          changeType: "SUBSTITUTION",
+          facultyName: replFaculty?.display_name || (sub.replacement_faculty_staff_link_id ? `Staff #${sub.replacement_faculty_staff_link_id}` : "Substitute"),
+          subjectName: sub.subject_name || "—",
+          subjectCode: null,
+          masterFacultyName: origFaculty?.display_name || (sub.original_faculty_staff_link_id ? `Staff #${sub.original_faculty_staff_link_id}` : null),
+          masterFacultyHrmsId: origFaculty?.hrms_employee_id || null,
+          newFacultyName: replFaculty?.display_name || (sub.replacement_faculty_staff_link_id ? `Staff #${sub.replacement_faculty_staff_link_id}` : null),
+          newFacultyHrmsId: replFaculty?.hrms_employee_id || null,
+          masterSubjectName: sub.subject_name || null,
+          masterSubjectCode: null,
+          newSubjectName: sub.subject_name || null,
+          newSubjectCode: null,
+          startTime: null,
+          endTime: null,
+          slotTime: null,
+          timingSlotId: sub.timing_slot_id,
+          sectionName: null,
+          batch: null,
+          semester: null,
+          yearOfStudy: null,
+          slotLabel: `Slot ${sub.timing_slot_id}`,
+          slotType: null,
+          branchName: branchNameMap.get(sub.branch_id) || null,
+          branchCode: branchCodeMap.get(sub.branch_id) || null,
+          branchId: sub.branch_id,
+          remarks: sub.reason || null,
+        };
+      }),
   ];
 
   const facultyAttendanceAndAdjustment = {
