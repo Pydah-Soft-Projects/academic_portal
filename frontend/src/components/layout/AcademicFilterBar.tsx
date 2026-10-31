@@ -52,8 +52,10 @@ export function AcademicFilterBar({
 
   const isTodayTimetable =
     pathname === "/today-timetable" || pathname.startsWith("/today-timetable/");
+  const isAttendancePosting =
+    pathname === "/attendance-posting" || pathname.startsWith("/attendance-posting");
   const shouldHideBatch = true;
-  const shouldHideSection = Boolean(hideSection) || isTodayTimetable;
+  const shouldHideSection = Boolean(hideSection) || isTodayTimetable || isAttendancePosting;
 
   const isStudentDetail = pathname.startsWith("/students/") && pathname !== "/students";
   const isMentoringDetail = pathname.startsWith("/mentoring-risks/") && pathname !== "/mentoring-risks";

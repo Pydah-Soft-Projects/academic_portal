@@ -2468,10 +2468,10 @@ export function TodayTimetableView() {
 
   // Semester pills: 1-1, 1-2, 2-1, 2-2, 3-1, 3-2, 4-1, 4-2
   const semesterPills = useMemo(() => {
+    let pills: Array<{ label: string; year: number; semester: number }> = [];
     if (selectedCourse) {
       const totalYears = selectedCourse?.totalYears ?? 4;
       const semsPerYear = selectedCourse?.semestersPerYear ?? 2;
-      const pills: Array<{ label: string; year: number; semester: number }> = [];
       for (let y = 1; y <= totalYears; y++) {
         for (let s = 1; s <= semsPerYear; s++) {
           pills.push({
@@ -2481,20 +2481,38 @@ export function TodayTimetableView() {
           });
         }
       }
-      return pills;
-    }
-    // If all colleges / courses mode, derive pills from loaded batches:
-    const seen = new Set<string>();
-    const pills: Array<{ label: string; year: number; semester: number }> = [];
-    for (const b of allBatchesData) {
-      const key = `${b.year}-${b.semester}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        pills.push({ label: key, year: b.year, semester: b.semester });
+    } else {
+      const seen = new Set<string>();
+      for (const b of allBatchesData) {
+        const key = `${b.year}-${b.semester}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          pills.push({ label: key, year: b.year, semester: b.semester });
+        }
       }
     }
+
+    if (filters.year !== "all") {
+      const yNum = Number(filters.year);
+      pills = pills.filter((p) => p.year === yNum);
+      if (pills.length === 0) {
+        pills = [
+          { label: `${yNum}-1`, year: yNum, semester: 1 },
+          { label: `${yNum}-2`, year: yNum, semester: 2 },
+        ];
+      }
+    }
+
     return pills.sort((a, b) => (a.year !== b.year ? a.year - b.year : a.semester - b.semester));
-  }, [selectedCourse, allBatchesData]);
+  }, [selectedCourse, allBatchesData, filters.year]);
+
+  const allSemestersCohortCount = useMemo(() => {
+    if (filters.year !== "all") {
+      const yNum = Number(filters.year);
+      return allBatchesData.filter((b) => Number(b.year) === yNum).length;
+    }
+    return allBatchesData.length;
+  }, [filters.year, allBatchesData]);
 
   const query = useMemo(() => {
     if (!filtersComplete || isAllBatchesMode) return null;
@@ -2973,7 +2991,11 @@ export function TodayTimetableView() {
               type="button"
               onClick={() => {
                 setSelectedSemesterTab("all");
-                setFilters({ year: "all", semester: "all" });
+                if (filters.year !== "all") {
+                  setFilters({ semester: "all" });
+                } else {
+                  setFilters({ year: "all", semester: "all" });
+                }
               }}
               className={cn(
                 "px-3.5 py-1 text-xs font-bold rounded-lg transition-all border",
@@ -2982,7 +3004,7 @@ export function TodayTimetableView() {
                   : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100",
               )}
             >
-              All Semesters ({allBatchesData.length})
+              All Semesters ({allSemestersCohortCount})
             </button>
             {semesterPills.map((pill) => {
               const isSelected = selectedSemesterTab === pill.label;

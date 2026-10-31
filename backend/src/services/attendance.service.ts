@@ -379,6 +379,31 @@ export async function listAttendanceSessions(filters: AttendanceListFilters) {
     params.push(filters.courseId);
   }
 
+  if (filters.academicYear) {
+    where.push("(p.academic_year_label = ? OR cs.academic_year_label = ?)");
+    params.push(filters.academicYear, filters.academicYear);
+  }
+
+  if (filters.batch && filters.batch !== "all") {
+    where.push("p.batch = ?");
+    params.push(filters.batch);
+  }
+
+  if (filters.year != null && !isNaN(Number(filters.year))) {
+    where.push("p.year_of_study = ?");
+    params.push(filters.year);
+  }
+
+  if (filters.semester != null && !isNaN(Number(filters.semester))) {
+    where.push("(p.semester_number = ? OR cs.semester_number = ?)");
+    params.push(filters.semester, filters.semester);
+  }
+
+  if (filters.section && filters.section !== "all") {
+    where.push("(cs.section_name = ? OR p.section_name = ?)");
+    params.push(filters.section, filters.section);
+  }
+
   const rows = await queryAcademic<SessionListRow[]>(
     `
     SELECT

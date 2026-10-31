@@ -7,25 +7,22 @@ import {
   ChevronRight,
   Calendar,
   Clock,
-  Building2,
   BookOpen,
-  Layers,
-  CheckCircle2,
   AlertCircle,
-  BarChart3,
-  Filter,
   Search,
-  ArrowRight,
   ShieldCheck,
+  Lock,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { isTeachingStaffOnly, isSuperAdminUser } from "@/lib/teaching-scope";
+import { useAcademicContext } from "@/components/layout/AcademicProvider";
+import { AcademicFilterBar } from "@/components/layout/AcademicFilterBar";
+import { cn } from "@/lib/cn";
 
 export type AttendanceSessionCard = {
   id: number;
@@ -49,6 +46,8 @@ export type AttendanceSessionCard = {
   facultyName: string | null;
   roomLabel: string | null;
   batchLabel?: string | null;
+  year?: number | null;
+  semester?: number | null;
   studentCount?: number | null;
   sessionStatus: string;
   posted: boolean;
@@ -74,44 +73,26 @@ export function formatSectionDisplay(section: string | null | undefined, section
   return `Section ${trimmed}`;
 }
 
-export type AbstractBranch = {
-  branchId: number;
-  branchName: string;
-  totalSessions: number;
-  pending: number;
-  posted: number;
-  completionPct: number;
-};
-
-export type AbstractCollege = {
-  collegeId: number;
-  collegeName: string;
-  totalSessions: number;
-  pending: number;
-  posted: number;
-  completionPct: number;
-  byBranch: AbstractBranch[];
-};
-
-export type AttendanceAbstract = {
-  totalColleges: number;
-  totalCourses: number;
-  totalBranches: number;
-  overallCompletionPct: number;
-  byCollege: AbstractCollege[];
-};
-
 type ListResponse = {
   date: string;
   scheduled: number;
   posted: number;
   mySessionsCount?: number;
   currentStaffLinkId?: number | null;
-  abstract?: AttendanceAbstract | null;
   data: AttendanceSessionCard[];
   generated?: { planCount: number; created: number } | null;
   source?: { sessions: string; holidays: string };
 };
+
+const DAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
 
 function todayIso() {
   const now = new Date();
@@ -121,84 +102,34 @@ function todayIso() {
   return `${y}-${m}-${d}`;
 }
 
-function toIsoString(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+function toYMD(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
-function getWeekInfo(weekOffset: number) {
-  const now = new Date();
-  const day = now.getDay();
-  const diff = day === 0 ? -6 : 1 - day; // Monday as start of week
-  const monday = new Date(now);
-  monday.setDate(now.getDate() + diff + weekOffset * 7);
-  monday.setHours(0, 0, 0, 0);
-
-  const dayCodes = ["MON", "TUE", "WED", "THUR", "FRI", "SAT"];
-  const fullLabels = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-  const today = todayIso();
-
-  const days: Array<{
-    code: string;
-    fullLabel: string;
-    dateIso: string;
-    dayNum: number;
-    monthShort: string;
-    isToday: boolean;
-    isFuture: boolean;
-  }> = [];
-
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
-    const dateIso = toIsoString(d);
-    days.push({
-      code: dayCodes[i],
-      fullLabel: fullLabels[i],
-      dateIso,
-      dayNum: d.getDate(),
-      monthShort: d.toLocaleDateString("en-IN", { month: "short" }),
-      isToday: dateIso === today,
-      isFuture: dateIso > today,
-    });
-  }
-
-  const start = days[0];
-  const end = days[5];
-  const rangeLabel = `${start.dayNum} ${start.monthShort} – ${end.dayNum} ${end.monthShort}, ${monday.getFullYear()}`;
-
-  return { days, rangeLabel, mondayIso: start.dateIso };
+function fromYMD(str: string): Date {
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
-function getWeekOffsetForDate(targetIso: string): number {
-  const [ty, tm, td] = targetIso.split("-").map(Number);
-  const target = new Date(ty, tm - 1, td);
-  const tDay = target.getDay();
-  const tDiff = tDay === 0 ? -6 : 1 - tDay;
-  const targetMonday = new Date(ty, tm - 1, td + tDiff);
-  targetMonday.setHours(0, 0, 0, 0);
-
-  const now = new Date();
-  const day = now.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  const currentMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + diff);
-  currentMonday.setHours(0, 0, 0, 0);
-
-  const diffMs = targetMonday.getTime() - currentMonday.getTime();
-  return Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+function formatDate(date: Date): string {
+  return date.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 export function AttendanceTodayView() {
-  const { authorization } = useAuth();
+  const { filters, masters, setFilters } = useAcademicContext();
+  const { authorization, hasPermission } = useAuth();
   const isSuperAdmin = isSuperAdminUser(authorization);
   const teachingStaffOnly = isTeachingStaffOnly(authorization);
 
-  const dateInputRef = useRef<HTMLInputElement>(null);
-  const [weekOffset, setWeekOffset] = useState(0);
-  const [date, setDate] = useState(todayIso);
-  const [viewScope, setViewScope] = useState<"mine" | "all">("mine");
+  const [date, setDate] = useState<string>(todayIso);
+  const [viewScope, setViewScope] = useState<"mine" | "all">("all");
   const [hasInitializedScope, setHasInitializedScope] = useState(false);
   const [selectedBranchId, setSelectedBranchId] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "posted">("all");
@@ -207,17 +138,120 @@ export function AttendanceTodayView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const weekInfo = useMemo(() => getWeekInfo(weekOffset), [weekOffset]);
-  const isCurrentWeek = weekOffset === 0;
+  // All Batches mode data: running cohorts in current academic year
+  const [allBatchesData, setAllBatchesData] = useState<any[]>([]);
 
+  // Selected semester tab (e.g. 'all', '1-1', '1-2', etc.)
+  const [selectedSemesterTab, setSelectedSemesterTab] = useState<string>("all");
+
+  // Synchronize AcademicFilterBar (Year & Semester dropdowns) with selectedSemesterTab
+  useEffect(() => {
+    if (filters.year !== "all" && filters.semester !== "all") {
+      const target = `${filters.year}-${filters.semester}`;
+      if (selectedSemesterTab !== target) {
+        setSelectedSemesterTab(target);
+      }
+    } else if (filters.year !== "all" && filters.semester === "all") {
+      // If currently on a tab from a different year, reset to 'all'
+      if (selectedSemesterTab !== "all") {
+        const [y] = selectedSemesterTab.split("-");
+        if (Number(y) !== Number(filters.year)) {
+          setSelectedSemesterTab("all");
+        }
+      }
+    } else if (filters.year === "all" && filters.semester === "all") {
+      if (selectedSemesterTab !== "all") {
+        setSelectedSemesterTab("all");
+      }
+    } else if (filters.year === "all" && filters.semester !== "all") {
+      if (selectedSemesterTab !== "all" && !selectedSemesterTab.endsWith(`-${filters.semester}`)) {
+        setSelectedSemesterTab("all");
+      }
+    }
+  }, [filters.year, filters.semester, selectedSemesterTab]);
+
+  const userRoles = useMemo(() => {
+    const list: string[] = [];
+    if (authorization?.roles) {
+      for (const r of authorization.roles) {
+        if (r.roleKey) {
+          list.push(r.roleKey.toLowerCase().replace(/[\s-]/g, "_"));
+        }
+      }
+    }
+    return list;
+  }, [authorization]);
+
+  const canPostAttendance = useMemo(() => {
+    if (isSuperAdmin) return true;
+    if (hasPermission("attendance.post")) return true;
+    const allowedRoles = [
+      "principal",
+      "vice_principal",
+      "viceprincipal",
+      "hod",
+      "hods",
+      "faculty",
+      "staff",
+      "teacher",
+    ];
+    return allowedRoles.some((role) => userRoles.includes(role));
+  }, [isSuperAdmin, hasPermission, userRoles]);
+
+  // Load running cohorts from /today-timetable/all-batches to match Timetable cohorts
+  useEffect(() => {
+    let cancelled = false;
+    async function loadBatches() {
+      if (!filters.academicYear) return;
+      try {
+        const params = new URLSearchParams();
+        if (filters.collegeId !== "all") params.set("collegeId", String(filters.collegeId));
+        if (filters.courseId !== "all") params.set("courseId", String(filters.courseId));
+        if (filters.branchId !== "all") params.set("branchId", String(filters.branchId));
+        params.set("academicYear", filters.academicYear);
+        params.set("date", date);
+
+        const res = await apiFetch(`/today-timetable/all-batches?${params.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!cancelled && Array.isArray(json?.data)) {
+          setAllBatchesData(json.data);
+        }
+      } catch {
+        // Fallback gracefully if endpoint isn't accessible
+      }
+    }
+    void loadBatches();
+    return () => {
+      cancelled = true;
+    };
+  }, [filters.academicYear, filters.collegeId, filters.courseId, filters.branchId, date]);
+
+  // Load attendance sessions
   useEffect(() => {
     let cancelled = false;
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const scopeParam = teachingStaffOnly || viewScope === "mine" ? "&scope=mine" : "";
-        const response = await apiFetch(`/attendance/sessions?date=${date}${scopeParam}`, {
+        const queryParams = new URLSearchParams();
+        queryParams.set("date", date);
+        if (teachingStaffOnly || viewScope === "mine") {
+          queryParams.set("scope", "mine");
+        } else {
+          if (filters.academicYear) queryParams.set("academicYear", filters.academicYear);
+          if (filters.collegeId !== "all") queryParams.set("collegeId", String(filters.collegeId));
+          if (filters.courseId !== "all") queryParams.set("courseId", String(filters.courseId));
+          if (filters.branchId !== "all") queryParams.set("branchId", String(filters.branchId));
+          if (filters.batch !== "all") queryParams.set("batch", filters.batch);
+          if (filters.year !== "all") queryParams.set("year", String(filters.year));
+          if (filters.semester !== "all") queryParams.set("semester", String(filters.semester));
+          if (filters.section !== "all") queryParams.set("section", filters.section);
+        }
+
+        const response = await apiFetch(`/attendance/sessions?${queryParams.toString()}`, {
           cache: "no-store",
         });
         const body = await response.json().catch(() => ({}));
@@ -242,67 +276,146 @@ export function AttendanceTodayView() {
     return () => {
       cancelled = true;
     };
-  }, [date, viewScope, teachingStaffOnly]);
+  }, [
+    date,
+    viewScope,
+    teachingStaffOnly,
+    filters.academicYear,
+    filters.collegeId,
+    filters.courseId,
+    filters.branchId,
+    filters.batch,
+    filters.year,
+    filters.semester,
+    filters.section,
+  ]);
 
-  // Automatically default to "mine" if user has personal teaching slots, or "all" if user has no assigned slots
+  // Automatically default scope
   useEffect(() => {
     if (payload && !hasInitializedScope) {
-      if (!teachingStaffOnly && payload.mySessionsCount === 0) {
+      if (isSuperAdmin) {
         setViewScope("all");
-      } else {
+      } else if (!teachingStaffOnly && (payload.mySessionsCount ?? 0) === 0) {
+        setViewScope("all");
+      } else if (teachingStaffOnly || (payload.mySessionsCount ?? 0) > 0) {
         setViewScope("mine");
+      } else {
+        setViewScope("all");
       }
       setHasInitializedScope(true);
     }
-  }, [payload, hasInitializedScope, teachingStaffOnly]);
+  }, [payload, hasInitializedScope, teachingStaffOnly, isSuperAdmin]);
 
-  const handlePrevWeek = () => {
-    const nextOffset = weekOffset - 1;
-    setWeekOffset(nextOffset);
-    const info = getWeekInfo(nextOffset);
-    setDate(info.days[0].dateIso);
+  const prevDay = () => {
+    const d = fromYMD(date);
+    d.setDate(d.getDate() - 1);
+    setDate(toYMD(d));
   };
 
-  const handleNextWeek = () => {
-    if (weekOffset >= 0) return;
-    const nextOffset = weekOffset + 1;
-    setWeekOffset(nextOffset);
-    const info = getWeekInfo(nextOffset);
-    const today = todayIso();
-    const validDay = info.days.find((d) => !d.isFuture) ?? info.days[0];
-    setDate(validDay.dateIso > today ? today : validDay.dateIso);
+  const nextDay = () => {
+    const todayStr = todayIso();
+    if (date >= todayStr) return;
+    const d = fromYMD(date);
+    d.setDate(d.getDate() + 1);
+    const nextStr = toYMD(d);
+    setDate(nextStr > todayStr ? todayStr : nextStr);
   };
 
-  const handleToday = () => {
-    setWeekOffset(0);
-    setDate(todayIso());
-  };
+  const selectedDayName = useMemo(() => {
+    return DAY_NAMES[fromYMD(date).getDay()];
+  }, [date]);
 
-  const handleDateSelect = (selectedDateIso: string) => {
-    setDate(selectedDateIso);
-    const offset = getWeekOffsetForDate(selectedDateIso);
-    setWeekOffset(offset);
-  };
+  const selectedCollege = useMemo(() => {
+    if (!masters || filters.collegeId === "all") return null;
+    return masters.colleges.find((c) => c.id === filters.collegeId) ?? null;
+  }, [masters, filters.collegeId]);
 
-  const selectedDayInfo = useMemo(() => {
-    const found = weekInfo.days.find((d) => d.dateIso === date);
-    if (found) return found;
-    const parsed = new Date(date);
-    return {
-      code: "",
-      fullLabel: parsed.toLocaleDateString("en-IN", { weekday: "long" }),
-      dateIso: date,
-      dayNum: parsed.getDate(),
-      monthShort: parsed.toLocaleDateString("en-IN", { month: "short" }),
-      isToday: date === todayIso(),
-      isFuture: date > todayIso(),
-    };
-  }, [date, weekInfo.days]);
+  const selectedCourse = useMemo(() => {
+    if (!masters || filters.courseId === "all") return null;
+    return masters.courses.find((c) => c.id === filters.courseId) ?? null;
+  }, [masters, filters.courseId]);
+
+  const selectedBranch = useMemo(() => {
+    if (!masters || filters.branchId === "all") return null;
+    return masters.branches.find((b) => b.id === filters.branchId) ?? null;
+  }, [masters, filters.branchId]);
 
   const allSessions = payload?.data ?? [];
   const isMyOnlyScope = teachingStaffOnly || viewScope === "mine";
   const mySessions = useMemo(() => allSessions.filter((s) => s.isMySession), [allSessions]);
   const mySessionsCount = payload?.mySessionsCount ?? mySessions.length;
+
+  // Semester pills mapped to Course and selected Year
+  const semesterPills = useMemo(() => {
+    let pills: Array<{ label: string; year: number; semester: number }> = [];
+
+    if (selectedCourse) {
+      const totalYears = selectedCourse?.totalYears ?? 4;
+      const semsPerYear = selectedCourse?.semestersPerYear ?? 2;
+      for (let y = 1; y <= totalYears; y++) {
+        for (let s = 1; s <= semsPerYear; s++) {
+          pills.push({
+            label: `${y}-${s}`,
+            year: y,
+            semester: s,
+          });
+        }
+      }
+    } else {
+      const seen = new Set<string>();
+      for (const b of allBatchesData) {
+        if (b.year != null && b.semester != null) {
+          const key = `${b.year}-${b.semester}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            pills.push({ label: key, year: Number(b.year), semester: Number(b.semester) });
+          }
+        }
+      }
+      for (const s of allSessions) {
+        if (s.year != null && s.semester != null) {
+          const key = `${s.year}-${s.semester}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            pills.push({ label: key, year: Number(s.year), semester: Number(s.semester) });
+          }
+        }
+      }
+    }
+
+    // MAP TO SELECTED YEAR: If a specific year is selected in the above filter, show only the semesters of that year!
+    if (filters.year !== "all") {
+      const selectedYearNum = Number(filters.year);
+      pills = pills.filter((p) => p.year === selectedYearNum);
+
+      // If no pills found for that year from batches, generate default semesters 1 and 2 for that year
+      if (pills.length === 0) {
+        pills = [
+          { label: `${selectedYearNum}-1`, year: selectedYearNum, semester: 1 },
+          { label: `${selectedYearNum}-2`, year: selectedYearNum, semester: 2 },
+        ];
+      }
+    }
+
+    return pills.sort((a, b) => (a.year !== b.year ? a.year - b.year : a.semester - b.semester));
+  }, [selectedCourse, allBatchesData, allSessions, filters.year]);
+
+  const totalCohortsCount = useMemo(() => {
+    if (allBatchesData.length > 0) return allBatchesData.length;
+    const unique = new Set(allSessions.map((s) => `${s.branchId}-${s.year}-${s.semester}-${s.section}`));
+    return unique.size > 0 ? unique.size : allSessions.length;
+  }, [allBatchesData, allSessions]);
+
+  const allSemestersCount = useMemo(() => {
+    if (filters.year !== "all") {
+      const yNum = Number(filters.year);
+      if (allBatchesData.length > 0) {
+        return allBatchesData.filter((b) => Number(b.year) === yNum).length;
+      }
+      return allSessions.filter((s) => Number(s.year) === yNum).length;
+    }
+    return totalCohortsCount;
+  }, [filters.year, allBatchesData, allSessions, totalCohortsCount]);
 
   // Available branch filter options if sessions span multiple branches
   const branchOptions = useMemo(() => {
@@ -316,14 +429,35 @@ export function AttendanceTodayView() {
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [allSessions, mySessions, isMyOnlyScope]);
 
-  // Filter sessions by scope, branch, status, and search query
+  // Filter sessions by scope, college, course, branch, semester tab, status, and search query
   const filteredSessions = useMemo(() => {
     return allSessions.filter((item) => {
       if (isMyOnlyScope && !item.isMySession) {
         return false;
       }
+      if (filters.collegeId !== "all" && item.collegeId != null && item.collegeId !== Number(filters.collegeId)) {
+        return false;
+      }
+      if (filters.courseId !== "all" && item.courseId != null && item.courseId !== Number(filters.courseId)) {
+        return false;
+      }
+      if (filters.branchId !== "all" && item.branchId != null && item.branchId !== Number(filters.branchId)) {
+        return false;
+      }
       if (selectedBranchId !== "all" && String(item.branchId) !== selectedBranchId) {
         return false;
+      }
+      if (selectedSemesterTab !== "all") {
+        const [yStr, sStr] = selectedSemesterTab.split("-");
+        if (item.year != null && item.year !== Number(yStr)) return false;
+        if (item.semester != null && item.semester !== Number(sStr)) return false;
+      } else {
+        if (filters.year !== "all" && item.year != null && item.year !== Number(filters.year)) {
+          return false;
+        }
+        if (filters.semester !== "all" && item.semester != null && item.semester !== Number(filters.semester)) {
+          return false;
+        }
       }
       if (statusFilter === "pending" && item.posted) {
         return false;
@@ -344,7 +478,19 @@ export function AttendanceTodayView() {
       }
       return true;
     });
-  }, [allSessions, isMyOnlyScope, selectedBranchId, statusFilter, searchQuery]);
+  }, [
+    allSessions,
+    isMyOnlyScope,
+    filters.collegeId,
+    filters.courseId,
+    filters.branchId,
+    selectedBranchId,
+    selectedSemesterTab,
+    filters.year,
+    filters.semester,
+    statusFilter,
+    searchQuery,
+  ]);
 
   const displayedScopeSessions = useMemo(() => {
     if (isMyOnlyScope) return mySessions;
@@ -354,647 +500,502 @@ export function AttendanceTodayView() {
   const totalPending = useMemo(() => displayedScopeSessions.filter((s) => !s.posted).length, [displayedScopeSessions]);
   const totalPosted = useMemo(() => displayedScopeSessions.filter((s) => s.posted).length, [displayedScopeSessions]);
 
-  const abstract = payload?.abstract;
-
   return (
     <div className="space-y-3 sm:space-y-4">
       <PageHeader
         title="Attendance Posting"
-        description={
-          isSuperAdmin
-            ? "Super Admin Institute-Wide Attendance Oversight and Abstract Reports."
-            : teachingStaffOnly
-              ? "Your assigned class time slots organized week-wise for attendance submission."
-              : "Post attendance for your assigned class slots or oversee department session attendance."
-        }
-        actions={
-          isSuperAdmin ? (
-            <label className="flex items-center gap-1.5 text-xs text-slate-500">
-              <span>Date</span>
-              <input
-                type="date"
-                value={date}
-                max={todayIso()}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val && val <= todayIso()) {
-                    handleDateSelect(val);
-                  }
-                }}
-                className="h-8 rounded-md border border-border bg-white px-2 text-xs outline-none focus:border-navy-800"
-              />
-            </label>
-          ) : undefined
-        }
+        description="Mark and submit class period attendance, or monitor department sessions across active cohorts."
       />
 
-      {/* SUPER ADMIN OVERSIGHT NOTICE & BANNER */}
-      {isSuperAdmin ? (
-        <div className="space-y-3">
-          <div className="flex items-start gap-3 rounded-xl border border-navy-200 bg-navy-50/70 p-3.5 sm:p-4 text-navy-900 shadow-xs">
-            <ShieldCheck className="h-5 w-5 text-navy-800 shrink-0 mt-0.5" />
-            <div className="flex-1 min-w-0">
-              <h3 className="text-sm font-bold text-navy-900">
-                Super Admin Oversight Access
-              </h3>
-              <p className="mt-0.5 text-xs text-slate-600 leading-relaxed">
-                Attendance marking and submission is reserved for assigned teaching faculty, Heads of Department (HOD), Vice Principals, and Principals. Super administrators have institute-wide analytical oversight.
-              </p>
-              <div className="mt-2.5">
-                <Link href="/attendance-analytics">
-                  <Button size="sm" variant="primary" className="text-xs h-7 sm:h-8">
-                    <span>Open Attendance Analytics</span>
-                    <ArrowRight className="h-3.5 w-3.5 ml-1" />
-                  </Button>
-                </Link>
-              </div>
-            </div>
-          </div>
+      {/* 1. Page Filters Bar */}
+      <div className="mb-4 print:hidden">
+        <AcademicFilterBar title="Page filters" />
+      </div>
 
-          {/* Abstract Metrics Cards for Super Admin */}
-          {abstract ? (
-            <div className="space-y-3 rounded-xl border border-border bg-white p-3.5 sm:p-4 shadow-sm text-navy-900">
-              <div className="flex items-center justify-between gap-2 border-b border-border pb-2.5">
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-navy-50 border border-navy-200 px-2 py-0.5 text-[10px] sm:text-xs font-bold uppercase tracking-wider text-navy-800">
-                    Institute Overview
-                  </span>
-                  <h3 className="text-xs sm:text-sm font-bold text-navy-900 flex items-center gap-1.5">
-                    <BarChart3 className="h-4 w-4 text-navy-800" />
-                    <span>Institution Attendance Abstract</span>
-                  </h3>
-                </div>
-                <span className="text-[11px] font-medium text-slate-500">
-                  {selectedDayInfo.fullLabel}, {selectedDayInfo.dayNum} {selectedDayInfo.monthShort}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-                <div className="rounded-lg border border-border/80 bg-slate-50/70 p-2.5 sm:p-3">
-                  <p className="text-[10px] sm:text-xs font-semibold text-slate-600 flex items-center gap-1">
-                    <Building2 className="h-3.5 w-3.5 text-navy-700" />
-                    <span>Colleges</span>
-                  </p>
-                  <p className="mt-1 text-base sm:text-xl font-extrabold text-navy-900">
-                    {abstract.totalColleges}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-border/80 bg-slate-50/70 p-2.5 sm:p-3">
-                  <p className="text-[10px] sm:text-xs font-semibold text-slate-600 flex items-center gap-1">
-                    <BookOpen className="h-3.5 w-3.5 text-indigo-600" />
-                    <span>Courses / Branches</span>
-                  </p>
-                  <p className="mt-1 text-base sm:text-xl font-extrabold text-navy-900">
-                    {abstract.totalCourses} <span className="text-xs font-normal text-slate-500">/ {abstract.totalBranches}</span>
-                  </p>
-                </div>
-                <div className="rounded-lg border border-border/80 bg-slate-50/70 p-2.5 sm:p-3">
-                  <p className="text-[10px] sm:text-xs font-semibold text-slate-600 flex items-center gap-1">
-                    <Layers className="h-3.5 w-3.5 text-amber-600" />
-                    <span>Scheduled Sessions</span>
-                  </p>
-                  <p className="mt-1 text-base sm:text-xl font-extrabold text-navy-900">
-                    {allSessions.length}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-border/80 bg-slate-50/70 p-2.5 sm:p-3">
-                  <p className="text-[10px] sm:text-xs font-semibold text-slate-600 flex items-center gap-1">
-                    <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                    <span>Completion Rate</span>
-                  </p>
-                  <div className="mt-1 flex items-center gap-2">
-                    <span className="text-base sm:text-xl font-extrabold text-emerald-600">
-                      {abstract.overallCompletionPct}%
-                    </span>
-                    <div className="h-2 flex-1 rounded-full bg-slate-200 overflow-hidden">
-                      <div
-                        className="h-full bg-emerald-500 transition-all duration-300"
-                        style={{ width: `${abstract.overallCompletionPct}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {abstract.byCollege.length > 0 ? (
-                <div className="mt-3 rounded-lg border border-border bg-white p-3 shadow-xs">
-                  <p className="mb-2.5 text-xs sm:text-sm font-bold text-navy-900 flex items-center gap-1.5">
-                    <Building2 className="h-4 w-4 text-navy-800" />
-                    <span>College-Wise Abstract Breakdown</span>
-                  </p>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead>
-                        <tr className="border-b border-border bg-slate-50/80 text-[11px] font-bold text-slate-700">
-                          <th className="py-2 px-2.5 font-semibold">College Name</th>
-                          <th className="py-2 px-2.5 text-center font-semibold">Total Sessions</th>
-                          <th className="py-2 px-2.5 text-center font-semibold">Pending</th>
-                          <th className="py-2 px-2.5 text-center font-semibold">Posted</th>
-                          <th className="py-2 px-2.5 text-right font-semibold">Completion Rate</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-border/60">
-                        {abstract.byCollege.map((col) => (
-                          <tr key={col.collegeId} className="hover:bg-slate-50/60 transition-colors">
-                            <td className="py-2.5 px-2.5 font-semibold text-navy-900">
-                              {col.collegeName}
-                            </td>
-                            <td className="py-2.5 px-2.5 text-center font-bold text-slate-800">
-                              {col.totalSessions}
-                            </td>
-                            <td className="py-2.5 px-2.5 text-center text-amber-700 font-semibold">
-                              {col.pending}
-                            </td>
-                            <td className="py-2.5 px-2.5 text-center text-emerald-700 font-semibold">
-                              {col.posted}
-                            </td>
-                            <td className="py-2.5 px-2.5 text-right">
-                              <span
-                                className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-bold ${
-                                  col.completionPct === 100
-                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                                    : col.completionPct > 0
-                                      ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                      : "bg-rose-50 text-rose-700 border border-rose-200"
-                                }`}
-                              >
-                                {col.completionPct}%
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+      {/* 2. Role Access Policy Notice */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs shadow-xs">
+        <div className="flex items-center gap-2">
+          {canPostAttendance ? (
+            <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>Authorized: Edit Access Enabled (Super Admin / Assigned Roles)</span>
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
+              <Lock className="h-3.5 w-3.5" />
+              <span>View Only: Attendance posting requires &apos;Post Attendance&apos; permission</span>
+            </span>
+          )}
         </div>
-      ) : (
-        /* ACADEMIC POSTING VIEW (Staff, HOD, Vice Principal, Principal) */
-        <>
-          {/* Week Navigation Header */}
-          <nav className="flex items-center justify-between gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5 shadow-sm text-xs sm:px-4 sm:py-2">
-            {/* Prev on the Left */}
-            <Button
+      </div>
+
+      {/* 3. Semester Switcher Tabs (All Semesters, 1-1, 1-2, 2-1, 3-1, 4-1, etc.) */}
+      {semesterPills.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-xs">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider px-2">Semester:</span>
+            <button
               type="button"
-              size="sm"
-              variant="secondary"
-              onClick={handlePrevWeek}
-              aria-label="Previous week"
-              className="h-7.5 px-2 text-[11px] sm:h-8 sm:px-3 sm:text-xs shrink-0"
-            >
-              <ChevronLeft className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline">Previous week</span>
-              <span className="sm:hidden">Prev</span>
-            </Button>
-
-            {/* Middle: Interactive Calendar Pill [ 5 Oct – 10 Oct, 2026 📅 ] */}
-            <div
               onClick={() => {
-                try {
-                  dateInputRef.current?.showPicker?.();
-                } catch {}
+                setSelectedSemesterTab("all");
+                if (filters.year !== "all") {
+                  setFilters({ semester: "all" });
+                } else {
+                  setFilters({ year: "all", semester: "all" });
+                }
               }}
-              className="relative inline-flex items-center justify-center cursor-pointer group"
+              className={cn(
+                "px-3.5 py-1 text-xs font-bold rounded-lg transition-all border",
+                selectedSemesterTab === "all"
+                  ? "bg-navy-900 text-white border-navy-900 shadow-xs ring-2 ring-navy-200"
+                  : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100",
+              )}
             >
-              <button
-                type="button"
-                className="group flex items-center justify-center gap-1.5 rounded-lg border border-border/80 bg-white px-2.5 py-1 sm:px-3 sm:py-1.5 shadow-2xs group-hover:border-brand-500 group-hover:bg-brand-50/40 active:scale-95 transition-all text-center font-bold text-navy-900 text-xs sm:text-sm pointer-events-none"
-                title="Tap to open calendar"
-              >
-                <span className="truncate">{weekInfo.rangeLabel}</span>
-                <Calendar className="h-4 w-4 text-emerald-600 shrink-0 group-hover:scale-110 transition-transform" />
-              </button>
-              {/* Native HTML5 date input directly overlaying the entire pill with calendar-picker-input style */}
-              <input
-                ref={dateInputRef}
-                type="date"
-                value={date}
-                max={todayIso()}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val && val <= todayIso()) {
-                    handleDateSelect(val);
-                  }
-                }}
-                onClick={(e) => {
-                  try {
-                    (e.target as HTMLInputElement).showPicker?.();
-                  } catch {}
-                }}
-                className="calendar-picker-input absolute inset-0 z-10 h-full w-full opacity-0 cursor-pointer"
-                title="Click to open calendar and pick date"
-                aria-label="Open calendar"
-              />
-            </div>
-
-            {/* Next on the Right */}
-            <div className="flex items-center gap-1 shrink-0">
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={handleNextWeek}
-                disabled={weekOffset >= 0}
-                aria-label="Next week"
-                className="h-7.5 px-2 text-[11px] sm:h-8 sm:px-3 sm:text-xs shrink-0"
-              >
-                <span className="hidden sm:inline">Next week</span>
-                <span className="sm:hidden">Next</span>
-                <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-              </Button>
-              {/* Quick Today jump on desktop */}
-              <Button
-                type="button"
-                size="sm"
-                variant={isCurrentWeek && date === todayIso() ? "primary" : "secondary"}
-                onClick={handleToday}
-                className="hidden sm:inline-flex h-8 px-2.5 text-xs font-semibold"
-              >
-                Today
-              </Button>
-            </div>
-          </nav>
-
-          {/* Day Tabs Bar */}
-          <div className="grid grid-cols-6 gap-1 sm:gap-2">
-            {weekInfo.days.map((day) => {
-              const isSelected = day.dateIso === date;
+              All Semesters ({allSemestersCount})
+            </button>
+            {semesterPills.map((pill) => {
+              const isSelected = selectedSemesterTab === pill.label;
+              const cohortCount =
+                allBatchesData.length > 0
+                  ? allBatchesData.filter(
+                      (b) => Number(b.year) === pill.year && Number(b.semester) === pill.semester,
+                    ).length
+                  : allSessions.filter(
+                      (s) => Number(s.year) === pill.year && Number(s.semester) === pill.semester,
+                    ).length;
               return (
                 <button
-                  key={day.dateIso}
+                  key={pill.label}
                   type="button"
-                  disabled={day.isFuture}
-                  onClick={() => setDate(day.dateIso)}
-                  className={`flex flex-col items-center justify-center rounded-md border py-1 px-0.5 text-center transition-all ${
+                  onClick={() => {
+                    setSelectedSemesterTab(pill.label);
+                    setFilters({ year: pill.year, semester: pill.semester });
+                  }}
+                  className={cn(
+                    "px-3.5 py-1 text-xs font-bold rounded-lg transition-all border",
                     isSelected
-                      ? "border-navy-800 bg-navy-800 text-white shadow-sm"
-                      : day.isFuture
-                        ? "cursor-not-allowed border-dashed border-border bg-slate-50 text-slate-400 opacity-50"
-                        : "border-border bg-white text-navy-900 hover:border-navy-600 hover:bg-slate-50"
-                  }`}
+                      ? "bg-indigo-600 text-white border-indigo-600 shadow-xs ring-2 ring-indigo-200"
+                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300",
+                  )}
                 >
-                  <span
-                    className={`text-[9px] sm:text-xs font-bold uppercase tracking-tight ${
-                      isSelected ? "text-slate-200" : "text-slate-500"
-                    }`}
-                  >
-                    {day.code}
-                  </span>
-                  <span className="text-sm sm:text-lg font-extrabold leading-tight">
-                    {day.dayNum}
-                  </span>
-                  <span
-                    className={`text-[8px] sm:text-[11px] ${
-                      isSelected ? "text-slate-200" : "text-slate-500"
-                    }`}
-                  >
-                    {day.monthShort}
-                  </span>
-                  {day.isToday ? (
-                    <span
-                      className={`mt-0.5 rounded px-1 text-[7px] sm:text-[10px] font-bold ${
-                        isSelected
-                          ? "bg-white text-navy-900"
-                          : "bg-navy-800 text-white"
-                      }`}
-                    >
-                      Today
-                    </span>
-                  ) : null}
+                  {pill.label} {cohortCount > 0 ? `(${cohortCount})` : ""}
                 </button>
               );
             })}
           </div>
+          <div className="text-xs text-slate-500 pr-2">
+            {selectedSemesterTab === "all" ? (
+              filters.year !== "all" ? (
+                <span>Showing <strong>all running cohorts for Year {filters.year}</strong></span>
+              ) : (
+                <span>Showing <strong>all running cohorts</strong></span>
+              )
+            ) : (
+              <span>Showing <strong>Semester {selectedSemesterTab}</strong></span>
+            )}
+          </div>
+        </div>
+      )}
 
-          {/* Row: Search on Left & Today/Selected Date on Right */}
-          <div className="flex items-center justify-between gap-2 pt-0.5">
-            {/* Quick Search on Left side */}
-            <div className="relative flex-1 min-w-0 max-w-[210px] sm:max-w-xs">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Filter subject, section…"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="h-7 sm:h-8 w-full rounded-lg border border-border bg-white pl-8 pr-2 text-xs text-navy-900 outline-none focus:border-navy-800 shadow-2xs"
-              />
-            </div>
-
-            {/* Today / Selected Date on Right side */}
-            <div className="flex items-center gap-1.5 shrink-0 text-right">
-              <Clock className="h-3.5 w-3.5 text-navy-800 shrink-0 hidden xs:inline" />
-              <span className="text-xs sm:text-sm font-bold text-navy-900 truncate">
-                {selectedDayInfo.fullLabel}, {selectedDayInfo.dayNum} {selectedDayInfo.monthShort}
+      {/* 4. Unified Date & Context Navigation Banner */}
+      <Card className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h3 className="text-base font-bold text-navy-900">
+              {filters.collegeId === "all"
+                ? "All Colleges"
+                : selectedCollege?.name || "Selected College"}
+              {filters.branchId !== "all" && selectedBranch ? ` · ${selectedBranch.name}` : ""}
+              {filters.academicYear ? ` · ${filters.academicYear}` : ""}
+            </h3>
+            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2.5 py-0.5 text-[11px] font-bold text-indigo-800 border border-indigo-200">
+              <BookOpen className="h-3 w-3" />
+              <span>
+                {filters.collegeId === "all"
+                  ? "All Colleges · All Classes"
+                  : filters.branchId === "all"
+                  ? "All Branches · All Classes"
+                  : "All Active Semesters"}
               </span>
-              {selectedDayInfo.isToday ? (
-                <span className="rounded bg-navy-100 px-1.5 py-0.2 text-[9px] sm:text-xs font-semibold text-navy-800 shrink-0">
-                  Today
-                </span>
-              ) : null}
-            </div>
+            </span>
+          </div>
+          <p className="mt-0.5 text-sm font-semibold text-navy-900">
+            {filters.year !== "all" ? (
+              <span>
+                Showing active cohorts for Year {filters.year} ({allSemestersCount} running timetable{allSemestersCount === 1 ? "" : "s"}) for this academic year
+              </span>
+            ) : (
+              <span>
+                Showing all active cohorts ({totalCohortsCount} running timetable{totalCohortsCount === 1 ? "" : "s"}) for this academic year
+              </span>
+            )}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={prevDay}
+            className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-100 transition-colors"
+            title="Previous Day"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+
+          <div className="relative inline-flex items-center">
+            <button
+              type="button"
+              className="rounded-lg px-3 py-1.5 text-center hover:bg-slate-100 transition-colors min-w-[170px]"
+              title="Click to open calendar"
+            >
+              <p className="text-sm font-bold text-navy-900">{selectedDayName}</p>
+              <p className="text-xs text-slate-500">{formatDate(fromYMD(date))}</p>
+            </button>
+            <input
+              type="date"
+              value={date}
+              max={todayIso()}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val && val <= todayIso()) {
+                  setDate(val);
+                }
+              }}
+              className="absolute inset-0 opacity-0 cursor-pointer"
+              aria-label="Pick date"
+            />
           </div>
 
-          {/* 3 Analytics / Filter Cards (One-touch filter for All, Pending, Posted) */}
-          <div className="grid grid-cols-3 gap-1.5 text-[10px] sm:text-xs">
+          <button
+            type="button"
+            onClick={nextDay}
+            disabled={date >= todayIso()}
+            className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:bg-slate-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Next Day"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+      </Card>
+
+      {/* Row: Search on Left & Status Filters */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 pt-0.5">
+        {/* Quick Search on Left side */}
+        <div className="relative flex-1 min-w-0 max-w-full sm:max-w-xs">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Filter subject, section, faculty…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-8 w-full rounded-lg border border-border bg-white pl-8 pr-2 text-xs text-navy-900 outline-none focus:border-navy-800 shadow-2xs"
+          />
+        </div>
+
+        {/* 3 Quick Status Filter Cards */}
+        <div className="grid grid-cols-3 gap-1.5 text-[10px] sm:text-xs">
+          <button
+            type="button"
+            onClick={() => setStatusFilter("all")}
+            className={`rounded-lg border px-2.5 py-1 text-center transition-all ${
+              statusFilter === "all"
+                ? "border-navy-800 bg-navy-50/90 text-navy-900 shadow-2xs ring-1 ring-navy-800/20"
+                : "border-border/80 bg-slate-50/80 text-slate-700 hover:bg-slate-100"
+            }`}
+          >
+            <span className="text-slate-500 block leading-tight text-[10px]">
+              {teachingStaffOnly ? "My Periods:" : "Scheduled:"}
+            </span>
+            <span className="font-extrabold text-navy-900 text-xs sm:text-sm">{displayedScopeSessions.length}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter("pending")}
+            className={`rounded-lg border px-2.5 py-1 text-center transition-all ${
+              statusFilter === "pending"
+                ? "border-amber-500 bg-amber-50 text-amber-900 shadow-2xs ring-1 ring-amber-500/30"
+                : "border-amber-200/80 bg-amber-50/40 text-amber-800 hover:bg-amber-100/60"
+            }`}
+          >
+            <span className="text-amber-700 block leading-tight text-[10px]">Pending:</span>
+            <span className="font-extrabold text-amber-700 text-xs sm:text-sm">{totalPending}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatusFilter("posted")}
+            className={`rounded-lg border px-2.5 py-1 text-center transition-all ${
+              statusFilter === "posted"
+                ? "border-emerald-600 bg-emerald-50 text-emerald-900 shadow-2xs ring-1 ring-emerald-600/30"
+                : "border-emerald-200/80 bg-emerald-50/40 text-emerald-800 hover:bg-emerald-100/60"
+            }`}
+          >
+            <span className="text-emerald-700 block leading-tight text-[10px]">Posted:</span>
+            <span className="font-extrabold text-emerald-700 text-xs sm:text-sm">{totalPosted}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Secondary Scope / Branch filter for Leadership */}
+      {!teachingStaffOnly && (allSessions.length > 0 || branchOptions.length > 1) ? (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          <div className="flex items-center gap-1">
+            <span className="text-[11px] text-slate-500 font-semibold">Scope:</span>
             <button
               type="button"
-              onClick={() => setStatusFilter("all")}
-              className={`rounded-lg border px-2 py-1.5 text-center transition-all ${
-                statusFilter === "all"
-                  ? "border-navy-800 bg-navy-50/90 text-navy-900 shadow-2xs ring-1 ring-navy-800/20"
-                  : "border-border/80 bg-slate-50/80 text-slate-700 hover:bg-slate-100"
+              onClick={() => setViewScope("mine")}
+              className={`rounded px-2 py-0.5 text-[11px] font-bold transition-all ${
+                viewScope === "mine"
+                  ? "bg-navy-800 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               }`}
             >
-              <span className="text-slate-500 block leading-tight">{teachingStaffOnly ? "My Periods:" : "Scheduled:"}</span>
-              <span className="font-extrabold text-navy-900 text-xs sm:text-sm">{displayedScopeSessions.length}</span>
+              My Attendance ({mySessionsCount})
             </button>
             <button
               type="button"
-              onClick={() => setStatusFilter("pending")}
-              className={`rounded-lg border px-2 py-1.5 text-center transition-all ${
-                statusFilter === "pending"
-                  ? "border-amber-500 bg-amber-50 text-amber-900 shadow-2xs ring-1 ring-amber-500/30"
-                  : "border-amber-200/80 bg-amber-50/40 text-amber-800 hover:bg-amber-100/60"
+              onClick={() => setViewScope("all")}
+              className={`rounded px-2 py-0.5 text-[11px] font-bold transition-all ${
+                viewScope === "all"
+                  ? "bg-navy-800 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200"
               }`}
             >
-              <span className="text-amber-700 block leading-tight">Pending:</span>
-              <span className="font-extrabold text-amber-700 text-xs sm:text-sm">{totalPending}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setStatusFilter("posted")}
-              className={`rounded-lg border px-2 py-1.5 text-center transition-all ${
-                statusFilter === "posted"
-                  ? "border-emerald-600 bg-emerald-50 text-emerald-900 shadow-2xs ring-1 ring-emerald-600/30"
-                  : "border-emerald-200/80 bg-emerald-50/40 text-emerald-800 hover:bg-emerald-100/60"
-              }`}
-            >
-              <span className="text-emerald-700 block leading-tight">Posted:</span>
-              <span className="font-extrabold text-emerald-700 text-xs sm:text-sm">{totalPosted}</span>
+              All Department Slots ({allSessions.length})
             </button>
           </div>
-
-          {/* Secondary Scope / Branch filter for Leadership (when not teaching staff only) */}
-          {!teachingStaffOnly && (allSessions.length > 0 || branchOptions.length > 1) ? (
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <div className="flex items-center gap-1">
-                <span className="text-[11px] text-slate-500 font-semibold">Scope:</span>
+          {branchOptions.length > 1 ? (
+            <div className="flex items-center gap-1 ml-auto">
+              <span className="text-[11px] text-slate-500 font-semibold">Branch:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedBranchId("all")}
+                className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-all ${
+                  selectedBranchId === "all"
+                    ? "bg-navy-800 text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                }`}
+              >
+                All ({displayedScopeSessions.length})
+              </button>
+              {branchOptions.map((b) => (
                 <button
+                  key={b.id}
                   type="button"
-                  onClick={() => setViewScope("mine")}
-                  className={`rounded px-2 py-0.5 text-[11px] font-bold transition-all ${
-                    viewScope === "mine"
+                  onClick={() => setSelectedBranchId(String(b.id))}
+                  className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-all ${
+                    selectedBranchId === String(b.id)
                       ? "bg-navy-800 text-white"
                       : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   }`}
                 >
-                  My Attendance ({mySessionsCount})
+                  {b.name}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setViewScope("all")}
-                  className={`rounded px-2 py-0.5 text-[11px] font-bold transition-all ${
-                    viewScope === "all"
-                      ? "bg-navy-800 text-white"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
-                >
-                  All Department Slots ({allSessions.length})
-                </button>
-              </div>
-              {branchOptions.length > 1 ? (
-                <div className="flex items-center gap-1 ml-auto">
-                  <span className="text-[11px] text-slate-500 font-semibold">Branch:</span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedBranchId("all")}
-                    className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-all ${
-                      selectedBranchId === "all"
-                        ? "bg-navy-800 text-white"
-                        : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    }`}
-                  >
-                    All ({displayedScopeSessions.length})
-                  </button>
-                  {branchOptions.map((b) => (
-                    <button
-                      key={b.id}
-                      type="button"
-                      onClick={() => setSelectedBranchId(String(b.id))}
-                      className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-all ${
-                        selectedBranchId === String(b.id)
-                          ? "bg-navy-800 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
-                    >
-                      {b.name}
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* Error Banner */}
-          {error ? (
-            <Card className="border-critical/30 bg-critical/5 p-3">
-              <div className="flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 text-critical shrink-0" />
-                <p className="text-xs font-medium text-navy-900">Unable to load class sessions</p>
-              </div>
-              <p className="mt-1 text-xs text-critical">{error}</p>
-            </Card>
-          ) : null}
-
-          {/* Loading State: Skeleton Cards */}
-          {loading ? (
-            <div className="grid gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading class periods">
-              {Array.from({ length: 6 }).map((_, idx) => (
-                <Card
-                  key={idx}
-                  className="flex flex-col justify-between border-l-4 border-l-slate-200 p-2.5 sm:p-3.5 shadow-2xs"
-                >
-                  <div>
-                    <div className="mb-2 flex items-center justify-between gap-2 border-b border-border/50 pb-2">
-                      <div className="flex items-center gap-1.5">
-                        <Skeleton className="h-4.5 w-16 rounded" />
-                        <Skeleton className="h-4 w-24 rounded" />
-                      </div>
-                      <Skeleton className="h-4 w-14 rounded-full" />
-                    </div>
-                    <Skeleton className="h-5 w-4/5 mb-1.5 rounded" />
-                    <Skeleton className="h-4 w-1/2 mb-2.5 rounded" />
-                    <div className="space-y-1.5 pt-1">
-                      <Skeleton className="h-3.5 w-48 rounded" />
-                      <Skeleton className="h-3.5 w-36 rounded" />
-                    </div>
-                  </div>
-                  <div className="mt-3.5 pt-1.5 border-t border-border/40">
-                    <Skeleton className="h-7.5 sm:h-8 w-full rounded-lg" />
-                  </div>
-                </Card>
               ))}
             </div>
           ) : null}
+        </div>
+      ) : null}
 
-          {/* Empty State when no sessions exist on that date */}
-          {!loading && filteredSessions.length === 0 && !error ? (
-            <Card className="py-8 px-4 text-center">
-              <Calendar className="mx-auto h-7 w-7 text-slate-400" />
-              <p className="mt-2 text-sm font-bold text-navy-900">
-                {isMyOnlyScope
-                  ? "No assigned teaching slots scheduled for this date."
-                  : `No class sessions scheduled for ${selectedDayInfo.fullLabel}.`}
-              </p>
-              <div className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
-                {isMyOnlyScope ? (
-                  <>
-                    <p>You have no classes or periods assigned to teach on {selectedDayInfo.fullLabel}.</p>
-                    {!teachingStaffOnly && allSessions.length > 0 ? (
-                      <div className="mt-2.5">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setViewScope("all")}
-                          className="text-xs h-7.5 px-3"
-                        >
-                          <span>Switch to All Department Slots ({allSessions.length})</span>
-                        </Button>
-                      </div>
-                    ) : null}
-                  </>
-                ) : allSessions.length > 0 ? (
-                  "No sessions matched your active branch, status, or search filters. Clear filters to view all sessions."
-                ) : (
-                  "There are no active timetable periods for this date in your assigned department or scope. If a timetable was recently created, please ensure it has been published under Timetables."
-                )}
+      {/* Error Banner */}
+      {error ? (
+        <Card className="border-critical/30 bg-critical/5 p-3">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-critical shrink-0" />
+            <p className="text-xs font-medium text-navy-900">Unable to load class sessions</p>
+          </div>
+          <p className="mt-1 text-xs text-critical">{error}</p>
+        </Card>
+      ) : null}
+
+      {/* Loading State: Skeleton Cards */}
+      {loading ? (
+        <div className="grid gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3" aria-busy="true" aria-label="Loading class periods">
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <Card
+              key={idx}
+              className="flex flex-col justify-between border-l-4 border-l-slate-200 p-2.5 sm:p-3.5 shadow-2xs"
+            >
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-2 border-b border-border/50 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <Skeleton className="h-4.5 w-16 rounded" />
+                    <Skeleton className="h-4 w-24 rounded" />
+                  </div>
+                  <Skeleton className="h-4 w-14 rounded-full" />
+                </div>
+                <Skeleton className="h-5 w-4/5 mb-1.5 rounded" />
+                <Skeleton className="h-4 w-1/2 mb-2.5 rounded" />
+                <div className="space-y-1.5 pt-1">
+                  <Skeleton className="h-3.5 w-48 rounded" />
+                  <Skeleton className="h-3.5 w-36 rounded" />
+                </div>
+              </div>
+              <div className="mt-3.5 pt-1.5 border-t border-border/40">
+                <Skeleton className="h-7.5 sm:h-8 w-full rounded-lg" />
               </div>
             </Card>
-          ) : null}
+          ))}
+        </div>
+      ) : null}
 
-          {/* Sessions Grid (Compact Small Cards on Mobile) */}
-          {!loading && filteredSessions.length > 0 ? (
-            <div className="grid gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {filteredSessions.map((item) => (
-              <Card
-                key={item.id}
-                className={`flex flex-col justify-between border-l-4 p-2.5 sm:p-3.5 shadow-2xs hover:shadow-xs transition-all ${
-                  item.posted
-                    ? "border-l-emerald-500 bg-white"
-                    : item.isMySession
-                      ? "border-l-indigo-600 bg-white"
-                      : "border-l-amber-500 bg-white"
-                }`}
-              >
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between gap-1.5 border-b border-border/50 pb-1.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {item.slotLabel ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-bold text-navy-900 bg-navy-100/90 border border-navy-200 px-1.5 py-0.2 rounded shadow-2xs">
-                          {item.slotLabel}
-                        </span>
-                      ) : null}
-                      <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-medium text-slate-700 bg-slate-100 px-1.5 py-0.2 rounded">
-                        <Clock className="h-3 w-3 text-slate-500" />
-                        {item.startTime ?? "—"}{item.endTime ? ` – ${item.endTime}` : ""}
-                      </span>
-                      {item.isMySession && !teachingStaffOnly ? (
-                        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded">
-                          ★ My Slot
-                        </span>
-                      ) : null}
-                      {item.batchLabel ? (
-                        <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-300">
-                          {item.batchLabel}
-                        </span>
-                      ) : null}
-                      {item.sections && item.sections.length > 1 ? (
-                        <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
-                          Combined ({item.sections.length} Sec)
-                        </span>
-                      ) : null}
-                      {item.subjectTypeSnapshot ? (
-                        <span
-                          className={`inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${
-                            item.subjectTypeSnapshot.toLowerCase() === "lab"
-                              ? "bg-purple-50 text-purple-700 border border-purple-200"
-                              : "bg-sky-50 text-sky-700 border border-sky-200"
-                          }`}
-                        >
-                          {item.subjectTypeSnapshot}
-                        </span>
-                      ) : null}
-                    </div>
-                    <span
-                      className={`px-1.5 py-0.2 rounded-full text-[9.5px] sm:text-[10px] font-extrabold uppercase tracking-wide shrink-0 ${
-                        item.posted
-                          ? "bg-emerald-100 text-emerald-800"
-                          : "bg-amber-100 text-amber-800"
-                      }`}
-                    >
-                      {item.posted ? "Posted" : "Pending"}
-                    </span>
-                  </div>
-
-                  <h3 className="text-xs sm:text-sm font-bold text-navy-900 leading-snug line-clamp-1">
-                    {item.subjectName ?? "Untitled subject"}
-                  </h3>
-                  <p className="text-[10.5px] sm:text-xs font-medium text-slate-600 mt-0.5 truncate">
-                    {item.subjectCode ?? "—"}
-                    {item.section ? ` • ${formatSectionDisplay(item.section, item.sections)}` : ""}
-                    {item.batchLabel ? ` • ${item.batchLabel}` : ""}
-                    {item.branchName ? ` • ${item.branchName}` : ""}
-                  </p>
-                  <p className="mt-1 text-[10px] sm:text-xs text-slate-500 truncate">
-                    <span className="font-semibold text-slate-700">Faculty:</span>{" "}
-                    {item.facultyName ? (
-                      item.isMySession ? (
-                        <span className="font-semibold text-navy-900">
-                          {item.facultyName} <span className="text-indigo-600 font-bold">(You)</span>
-                        </span>
-                      ) : (
-                        item.facultyName
-                      )
-                    ) : (
-                      "Faculty unassigned"
-                    )}
-                    {item.roomLabel ? ` • Room: ${item.roomLabel}` : ""}
-                  </p>
-
-                  {item.posted ? (
-                    <div className="mt-2 rounded-lg bg-emerald-50/80 p-1.5 text-[10px] sm:text-xs text-emerald-900 font-medium flex items-center justify-between border border-emerald-100">
-                      <span>Present: <strong className="text-emerald-700">{item.presentCount}</strong></span>
-                      <span>Absent: <strong className="text-rose-700">{item.absentCount}</strong></span>
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="mt-2.5 pt-0.5">
-                  <Link href={`/attendance-posting/${item.id}`} className="block w-full">
+      {/* Empty State when no sessions exist */}
+      {!loading && filteredSessions.length === 0 && !error ? (
+        <Card className="py-8 px-4 text-center">
+          <Calendar className="mx-auto h-7 w-7 text-slate-400" />
+          <p className="mt-2 text-sm font-bold text-navy-900">
+            {isMyOnlyScope
+              ? "No assigned teaching slots scheduled for this date."
+              : `No class sessions scheduled for ${selectedDayName}.`}
+          </p>
+          <div className="mt-1 text-xs text-slate-500 max-w-md mx-auto">
+            {isMyOnlyScope ? (
+              <>
+                <p>You have no classes or periods assigned to teach on {selectedDayName}.</p>
+                {!teachingStaffOnly && allSessions.length > 0 ? (
+                  <div className="mt-2.5">
                     <Button
-                      className="w-full h-7.5 sm:h-8 text-xs font-semibold active:scale-[0.99] transition-transform"
-                      variant={item.posted ? "secondary" : "primary"}
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setViewScope("all")}
+                      className="text-xs h-7.5 px-3"
                     >
-                      {item.posted
-                        ? "Review / Edit Attendance"
-                        : item.isMySession
-                          ? item.sections && item.sections.length > 1
-                            ? "Post Attendance (Combined)"
-                            : "Post Attendance"
-                          : "Post Attendance (Dept / Substitute)"}
+                      <span>Switch to All Department Slots ({allSessions.length})</span>
                     </Button>
-                  </Link>
-                </div>
-              </Card>
-            ))}
+                  </div>
+                ) : null}
+              </>
+            ) : allSessions.length > 0 ? (
+              "No sessions matched your active branch, semester, or search filters. Clear filters to view all sessions."
+            ) : (
+              "There are no active timetable periods for this date matching the selected filters. Please verify academic year, college, or published timetables."
+            )}
           </div>
-        ) : null}
-      </>
-      )}
+        </Card>
+      ) : null}
+
+      {/* Sessions Grid */}
+      {!loading && filteredSessions.length > 0 ? (
+        <div className="grid gap-2 sm:gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {filteredSessions.map((item) => (
+            <Card
+              key={item.id}
+              className={`flex flex-col justify-between border-l-4 p-2.5 sm:p-3.5 shadow-2xs hover:shadow-xs transition-all ${
+                item.posted
+                  ? "border-l-emerald-500 bg-white"
+                  : item.isMySession
+                    ? "border-l-indigo-600 bg-white"
+                    : "border-l-amber-500 bg-white"
+              }`}
+            >
+              <div>
+                <div className="mb-1.5 flex items-center justify-between gap-1.5 border-b border-border/50 pb-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {item.slotLabel ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-bold text-navy-900 bg-navy-100/90 border border-navy-200 px-1.5 py-0.2 rounded shadow-2xs">
+                        {item.slotLabel}
+                      </span>
+                    ) : null}
+                    <span className="inline-flex items-center gap-1 text-[10px] sm:text-xs font-medium text-slate-700 bg-slate-100 px-1.5 py-0.2 rounded">
+                      <Clock className="h-3 w-3 text-slate-500" />
+                      {item.startTime ?? "—"}{item.endTime ? ` – ${item.endTime}` : ""}
+                    </span>
+                    {item.isMySession && !teachingStaffOnly ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 rounded">
+                        ★ My Slot
+                      </span>
+                    ) : null}
+                    {item.year != null && item.semester != null ? (
+                      <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        {item.year}-{item.semester}
+                      </span>
+                    ) : null}
+                    {item.batchLabel ? (
+                      <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-300">
+                        {item.batchLabel}
+                      </span>
+                    ) : null}
+                    {item.sections && item.sections.length > 1 ? (
+                      <span className="inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                        Combined ({item.sections.length} Sec)
+                      </span>
+                    ) : null}
+                    {item.subjectTypeSnapshot ? (
+                      <span
+                        className={`inline-flex items-center text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded ${
+                          item.subjectTypeSnapshot.toLowerCase() === "lab"
+                            ? "bg-purple-50 text-purple-700 border border-purple-200"
+                            : "bg-sky-50 text-sky-700 border border-sky-200"
+                        }`}
+                      >
+                        {item.subjectTypeSnapshot}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-full text-[9.5px] sm:text-[10px] font-extrabold uppercase tracking-wide shrink-0 ${
+                      item.posted
+                        ? "bg-emerald-100 text-emerald-800"
+                        : "bg-amber-100 text-amber-800"
+                    }`}
+                  >
+                    {item.posted ? "Posted" : "Pending"}
+                  </span>
+                </div>
+
+                <h3 className="text-xs sm:text-sm font-bold text-navy-900 leading-snug line-clamp-1">
+                  {item.subjectName ?? "Untitled subject"}
+                </h3>
+                <p className="text-[10.5px] sm:text-xs font-medium text-slate-600 mt-0.5 truncate">
+                  {item.subjectCode ?? "—"}
+                  {item.section ? ` • ${formatSectionDisplay(item.section, item.sections)}` : ""}
+                  {item.batchLabel ? ` • ${item.batchLabel}` : ""}
+                  {item.branchName ? ` • ${item.branchName}` : ""}
+                </p>
+                <p className="mt-1 text-[10px] sm:text-xs text-slate-500 truncate">
+                  <span className="font-semibold text-slate-700">Faculty:</span>{" "}
+                  {item.facultyName ? (
+                    item.isMySession ? (
+                      <span className="font-semibold text-navy-900">
+                        {item.facultyName} <span className="text-indigo-600 font-bold">(You)</span>
+                      </span>
+                    ) : (
+                      item.facultyName
+                    )
+                  ) : (
+                    "Faculty unassigned"
+                  )}
+                  {item.roomLabel ? ` • Room: ${item.roomLabel}` : ""}
+                </p>
+
+                {item.posted ? (
+                  <div className="mt-2 rounded-lg bg-emerald-50/80 p-1.5 text-[10px] sm:text-xs text-emerald-900 font-medium flex items-center justify-between border border-emerald-100">
+                    <span>Present: <strong className="text-emerald-700">{item.presentCount}</strong></span>
+                    <span>Absent: <strong className="text-rose-700">{item.absentCount}</strong></span>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="mt-2.5 pt-0.5">
+                <Link href={`/attendance-posting/${item.id}`} className="block w-full">
+                  <Button
+                    className="w-full h-7.5 sm:h-8 text-xs font-semibold active:scale-[0.99] transition-transform"
+                    variant={item.posted ? "secondary" : "primary"}
+                  >
+                    {item.posted
+                      ? "Review / Edit Attendance"
+                      : item.isMySession
+                        ? item.sections && item.sections.length > 1
+                          ? "Post Attendance (Combined)"
+                          : "Post Attendance"
+                        : "Post Attendance (Dept / Substitute)"}
+                  </Button>
+                </Link>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
