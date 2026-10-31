@@ -500,7 +500,21 @@ export async function getSubjectTeacherDashboardData(
     : [];
 
   // If no generated sessions exist for that date and it is a weekday, fallback to timetable plan entries
-  let fallbackEntries: typeof allTodaySessions = [];
+  type TodaySessionItem = {
+    id: number;
+    start_time: string | null;
+    end_time: string | null;
+    subject_name: string | null;
+    subject_code: string | null;
+    section_name: string | null;
+    subject_id: number | null;
+    room_label: string | null;
+    post_id: number | null;
+    status: string;
+    present_count: number | null;
+    absent_count: number | null;
+  };
+  let fallbackEntries: TodaySessionItem[] = [];
   if (allTodaySessions.length === 0 && staffLinkId && dayCode !== "SUN") {
     const planWhereWithDay = [...planWhere, "te.day_of_week = ?"];
     const planParamsWithDay = [...planParams, dayCode];
@@ -552,7 +566,7 @@ export async function getSubjectTeacherDashboardData(
     }));
   }
 
-  const effectiveSessions = allTodaySessions.length > 0 ? allTodaySessions : fallbackEntries;
+  const effectiveSessions: TodaySessionItem[] = allTodaySessions.length > 0 ? allTodaySessions : fallbackEntries;
 
   // Filter today's sessions to only sections that have students
   const todaySessions = effectiveSessions.filter((s) => {

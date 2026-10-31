@@ -429,21 +429,31 @@ export async function getPrincipalDashboardData(
             cs.start_time,
             cs.end_time,
             cs.section_name,
-            cs.year_of_study,
+            tp.year_of_study,
             ts.label as slot_label,
             ts.slot_type,
-            cb.name as branch_name,
             ap.id as post_id,
             ap.posted_at
           FROM ap_class_sessions cs
+          LEFT JOIN ap_timetable_plans tp ON tp.id = cs.plan_id
           LEFT JOIN ap_staff_link sl ON sl.id = cs.faculty_staff_link_id
           LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
           LEFT JOIN ap_timing_template_slots ts ON ts.id = COALESCE(cs.timing_slot_id, cs.period_slot_id)
-          LEFT JOIN course_branches cb ON cb.id = cs.branch_id
           WHERE ${dateClause} AND cs.branch_id IN (${branchInSql})
           `,
           [...dateParams, ...activeBranchIds],
-        ).catch(() => [])
+        )
+          .then((rows) => {
+            const branchMap = new Map<number, string>(scopedBranches.map((b) => [b.id, b.name]));
+            return rows.map((r) => ({
+              ...r,
+              branch_name: branchMap.get(r.branch_id) || null,
+            }));
+          })
+          .catch((err) => {
+            console.warn("Could not load class sessions for principal dashboard:", err);
+            return [];
+          })
       : Promise.resolve([]),
 
     // 3. Substitutions
@@ -1150,6 +1160,83 @@ export async function getPrincipalDashboardData(
 
     if (s.subject_name && !entry.subjects.includes(s.subject_name)) {
       entry.subjects.push(s.subject_name);
+    }
+  }
+
+  // Master Timetable Fallback: If any faculty has master timetable entries scheduled on this day of week
+  // but has no sessions loaded in staffSlotsMap, populate slots from published master timetable
+  const selectedDateObj = new Date(selectedDateStr + "T00:00:00");
+  const dayIndex = isNaN(selectedDateObj.getTime()) ? new Date().getDay() : selectedDateObj.getDay();
+  const dayCodes = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
+  const selectedDayCode = dayCodes[dayIndex];
+
+  if (selectedDayCode !== "SUN" && hasActiveBranches) {
+    try {
+      const masterEntries = await queryAcademic<
+        (RowDataPacket & {
+          id: number;
+          faculty_staff_link_id: number;
+          subject_name: string | null;
+          subject_code: string | null;
+          start_time: string | null;
+          end_time: string | null;
+          branch_id: number;
+        })[]
+      >(
+        `
+        SELECT 
+          te.id,
+          te.faculty_staff_link_id,
+          te.subject_name,
+          te.subject_code,
+          ts.start_time,
+          ts.end_time,
+          p.branch_id
+        FROM ap_timetable_entries te
+        JOIN ap_timetable_plans p ON p.id = te.plan_id
+        LEFT JOIN ap_timing_template_slots ts ON ts.id = COALESCE(te.timing_slot_id, te.period_slot_id)
+        WHERE te.day_of_week = ?
+          AND te.faculty_staff_link_id IS NOT NULL
+          AND p.status = 'published'
+          AND p.branch_id IN (${branchInSql})
+        ORDER BY ts.start_time ASC, te.id ASC
+        `,
+        [selectedDayCode, ...activeBranchIds],
+      );
+
+      for (const me of masterEntries) {
+        if (!me.faculty_staff_link_id) continue;
+        let entry = staffSlotsMap.get(me.faculty_staff_link_id);
+        if (!entry || entry.totalSlots === 0) {
+          if (!entry) {
+            entry = {
+              totalSlots: 0,
+              postedSlots: 0,
+              pendingSlots: 0,
+              cancelledSlots: 0,
+              slots: [],
+              subjects: [],
+            };
+            staffSlotsMap.set(me.faculty_staff_link_id, entry);
+          }
+          entry.totalSlots++;
+          entry.pendingSlots++;
+          entry.slots.push({
+            id: me.id,
+            subjectName: me.subject_name || "Class Session",
+            subjectCode: me.subject_code,
+            startTime: me.start_time,
+            endTime: me.end_time,
+            status: "scheduled",
+            isPosted: false,
+          });
+          if (me.subject_name && !entry.subjects.includes(me.subject_name)) {
+            entry.subjects.push(me.subject_name);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Could not load master timetable fallback entries for principal dashboard:", err);
     }
   }
 
