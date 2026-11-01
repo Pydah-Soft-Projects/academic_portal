@@ -29,6 +29,11 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { apiFetch } from "@/lib/api";
 import { TimingEditorDrawer } from "@/features/timetables/TimingEditorDrawer";
 import { CombineSectionsModal } from "@/features/timetables/CombineSectionsModal";
+import { FacultyWeeklySlotsModal } from "@/features/timetables/FacultyWeeklySlotsModal";
+import {
+  TimetablePublishSuccessModal,
+  type PublishSuccessInfo,
+} from "@/features/timetables/TimetablePublishSuccessModal";
 import {
   TimetableValidationModal,
   type ReviewPayload,
@@ -1148,6 +1153,8 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   const [labModalOpen, setLabModalOpen] = useState(false);
   const [selectedPeriodSlotIds, setSelectedPeriodSlotIds] = useState<number[]>([]);
   const [isValidationModalOpen, setIsValidationModalOpen] = useState(false);
+  const [facultySlotsModalOpen, setFacultySlotsModalOpen] = useState(false);
+  const [publishSuccessInfo, setPublishSuccessInfo] = useState<PublishSuccessInfo | null>(null);
   const [assignTeacherOpen, setAssignTeacherOpen] = useState(false);
   const [classTeacher, setClassTeacher] = useState<PlannerResponse["classTeacher"]>(null);
 
@@ -2082,7 +2089,22 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       }
       setReview(data.review as ReviewPayload);
       setIsValidationModalOpen(false);
-      setInfo(`Timetable plan #${planId} published successfully (Version ${data.versionNo ?? 1}).`);
+      const pubVer = data.versionNo ?? (planner?.context.versionNo ? planner.context.versionNo + 1 : 1);
+      setPublishSuccessInfo({
+        planId: Number(planId),
+        versionNo: Number(pubVer),
+        collegeName: selectedCollege?.name || planner?.context?.college,
+        courseName: selectedCourse?.name,
+        branchName: selectedBranch?.name || planner?.context?.branch,
+        year: filters.year !== "all" ? filters.year : planner?.context?.year,
+        semester: filters.semester !== "all" ? filters.semester : planner?.context?.semester,
+        section: filters.section,
+        batch: filters.batch !== "all" ? filters.batch : planner?.context?.batch,
+        academicYear: filters.academicYear || planner?.context?.academicYear,
+        slotsCount: assignments.filter((a) => a.subjectId || a.customLabel).length,
+        facultyCount: assignedFacultySummary.facultyCount,
+      });
+      setInfo(`Timetable plan #${planId} published successfully (Version ${pubVer}).`);
       // 4. Reload planner once after successful publish
       await loadPlanner();
     } catch (err) {
@@ -2091,6 +2113,61 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       setBusy(false);
     }
   };
+
+  const handleForcePublish = async () => {
+    const planId = planner?.context.planId;
+    if (!planId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await apiFetch(`/timetables/${planId}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || "Publish override failed");
+      }
+      setIsValidationModalOpen(false);
+      const pubVer = data.versionNo ?? (planner?.context.versionNo ? planner.context.versionNo + 1 : 1);
+      setPublishSuccessInfo({
+        planId: Number(planId),
+        versionNo: Number(pubVer),
+        collegeName: selectedCollege?.name || planner?.context?.college,
+        courseName: selectedCourse?.name,
+        branchName: selectedBranch?.name || planner?.context?.branch,
+        year: filters.year !== "all" ? filters.year : planner?.context?.year,
+        semester: filters.semester !== "all" ? filters.semester : planner?.context?.semester,
+        section: filters.section,
+        batch: filters.batch !== "all" ? filters.batch : planner?.context?.batch,
+        academicYear: filters.academicYear || planner?.context?.academicYear,
+        slotsCount: assignments.filter((a) => a.subjectId || a.customLabel).length,
+        facultyCount: assignedFacultySummary.facultyCount,
+      });
+      setInfo(`Timetable plan #${planId} published successfully (Version ${pubVer}).`);
+      await loadPlanner();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Publish override failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const assignedFacultySummary = useMemo(() => {
+    const set = new Set<string>();
+    let assignedSlots = 0;
+    for (const a of assignments) {
+      if (a.hrmsEmployeeId || a.facultyName) {
+        set.add(a.hrmsEmployeeId || a.facultyName);
+        assignedSlots++;
+      }
+    }
+    return {
+      facultyCount: set.size,
+      assignedSlots,
+    };
+  }, [assignments]);
 
   const missingLabel = !filtersComplete
     ? "Select College, Course, Branch, Semester" +
@@ -2281,13 +2358,10 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     <div>
       {!embedded && (planner?.ready || filtersComplete) ? (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="hidden print:block">
+          <div className="hidden print:hidden">
             <h1 className="text-[28px] font-bold leading-tight text-navy-900">
               Master Timetable
             </h1>
-            <p className="mt-1 text-sm text-slate-500 max-w-xl print:hidden">
-              College-specific timing templates owned by Academic Portal. Student DB is used only for academic masters.
-            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 print:hidden">
             {timingContextReady && canConfigureTimings ? (
@@ -2331,6 +2405,15 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                 <Layers className="mr-1.5 h-4 w-4 text-indigo-600" /> Combine Sections
               </Button>
             ) : null}
+            <Button
+              variant="secondary"
+              disabled={!planner?.ready}
+              onClick={() => setFacultySlotsModalOpen(true)}
+              className="print:hidden border-sky-300 bg-sky-50 text-sky-800 hover:bg-sky-100 hover:text-sky-950 font-semibold"
+              title="View faculty list and clear weekly slot counts for this timetable"
+            >
+              <Users className="mr-1.5 h-4 w-4 text-sky-600" /> Faculty Weekly Slots
+            </Button>
             <Button
               variant="secondary"
               onClick={() =>
@@ -2472,6 +2555,16 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                 <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                   Class Teacher:
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setFacultySlotsModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-sky-50 border border-sky-200 text-xs text-sky-800 font-medium hover:bg-sky-100 hover:text-sky-900 transition-colors cursor-pointer"
+                  title="Click to view faculty weekly slot counts breakdown"
+                >
+                  <Users className="h-3.5 w-3.5 text-sky-600" />
+                  <span className="font-semibold">{assignedFacultySummary.facultyCount} Faculty Assigned</span>
+                  <span className="text-sky-600 font-medium">({assignedFacultySummary.assignedSlots} slots/wk)</span>
+                </button>
                 {classTeacher ? (
                   <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 font-medium">
                     <UserCheck className="h-3.5 w-3.5 text-emerald-600" />
@@ -2513,9 +2606,21 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
               </div>
             </div>
             <div className="flex flex-col items-end gap-2 print:hidden">
-              <Button size="sm" variant="secondary" onClick={() => setTimingsOpen(true)}>
-                Edit Timings
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => window.print()}
+                  className="border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-semibold shadow-2xs cursor-pointer"
+                  title="Print this master timetable / Save as PDF"
+                >
+                  <Printer className="mr-1.5 h-3.5 w-3.5 text-slate-600" />
+                  Print Timetable
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setTimingsOpen(true)}>
+                  Edit Timings
+                </Button>
+              </div>
               <StatusBadge status={planner.context.status || "draft"} />
               {planner.context.planId ? (
                 <p className="text-xs text-slate-500">
@@ -2822,7 +2927,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           ) : null}
 
           {selected && planner ? (
-            <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+            <div className="fixed inset-0 z-40 flex items-center justify-center p-4 print:hidden">
               <button
                 type="button"
                 className="absolute inset-0 bg-navy-950/45"
@@ -3345,10 +3450,47 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
         }}
       />
 
+      <FacultyWeeklySlotsModal
+        isOpen={facultySlotsModalOpen}
+        onClose={() => setFacultySlotsModalOpen(false)}
+        assignments={assignments}
+        slotsByDay={planner?.slotsByDay}
+        days={planner?.days}
+        allFaculty={planner?.faculty}
+        classTeacher={classTeacher}
+        context={{
+          collegeName: selectedCollege?.name || planner?.context?.college,
+          courseName: selectedCourse?.name,
+          branchName: selectedBranch?.name || planner?.context?.branch,
+          section: filters.section,
+          batch: filters.batch !== "all" ? filters.batch : planner?.context?.batch,
+          year: filters.year !== "all" ? filters.year : planner?.context?.year,
+          semester: filters.semester !== "all" ? filters.semester : planner?.context?.semester,
+          academicYear: filters.academicYear || planner?.context?.academicYear,
+          planId: planner?.context?.planId,
+          versionNo: planner?.context?.versionNo,
+          status: planner?.context?.status,
+        }}
+      />
+
+      <TimetablePublishSuccessModal
+        isOpen={Boolean(publishSuccessInfo)}
+        onClose={() => setPublishSuccessInfo(null)}
+        info={publishSuccessInfo}
+        onPrint={() => {
+          setPublishSuccessInfo(null);
+          setTimeout(() => {
+            window.print();
+          }, 150);
+        }}
+      />
+
       <TimetableValidationModal
         isOpen={isValidationModalOpen}
         onClose={() => setIsValidationModalOpen(false)}
         review={review}
+        onPublishAnyway={canPublish ? handleForcePublish : undefined}
+        isPublishingAnyway={busy}
         context={{
           collegeName: selectedCollege?.name || planner?.context?.college,
           courseName: selectedCourse?.name,

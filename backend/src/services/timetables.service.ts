@@ -1394,6 +1394,8 @@ type FacultyClashItem = {
   currentCustomLabel?: string | null;
   conflictingPlanId?: number | null;
   conflictingPlanLabel?: string | null;
+  conflictingYear?: number | null;
+  conflictingBatch?: string | null;
   conflictingBranch?: string | null;
   conflictingCourse?: string | null;
   conflictingSection?: string | null;
@@ -1404,6 +1406,7 @@ type FacultyClashItem = {
   existingHours?: number | null;
   existingSlotsCount?: number | null;
   isParallelWarning?: boolean;
+  isPendingDraftSwap?: boolean;
   message: string;
 };
 
@@ -1583,8 +1586,10 @@ export async function validatePlanAssignments(
       subject_code: string | null;
       other_plan_id: number;
       other_academic_year: string;
+      other_college_id: number;
       other_course_id: number;
       other_branch_id: number;
+      other_batch: string | null;
       other_year: number | null;
       other_semester: number | null;
       other_section: string | null;
@@ -1595,6 +1600,8 @@ export async function validatePlanAssignments(
     };
     local: (typeof localFacultyAssignments)[number];
     isParallel: boolean;
+    isPendingDraftSwap?: boolean;
+    swapDraftPlanId?: number;
   };
   const rawCrossClashes: RawCrossClash[] = [];
 
@@ -1603,6 +1610,58 @@ export async function validatePlanAssignments(
   ];
 
   if (facultyIds.length > 0) {
+    const [companionDraftPlans, companionDraftEntries] = await Promise.all([
+      queryAcademic<
+        (RowDataPacket & {
+          id: number;
+          college_id: number;
+          course_id: number;
+          branch_id: number;
+          batch: string | null;
+          year_of_study: number | null;
+          semester_number: number | null;
+          section_name: string | null;
+        })[]
+      >(
+        `
+        SELECT id, college_id, course_id, branch_id, batch, year_of_study, semester_number, section_name
+        FROM ap_timetable_plans
+        WHERE status IN ('draft', 'in_review')
+          AND college_id = ?
+          AND academic_year_label = ?
+          AND id <> ?
+        `,
+        [plan.college_id, plan.academic_year_label, plan.id],
+      ),
+      queryAcademic<
+        (RowDataPacket & {
+          plan_id: number;
+          faculty_staff_link_id: number;
+          day_of_week: DayCode;
+          start_time: string;
+          end_time: string;
+        })[]
+      >(
+        `
+        SELECT
+          e.plan_id,
+          e.faculty_staff_link_id,
+          s.day_of_week,
+          s.start_time,
+          s.end_time
+        FROM ap_timetable_entries e
+        INNER JOIN ap_timetable_plans p ON p.id = e.plan_id
+        INNER JOIN ap_timing_template_slots s ON s.id = COALESCE(e.timing_slot_id, e.period_slot_id)
+        WHERE p.status IN ('draft', 'in_review')
+          AND p.college_id = ?
+          AND p.academic_year_label = ?
+          AND p.id <> ?
+          AND e.faculty_staff_link_id IN (${facultyIds.map(() => "?").join(",")})
+        `,
+        [plan.college_id, plan.academic_year_label, plan.id, ...facultyIds],
+      ),
+    ]);
+
     const otherEntries = await queryAcademic<
       (RowDataPacket & RawCrossClash["other"])[]
     >(
@@ -1615,8 +1674,10 @@ export async function validatePlanAssignments(
         e.subject_code,
         p.id AS other_plan_id,
         p.academic_year_label AS other_academic_year,
+        p.college_id AS other_college_id,
         p.course_id AS other_course_id,
         p.branch_id AS other_branch_id,
+        p.batch AS other_batch,
         p.year_of_study AS other_year,
         p.semester_number AS other_semester,
         p.section_name AS other_section,
@@ -1672,7 +1733,45 @@ export async function validatePlanAssignments(
               plan.section_name != null &&
               other.other_section.trim().toLowerCase() !== plan.section_name.trim().toLowerCase()) ||
             Boolean(plan.notes?.includes("Combined"));
-          rawCrossClashes.push({ other, local, isParallel: isCrossSectionParallel });
+
+          // Check if this conflicting faculty has already been vacated in an active draft of the other cohort
+          const companionDraft = companionDraftPlans.find(
+            (dp) =>
+              dp.college_id === other.other_college_id &&
+              dp.course_id === other.other_course_id &&
+              dp.branch_id === other.other_branch_id &&
+              (dp.batch === other.other_batch || (!dp.batch && !other.other_batch)) &&
+              (dp.year_of_study === other.other_year || (!dp.year_of_study && !other.other_year)) &&
+              dp.semester_number === other.other_semester &&
+              ((!dp.section_name && !other.other_section) ||
+                dp.section_name?.trim().toLowerCase() === other.other_section?.trim().toLowerCase()),
+          );
+
+          let isPendingDraftSwap = false;
+          let swapDraftPlanId: number | undefined;
+
+          if (companionDraft) {
+            const stillHasFacultyInDraft = companionDraftEntries.some(
+              (cde) =>
+                cde.plan_id === companionDraft.id &&
+                cde.faculty_staff_link_id === other.faculty_staff_link_id &&
+                cde.day_of_week === other.slot_day &&
+                parseTimeToMinutes(cde.start_time) < otherEndMin &&
+                otherStartMin < parseTimeToMinutes(cde.end_time),
+            );
+            if (!stillHasFacultyInDraft) {
+              isPendingDraftSwap = true;
+              swapDraftPlanId = companionDraft.id;
+            }
+          }
+
+          rawCrossClashes.push({
+            other,
+            local,
+            isParallel: isCrossSectionParallel,
+            isPendingDraftSwap,
+            swapDraftPlanId,
+          });
         }
       }
     }
@@ -1801,7 +1900,7 @@ export async function validatePlanAssignments(
 
     // Format cross-plan clashes
     const clashMessages = new Set<string>();
-    for (const { other, local, isParallel } of rawCrossClashes) {
+    for (const { other, local, isParallel, isPendingDraftSwap, swapDraftPlanId } of rawCrossClashes) {
       const staff = staffMap.get(other.faculty_staff_link_id);
       const facName = staff?.display_name || `Faculty #${other.faculty_staff_link_id}`;
       const facCode = staff?.employee_code || staff?.hrms_employee_id || "";
@@ -1817,9 +1916,10 @@ export async function validatePlanAssignments(
         : other.other_branch_id
           ? ` · Branch #${other.other_branch_id}`
           : "";
+      const otherYear = other.other_year ? ` · Year ${other.other_year}` : "";
       const otherSec = other.other_section ? ` · Section ${other.other_section}` : "";
       const otherSem = other.other_semester ? ` · Sem ${other.other_semester}` : "";
-      const otherPlanDesc = `Plan #${other.other_plan_id}${otherBranch}${otherSec}${otherSem}`;
+      const otherPlanDesc = `Plan #${other.other_plan_id}${otherBranch}${otherYear}${otherSec}${otherSem}`;
       const otherSub =
         other.subject_name || other.custom_label
           ? ` · Subject: "${other.subject_name || other.custom_label}"`
@@ -1850,6 +1950,8 @@ export async function validatePlanAssignments(
         currentCustomLabel: local.customLabel || null,
         conflictingPlanId: other.other_plan_id,
         conflictingPlanLabel: otherPlanDesc,
+        conflictingYear: other.other_year,
+        conflictingBatch: other.other_batch,
         conflictingBranch: branchName || null,
         conflictingCourse: courseName || null,
         conflictingSection: other.other_section || null,
@@ -1860,10 +1962,16 @@ export async function validatePlanAssignments(
         existingHours: wl?.publishedHours ?? null,
         existingSlotsCount: wl?.publishedSlots ?? null,
         isParallelWarning: isParallel,
+        isPendingDraftSwap,
         message: "",
       };
 
-      if (isParallel) {
+      if (isPendingDraftSwap) {
+        const swapMsg = `Pending Faculty Swap: ${facLabel} on ${dayLabel} ${otherTime} is currently occupied in ${otherPlanDesc}, but has already been vacated in Draft Plan #${swapDraftPlanId}. This conflict will be resolved upon publishing.`;
+        detailItem.message = swapMsg;
+        warnings.push(swapMsg);
+        facultyClashDetails.push(detailItem);
+      } else if (isParallel) {
         const warnMsg = `Combined/Parallel class: ${facLabel} on ${dayLabel} ${otherTime} (parallel in ${otherPlanDesc}${otherSub})${wlDesc}`;
         detailItem.message = warnMsg;
         warnings.push(warnMsg);
@@ -2353,7 +2461,7 @@ export async function reviewTimetablePlan(planId: number) {
 
 export async function publishTimetablePlan(
   planId: number,
-  options?: { actorUserId?: number | null; ipAddress?: string | null },
+  options?: { actorUserId?: number | null; ipAddress?: string | null; force?: boolean },
 ) {
   const plans = await queryAcademic<PlanRow[]>(
     `SELECT * FROM ap_timetable_plans WHERE id = ? LIMIT 1`,
@@ -2378,9 +2486,13 @@ export async function publishTimetablePlan(
     throw err;
   }
   if (!review.ok) {
-    const err = new Error("Publish blocked: timetable has validation errors");
-    (err as Error & { review?: unknown }).review = review;
-    throw err;
+    if (options?.force) {
+      console.warn(`Publishing plan #${planId} with force=true override. Validation had ${review.facultyClashes.length} faculty clashes.`);
+    } else {
+      const err = new Error("Publish blocked: timetable has validation errors");
+      (err as Error & { review?: unknown }).review = review;
+      throw err;
+    }
   }
 
   // 2. Only after validation succeeds: freeze current EMS subject labels into entry snapshots

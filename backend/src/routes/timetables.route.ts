@@ -485,6 +485,7 @@ timetablesRouter.post("/:planId/publish", requirePermission("timetable.publish")
     const published = await publishTimetablePlan(Number(req.params.planId), {
       actorUserId: req.authUser?.id,
       ipAddress: req.ip,
+      force: Boolean(req.body?.force),
     });
     await writeAuditLog({
       actorUserId: req.authUser!.id,

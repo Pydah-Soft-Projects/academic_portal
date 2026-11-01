@@ -36,6 +36,8 @@ export type FacultyClashDetail = {
   currentCustomLabel?: string | null;
   conflictingPlanId?: number | null;
   conflictingPlanLabel?: string | null;
+  conflictingYear?: number | null;
+  conflictingBatch?: string | null;
   conflictingBranch?: string | null;
   conflictingCourse?: string | null;
   conflictingSection?: string | null;
@@ -46,6 +48,7 @@ export type FacultyClashDetail = {
   existingHours?: number | null;
   existingSlotsCount?: number | null;
   isParallelWarning?: boolean;
+  isPendingDraftSwap?: boolean;
   message: string;
 };
 
@@ -70,6 +73,8 @@ export type TimetableValidationModalProps = {
   review: ReviewPayload | null;
   title?: string;
   subtitle?: string;
+  onPublishAnyway?: () => void;
+  isPublishingAnyway?: boolean;
   context?: {
     collegeName?: string | null;
     courseName?: string | null;
@@ -91,6 +96,8 @@ export function TimetableValidationModal({
   review,
   title = "Cannot Publish Timetable",
   subtitle = "Validation conflicts must be resolved before this timetable can be published to faculty and students.",
+  onPublishAnyway,
+  isPublishingAnyway = false,
   context,
 }: TimetableValidationModalProps) {
   const [activeTab, setActiveTab] = useState<TabKey>("all");
@@ -106,7 +113,7 @@ export function TimetableValidationModal({
   const totalErrors = facultyClashes.length + sectionClashes.length + unassignedSlots.length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs animate-in fade-in duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-xs animate-in fade-in duration-200 print:hidden">
       {/* Click outside backdrop */}
       <button
         type="button"
@@ -167,6 +174,14 @@ export function TimetableValidationModal({
                 <>
                   <span className="text-slate-300">•</span>
                   <span className="text-slate-800 font-semibold">{context.branchName}</span>
+                </>
+              ) : null}
+              {context.year ? (
+                <>
+                  <span className="text-slate-300">•</span>
+                  <span className="rounded bg-sky-50 px-1.5 py-0.5 text-[11px] font-bold text-sky-700">
+                    Year {context.year}
+                  </span>
                 </>
               ) : null}
               {context.section && context.section !== "all" ? (
@@ -443,9 +458,16 @@ export function TimetableValidationModal({
                                   <AlertCircle className="h-3.5 w-3.5 text-rose-600" />
                                   Conflicting Published Plan
                                 </span>
-                                <span className="rounded bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold">
-                                  Published
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  {item.conflictingYear ? (
+                                    <span className="rounded bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-bold">
+                                      Year {item.conflictingYear}
+                                    </span>
+                                  ) : null}
+                                  <span className="rounded bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-bold">
+                                    Published
+                                  </span>
+                                </div>
                               </div>
                               <div className="pt-1">
                                 <p className="text-sm font-bold text-navy-900">
@@ -463,10 +485,19 @@ export function TimetableValidationModal({
                           </div>
 
                           {/* Quick actionable guidance */}
-                          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 text-[11px] text-slate-600 border border-slate-200/60">
+                          <div className={cn(
+                            "flex items-center justify-between rounded-lg px-3 py-2 text-[11px] border",
+                            item.isPendingDraftSwap
+                              ? "bg-amber-50/70 border-amber-200 text-amber-900"
+                              : "bg-slate-50 border-slate-200/60 text-slate-600"
+                          )}>
                             <span className="flex items-center gap-1 font-medium">
-                              <Info className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-                              Action: Click on the <strong>{item.dayLabel} {item.startTime}</strong> slot in the timetable to select a different faculty member.
+                              <Info className={cn("h-3.5 w-3.5 shrink-0", item.isPendingDraftSwap ? "text-amber-600" : "text-indigo-500")} />
+                              {item.isPendingDraftSwap ? (
+                                <span>Companion Draft Swap: Vacated in the draft of the conflicting cohort. You can proceed to publish.</span>
+                              ) : (
+                                <span>Action: Click on the <strong>{item.dayLabel} {item.startTime}</strong> slot in the timetable to select a different faculty member.</span>
+                              )}
                             </span>
                           </div>
                         </div>
@@ -596,6 +627,16 @@ export function TimetableValidationModal({
           </div>
 
           <div className="flex items-center gap-2">
+            {onPublishAnyway && (
+              <Button
+                variant="secondary"
+                onClick={onPublishAnyway}
+                disabled={isPublishingAnyway}
+                className="border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold"
+              >
+                {isPublishingAnyway ? "Publishing..." : "Publish Anyway (Override)"}
+              </Button>
+            )}
             <Button variant="secondary" onClick={onClose}>
               Dismiss
             </Button>
