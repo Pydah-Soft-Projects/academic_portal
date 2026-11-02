@@ -52,6 +52,7 @@ type AuthContextValue = {
   loading: boolean;
   isSso: boolean;
   crmUrl: string;
+  token: string | null;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   hasPermission: (...permissions: string[]) => boolean;
@@ -72,6 +73,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [isSso, setIsSso] = useState(false);
   const [crmUrl, setCrmUrl] = useState(DEFAULT_CRM_URL);
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      return typeof window !== 'undefined' ? window.localStorage.getItem('ap_token') : null;
+    } catch {
+      return null;
+    }
+  });
   const router = useRouter();
 
   useEffect(() => {
@@ -110,10 +118,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       const body = (await response.json()) as {
+        token?: string;
         user: AuthUser;
         authorization?: Authorization;
         crmFrontendUrl?: string;
       };
+      if (body.token) {
+        setToken(body.token);
+        try { window.localStorage.setItem('ap_token', body.token); } catch {}
+      }
       setUser(body.user);
       setAuthorization(body.authorization ?? EMPTY_AUTHZ);
       if (body.crmFrontendUrl) {
@@ -174,12 +187,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } finally {
       try {
         window.localStorage.removeItem(SSO_STORAGE_KEY);
+        window.localStorage.removeItem('ap_token');
       } catch {
         /* ignore */
       }
       setUser(null);
       setAuthorization(null);
       setIsSso(false);
+      setToken(null);
 
       if (ssoActive) {
         const target = backendCrmUrl || DEFAULT_CRM_URL;
@@ -213,12 +228,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       loading,
       isSso,
       crmUrl,
+      token,
       refresh,
       logout,
       hasPermission,
       hasAnyPermission,
     }),
-    [user, authorization, loading, isSso, crmUrl, refresh, logout, hasPermission, hasAnyPermission],
+    [user, authorization, loading, isSso, crmUrl, token, refresh, logout, hasPermission, hasAnyPermission],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -36,6 +36,7 @@ import { internalMarksRouter } from "./routes/internal-marks.route.js";
 import { classTeacherRouter } from "./routes/class-teacher.route.js";
 import { principalDashboardRouter } from "./routes/principal-dashboard.route.js";
 import { hodRouter } from "./routes/hod.route.js";
+import { aiRouter } from "./routes/ai.route.js";
 
 const app = express();
 
@@ -62,6 +63,13 @@ app.get("/", (_req, res) => {
 // Explicit public endpoints (also reachable without requireAuth)
 app.use("/api/health", healthRouter);
 app.use("/api/auth", authRouter);
+
+// AI Integration endpoints for Nemo AI
+app.use("/ai-tools", aiRouter);
+app.use("/execute-tool", aiRouter);
+app.use("/api/ai-tools", aiRouter);
+app.use("/api/execute-tool", aiRouter);
+app.use("/api/ai", aiRouter);
 
 // Everything under /api/* requires an authenticated AP session by default
 app.use("/api", requireAuth);

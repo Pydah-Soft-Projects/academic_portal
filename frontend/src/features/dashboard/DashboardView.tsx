@@ -55,6 +55,7 @@ import { SubjectTeacherDashboard } from "./SubjectTeacherDashboard";
 import { HodDashboard } from "./HodDashboard";
 import { ClassTeacherDashboard } from "./ClassTeacherDashboard";
 import { PrincipalDashboard } from "./PrincipalDashboard";
+import { NemoChatWidget } from "@/components/nemo/NemoChatWidget";
 
 function todayIso() {
   const now = new Date();
@@ -433,11 +434,18 @@ export function DashboardView() {
   }
 
   if (loading && !summary && !attendance && !myTimetableSummary) {
-    return <DashboardSkeleton />;
+    return (
+      <>
+        {superAdminUser && <NemoChatWidget />}
+        <DashboardSkeleton />
+      </>
+    );
   }
 
   return (
-    <div className="space-y-4 sm:space-y-6 pb-12">
+    <>
+      {superAdminUser && <NemoChatWidget />}
+      <div className="space-y-4 sm:space-y-6 pb-12">
 
       {/* SECTION A — HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -1266,5 +1274,6 @@ export function DashboardView() {
         </div>
       </div>
     </div>
+    </>
   );
 }

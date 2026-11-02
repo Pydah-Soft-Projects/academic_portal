@@ -103,6 +103,7 @@ export async function sendCurrentUser(req: AuthedRequest, res: Response) {
   const profilePhoto = await getUserProfilePhoto(user);
 
   res.json({
+    token: req.sessionToken ?? null,
     user: {
       id: user.id,
       name: user.name,
@@ -155,6 +156,7 @@ authRouter.post("/login", async (req, res, next) => {
     const authz = await loadAuthzContext(result.user.id);
     res.cookie(getSessionCookieName(), result.sessionToken, sessionCookieOptions(result.expiresAt));
     res.json({
+      token: result.sessionToken,
       user: {
         id: result.user.id,
         name: result.user.name,

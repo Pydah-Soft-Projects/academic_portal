@@ -15,10 +15,31 @@ function readSessionToken(req: Request): string | null {
   if (typeof fromCookie === "string" && fromCookie.trim()) {
     return fromCookie.trim();
   }
+  const authHeader = req.headers.authorization;
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    const bearer = authHeader.slice(7).trim();
+    if (bearer) return bearer;
+  }
+  const xAccessToken = req.headers["x-access-token"];
+  if (typeof xAccessToken === "string" && xAccessToken.trim()) {
+    return xAccessToken.trim();
+  }
+  const bodyToken = (req.body as Record<string, unknown> | undefined)?.token;
+  if (typeof bodyToken === "string" && bodyToken.trim()) {
+    return bodyToken.trim();
+  }
+  const delegatedToken = (
+    (req.body as Record<string, unknown> | undefined)?.user_context as
+      | Record<string, unknown>
+      | undefined
+  )?.delegated_access_token;
+  if (typeof delegatedToken === "string" && delegatedToken.trim()) {
+    return delegatedToken.trim();
+  }
   return null;
 }
 
-/** Attach authUser + authz when a valid session cookie is present. Never trusts client role claims. */
+/** Attach authUser + authz when a valid session cookie or bearer token is present. Never trusts client role claims. */
 export async function loadSession(
   req: AuthedRequest,
   _res: Response,
