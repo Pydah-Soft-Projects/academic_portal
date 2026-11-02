@@ -524,9 +524,6 @@ export function AttendancePostSessionView() {
                           <p className="truncate text-sm font-bold text-navy-900 tracking-wide">
                             {displayPin}
                           </p>
-                          <span className="inline-flex items-center text-[10px] font-semibold px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0">
-                            Regular
-                          </span>
                           {payload.session.sections && payload.session.sections.length > 1 && student.section ? (
                             <span className="inline-flex items-center text-[10px] font-bold px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
                               Sec {student.section.replace(/^section\s+/i, "")}
@@ -562,19 +559,24 @@ export function AttendancePostSessionView() {
             </ul>
 
             {/* Desktop View: Clean spacious Data Table */}
-            <table className="hidden sm:table w-full text-left text-xs sm:text-sm border-collapse table-fixed">
+            <table className="hidden sm:table w-full min-w-[700px] text-left text-xs sm:text-sm border-collapse table-fixed">
               <thead className="sticky top-0 z-10 border-b border-border bg-slate-100/95 backdrop-blur text-[11px] uppercase tracking-wider text-slate-600 font-semibold shadow-xs">
                 <tr>
                   <th className="px-3 py-2.5 text-center w-12 flex-none">#</th>
-                  <th className="px-3 py-2.5 w-40 lg:w-44">PIN Number</th>
-                  <th className="px-3 py-2.5 w-1/3">Student Name</th>
+                  <th className={cn("px-3 py-2.5 min-w-[240px]", payload.session.sections && payload.session.sections.length > 1 ? "w-[30%]" : "w-[34%]")}>
+                    Student Name & PIN
+                  </th>
+                  <th className="px-3 py-2.5 text-center w-40 shrink-0">Attendance</th>
                   {payload.session.sections && payload.session.sections.length > 1 ? (
-                    <th className="px-3 py-2.5 w-24">Section</th>
+                    <th className="px-3 py-2.5 text-center w-20 shrink-0">Section</th>
                   ) : null}
-                  <th className="px-3 py-2.5 w-1/5">Course & Branch</th>
-                  <th className="px-3 py-2.5 hidden md:table-cell w-1/6">Year & Sem</th>
-                  <th className="px-3 py-2.5 text-center w-24">Status</th>
-                  <th className="px-3 py-2.5 text-right w-28">Attendance</th>
+                  <th className={cn("px-3 py-2.5 min-w-[140px]", payload.session.sections && payload.session.sections.length > 1 ? "w-[24%]" : "w-[26%]")}>
+                    Course & Branch
+                  </th>
+                  <th className={cn("px-3 py-2.5 hidden md:table-cell min-w-[120px]", payload.session.sections && payload.session.sections.length > 1 ? "w-[18%]" : "w-[20%]")}>
+                    Year & Sem
+                  </th>
+                  <th className="px-3 py-2.5 text-center w-24 shrink-0">Status</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border bg-white">
@@ -590,9 +592,9 @@ export function AttendancePostSessionView() {
                         {index + 1}
                       </td>
 
-                      {/* 2. Photo + PIN Number */}
-                      <td className="px-3 py-2.5 truncate">
-                        <div className="flex items-center gap-2.5 truncate">
+                      {/* 2. Photo + Student Name & PIN Number in a single cell */}
+                      <td className="px-3 py-2.5">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <StudentAvatar
                             name={student.name}
                             photo={null}
@@ -600,20 +602,41 @@ export function AttendancePostSessionView() {
                             hasPhoto={student.hasPhoto}
                             size="sm"
                           />
-                          <span className="font-bold text-navy-900 tracking-wide text-xs sm:text-sm truncate">
-                            {displayPin}
-                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold text-navy-900 text-xs sm:text-sm truncate" title={student.name}>
+                              {student.name}
+                            </p>
+                            <p className="text-xs font-semibold text-slate-500 tracking-wide truncate mt-0.5">
+                              {displayPin}
+                            </p>
+                          </div>
                         </div>
                       </td>
 
-                      {/* 3. Student Name */}
-                      <td className="px-3 py-2.5 font-medium text-slate-800 truncate" title={student.name}>
-                        {student.name}
+                      {/* 3. Attendance Status Buttons (Moved next to Student Name & PIN) */}
+                      <td className="px-3 py-2.5 text-center">
+                        <div className="inline-flex shrink-0 items-center rounded-lg border border-border p-0.5 bg-slate-50">
+                          {MARKS.map((mark) => (
+                            <button
+                              key={mark}
+                              type="button"
+                              onClick={() => setStatus(student.id, mark)}
+                              className={cn(
+                                "rounded-md px-2.5 py-1 text-xs font-semibold capitalize transition-colors",
+                                student.status === mark
+                                  ? markClass[mark] + " shadow-sm ring-1 ring-black/5"
+                                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-100",
+                              )}
+                            >
+                              {mark === "present" ? "Present" : "Absent"}
+                            </button>
+                          ))}
+                        </div>
                       </td>
 
                       {/* Section (for merged combined classes) */}
                       {payload.session.sections && payload.session.sections.length > 1 ? (
-                        <td className="px-3 py-2.5 truncate">
+                        <td className="px-3 py-2.5 text-center truncate">
                           <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
                             Sec {student.section?.replace(/^section\s+/i, "") || "—"}
                           </span>
@@ -637,27 +660,6 @@ export function AttendancePostSessionView() {
                         <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
                           {student.studentStatus || "Regular"}
                         </span>
-                      </td>
-
-                      {/* 7. Attendance Status Buttons */}
-                      <td className="px-3 py-2.5 text-right">
-                        <div className="inline-flex shrink-0 items-center rounded-lg border border-border p-0.5 bg-slate-50">
-                          {MARKS.map((mark) => (
-                            <button
-                              key={mark}
-                              type="button"
-                              onClick={() => setStatus(student.id, mark)}
-                              className={cn(
-                                "rounded-md px-3 py-1.5 text-xs font-bold uppercase transition-colors",
-                                student.status === mark
-                                  ? markClass[mark] + " shadow-sm ring-1 ring-black/5"
-                                  : "text-slate-500 hover:text-slate-700 hover:bg-slate-100",
-                              )}
-                            >
-                              {mark === "present" ? "P" : "A"}
-                            </button>
-                          ))}
-                        </div>
                       </td>
                     </tr>
                   );
@@ -767,12 +769,11 @@ export function AttendancePostSessionView() {
                     <thead className="sticky top-0 border-b border-border bg-slate-100 text-[10px] uppercase font-semibold text-slate-600">
                       <tr>
                         <th className="px-2.5 py-1.5 w-8 text-center">#</th>
-                        <th className="px-2.5 py-1.5 w-32">PIN Number</th>
-                        <th className="px-2.5 py-1.5">Student Name</th>
+                        <th className="px-2.5 py-1.5">Student Name & PIN</th>
+                        <th className="px-2.5 py-1.5 text-center w-24">Attendance</th>
                         {payload.session.sections && payload.session.sections.length > 1 ? (
-                          <th className="px-2.5 py-1.5 w-16">Section</th>
+                          <th className="px-2.5 py-1.5 w-20">Section</th>
                         ) : null}
-                        <th className="px-2.5 py-1.5 text-right w-24">Attendance</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border bg-white">
@@ -783,18 +784,15 @@ export function AttendancePostSessionView() {
                             <td className="px-2.5 py-2 text-center font-bold text-slate-400 text-[11px]">
                               {idx + 1}
                             </td>
-                            <td className="px-2.5 py-2 font-bold text-navy-900 whitespace-nowrap">
-                              {displayPin}
+                            <td className="px-2.5 py-2 min-w-0">
+                              <p className="font-bold text-navy-900 text-xs truncate" title={s.name}>
+                                {s.name}
+                              </p>
+                              <p className="text-[11px] font-semibold text-slate-500 tracking-wide truncate">
+                                {displayPin}
+                              </p>
                             </td>
-                            <td className="px-2.5 py-2 font-medium text-slate-700 truncate max-w-[180px]">
-                              {s.name}
-                            </td>
-                            {payload.session.sections && payload.session.sections.length > 1 ? (
-                              <td className="px-2.5 py-2 text-slate-600 font-semibold whitespace-nowrap">
-                                Sec {s.section?.replace(/^section\s+/i, "") || "—"}
-                              </td>
-                            ) : null}
-                            <td className="px-2.5 py-2 text-right">
+                            <td className="px-2.5 py-2 text-center">
                               <span
                                 className={cn(
                                   "px-2 py-0.5 text-[10px] font-bold rounded uppercase inline-block",
@@ -806,6 +804,11 @@ export function AttendancePostSessionView() {
                                 {s.status}
                               </span>
                             </td>
+                            {payload.session.sections && payload.session.sections.length > 1 ? (
+                              <td className="px-2.5 py-2 text-slate-600 font-semibold whitespace-nowrap">
+                                Sec {s.section?.replace(/^section\s+/i, "") || "—"}
+                              </td>
+                            ) : null}
                           </tr>
                         );
                       })}

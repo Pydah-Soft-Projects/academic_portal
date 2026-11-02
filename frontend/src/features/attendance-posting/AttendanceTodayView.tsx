@@ -10,8 +10,6 @@ import {
   BookOpen,
   AlertCircle,
   Search,
-  ShieldCheck,
-  Lock,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -181,22 +179,6 @@ export function AttendanceTodayView() {
     }
     return list;
   }, [authorization]);
-
-  const canPostAttendance = useMemo(() => {
-    if (isSuperAdmin) return true;
-    if (hasPermission("attendance.post")) return true;
-    const allowedRoles = [
-      "principal",
-      "vice_principal",
-      "viceprincipal",
-      "hod",
-      "hods",
-      "faculty",
-      "staff",
-      "teacher",
-    ];
-    return allowedRoles.some((role) => userRoles.includes(role));
-  }, [isSuperAdmin, hasPermission, userRoles]);
 
   // Load running cohorts from /today-timetable/all-batches to match Timetable cohorts
   useEffect(() => {
@@ -510,23 +492,6 @@ export function AttendanceTodayView() {
       {/* 1. Page Filters Bar */}
       <div className="mb-4 print:hidden">
         <AcademicFilterBar title="Page filters" />
-      </div>
-
-      {/* 2. Role Access Policy Notice */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs shadow-xs">
-        <div className="flex items-center gap-2">
-          {canPostAttendance ? (
-            <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              <span>Authorized: Edit Access Enabled (Super Admin / Assigned Roles)</span>
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded-md border border-slate-200">
-              <Lock className="h-3.5 w-3.5" />
-              <span>View Only: Attendance posting requires &apos;Post Attendance&apos; permission</span>
-            </span>
-          )}
-        </div>
       </div>
 
       {/* 3. Semester Switcher Tabs (All Semesters, 1-1, 1-2, 2-1, 3-1, 4-1, etc.) */}
