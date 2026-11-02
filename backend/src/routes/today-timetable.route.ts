@@ -342,7 +342,7 @@ todayTimetableRouter.get(
         staffHrmsId: str(req.query.staffHrmsId),
         facultyName: str(req.query.facultyName),
         subjectCode: str(req.query.subjectCode),
-        limit: num(req.query.limit) || 300,
+        limit: num(req.query.limit) || 5000,
         includeStudents: req.query.includeStudents === "true",
       });
 

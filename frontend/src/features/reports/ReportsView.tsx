@@ -11,6 +11,7 @@ import { AttendanceAnalyticsView } from "@/features/attendance-analytics/Attenda
 import { StaffWorkloadView } from "@/features/workload/StaffWorkloadView";
 import { MasterVsChangedReport } from "@/features/reports/MasterVsChangedReport";
 import { FeedbackReportsView } from "@/features/reports/FeedbackReportsView";
+import { StaffAnalyticsView } from "@/features/reports/StaffAnalyticsView";
 import { useAcademicContext } from "@/components/layout/AcademicProvider";
 import { apiFetch } from "@/lib/api";
 import { Calendar, ChevronRight, Printer, RotateCcw } from "lucide-react";
@@ -133,7 +134,7 @@ export function ReportsView() {
     if (activeTab.key === "subject-analytics")
       return <MasterVsChangedReport activeSection="subjects" onNavigateSection={handleNavigate} />;
     if (activeTab.key === "staff-analytics")
-      return <MasterVsChangedReport activeSection="staff" onNavigateSection={handleNavigate} />;
+      return <StaffAnalyticsView onNavigateSection={handleNavigate} />;
     if (activeTab.key === "change-audit")
       return <MasterVsChangedReport activeSection="audit" onNavigateSection={handleNavigate} />;
     if (activeTab.key === "department-timetables")

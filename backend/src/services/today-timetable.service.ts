@@ -1122,7 +1122,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
   const actWhere = actConds.length > 0 ? `WHERE ${actConds.join(" AND ")}` : "";
 
   // 2. Query all matching activities
-  const limit = Math.min(Math.max(Number(filters.limit) || 300, 1), 2000);
+  const limit = Math.min(Math.max(Number(filters.limit) || 300, 1), 10000);
   const activityRows = await queryAcademic<ActivityDbRow[]>(
     `
     SELECT *
@@ -1562,7 +1562,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
       cs.period_slot_id,
       COALESCE(ts.label, CONCAT('P', ts.slot_order)) as slot_label,
       COALESCE(cs.branch_id, p.branch_id) as branch_id,
-      COALESCE(cs.batch_label, p.batch) as batch,
+      COALESCE(p.batch, cs.batch_label) as batch,
       COALESCE(p.year_of_study, 0) as year_of_study,
       COALESCE(cs.section_name, p.section_name) as section_name,
       COALESCE(cs.semester_number, p.semester_number) as semester_number,
@@ -1598,16 +1598,13 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     const slot = act.timing_slot_id;
     const b = String(act.batch || "").trim().toLowerCase().replace(/^batch\s*/i, "");
     const sec = act.section_name ? String(act.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+    const br = act.branch_id ? String(act.branch_id) : "";
     if (sec) {
-      // Specifically for this section only
-      if (!activityMap.has(`${d}_${slot}_${b}_${sec}`)) {
-        activityMap.set(`${d}_${slot}_${b}_${sec}`, act);
-      }
+      if (br) activityMap.set(`${br}_${d}_${slot}_${b}_${sec}`, act);
+      else activityMap.set(`${d}_${slot}_${b}_${sec}`, act);
     } else {
-      // Truly batch-wide override with no section specified
-      if (!activityMap.has(`${d}_${slot}_${b}`)) {
-        activityMap.set(`${d}_${slot}_${b}`, act);
-      }
+      if (br) activityMap.set(`${br}_${d}_${slot}_${b}`, act);
+      else activityMap.set(`${d}_${slot}_${b}`, act);
     }
   }
 
@@ -1633,10 +1630,15 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         return null;
       }
 
-      // Match exact section first; only fall back to batch-wide match if the override was truly batch-wide
+      // Match exact branch and section first; only fall back to batch-wide match if the override was truly batch-wide
+      const br = r.branch_id ? String(r.branch_id) : "";
       const matchedAct = sec
-        ? (activityMap.get(`${d}_${slot}_${b}_${sec}`) || activityMap.get(`${d}_${slot}_${b}`))
-        : activityMap.get(`${d}_${slot}_${b}`);
+        ? (activityMap.get(`${br}_${d}_${slot}_${b}_${sec}`) ||
+           (br ? activityMap.get(`${br}_${d}_${slot}_${b}`) : null) ||
+           activityMap.get(`${d}_${slot}_${b}_${sec}`) ||
+           activityMap.get(`${d}_${slot}_${b}`))
+        : ((br ? activityMap.get(`${br}_${d}_${slot}_${b}`) : null) ||
+           activityMap.get(`${d}_${slot}_${b}`));
 
       const masterSubjectCode = matchedAct?.master_subject_code || r.master_subject_code;
       const masterSubjectName = matchedAct?.master_subject_name || r.master_subject_name;
@@ -1724,9 +1726,11 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     const slot = r.period_slot_id;
     const b = String(r.batch || "").trim().toLowerCase().replace(/^batch\s*/i, "");
     const sec = r.section_name ? String(r.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+    const br = r.branch_id ? String(r.branch_id) : "";
     if (r.timetable_entry_id) {
       existingSessionKeys.add(`${d}_te_${r.timetable_entry_id}`);
     }
+    if (br) existingSessionKeys.add(`${br}_${d}_${slot}_${b}_${sec}`);
     existingSessionKeys.add(`${d}_${slot}_${b}_${sec}`);
   }
 
@@ -1737,6 +1741,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         const slot = m.period_slot_id || m.timing_slot_id;
         const b = String(m.batch || "").trim().toLowerCase().replace(/^batch\s*/i, "");
         const sec = m.section_name ? String(m.section_name).trim().toUpperCase().replace(/^(?:(?:SECTION|SEC)[\s.:_-]*)+/i, "") : "";
+        const br = m.branch_id ? String(m.branch_id) : "";
         const bInfo = branchMap.get(Number(m.branch_id));
         const bCode = (bInfo?.code || "").trim().toUpperCase();
         const bName = (bInfo?.name || "").trim().toUpperCase();
@@ -1755,20 +1760,25 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
         }
 
         const key1 = `${d}_te_${m.id}`;
-        const key2 = `${d}_${slot}_${b}_${sec}`;
+        const key2 = br ? `${br}_${d}_${slot}_${b}_${sec}` : `${d}_${slot}_${b}_${sec}`;
 
         if (!existingSessionKeys.has(key1) && !existingSessionKeys.has(key2)) {
           existingSessionKeys.add(key1);
           existingSessionKeys.add(key2);
 
+          const br = m.branch_id ? String(m.branch_id) : "";
           const matchedAct = sec
-            ? (activityMap.get(`${d}_${slot}_${b}_${sec}`) || activityMap.get(`${d}_${slot}_${b}`))
-            : activityMap.get(`${d}_${slot}_${b}`);
+            ? (activityMap.get(`${br}_${d}_${slot}_${b}_${sec}`) ||
+               (br ? activityMap.get(`${br}_${d}_${slot}_${b}`) : null) ||
+               activityMap.get(`${d}_${slot}_${b}_${sec}`) ||
+               activityMap.get(`${d}_${slot}_${b}`))
+            : ((br ? activityMap.get(`${br}_${d}_${slot}_${b}`) : null) ||
+               activityMap.get(`${d}_${slot}_${b}`));
 
           const isSpecial = m.entry_type === "other" || Boolean(m.custom_label);
           const masterSubjectCode = m.subject_code || (m.custom_label ? m.custom_label.toUpperCase() : (isSpecial ? "SPECIAL" : "PERIOD"));
           const masterSubjectName = m.custom_label || m.subject_name || m.subject_code || (isSpecial ? "Special Period" : "Academic Class");
-          const masterFacultyName = m.faculty_name || (m.custom_label ? `${m.custom_label} Session` : (isSpecial ? "Special Activity" : "Faculty Assigned"));
+          const masterFacultyName = m.faculty_name || null;
           const masterFacultyHrmsId = m.faculty_hrms_id || null;
 
           const todaySubjectCode = matchedAct?.new_subject_code || masterSubjectCode;
@@ -2625,7 +2635,7 @@ export async function getMasterVsChangedTimetableReport(filters: MasterVsChanged
     const isSpecial = r.entry_type === "other" || Boolean(r.custom_label);
     const resolvedSubjectName = r.custom_label || r.subject_name || r.subject_code || (isSpecial ? "Special Period" : "Academic Class");
     const resolvedSubjectCode = r.subject_code || (r.custom_label ? r.custom_label.toUpperCase() : (isSpecial ? "SPECIAL" : "PERIOD"));
-    const resolvedFaculty = r.faculty_name || (r.custom_label ? `${r.custom_label} Session` : (isSpecial ? "Special Activity / Session" : "Faculty Assigned"));
+    const resolvedFaculty = r.faculty_name || null;
 
     return {
       id: r.id,
