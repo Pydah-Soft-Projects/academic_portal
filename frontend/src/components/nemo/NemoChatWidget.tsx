@@ -35,6 +35,8 @@ declare global {
     NemoAIChatWidget?: React.ComponentType<{
       apiBaseUrl?: string | null;
       serviceUrl?: string | null;
+      backendUrl?: string | null;
+      portalUrl?: string | null;
       assistantId?: string;
       authToken?: string | null;
       title?: string | null;
@@ -43,6 +45,8 @@ declare global {
     PydahAIChatWidget?: React.ComponentType<{
       apiBaseUrl?: string | null;
       serviceUrl?: string | null;
+      backendUrl?: string | null;
+      portalUrl?: string | null;
       assistantId?: string;
       authToken?: string | null;
       title?: string | null;
