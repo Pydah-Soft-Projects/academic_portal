@@ -27,6 +27,10 @@ declare global {
     PYDAH_AI_TITLE?: string;
     NEMO_AI_MODE?: string;
     PYDAH_AI_MODE?: string;
+    NEMO_AI_DISABLE_AUTO_MOUNT?: boolean;
+    PYDAH_AI_DISABLE_AUTO_MOUNT?: boolean;
+    NEMO_AI_AUTO_MOUNT?: boolean | string;
+    PYDAH_AI_AUTO_MOUNT?: boolean | string;
     NEMO_AI_SERVICE_URL?: string;
     PYDAH_AI_SERVICE_URL?: string;
     NEMO_SERVICE_URL?: string;
@@ -82,6 +86,10 @@ if (typeof window !== "undefined") {
     createRoot: ReactDOMClient.createRoot,
     hydrateRoot: ReactDOMClient.hydrateRoot,
   };
+  window.NEMO_AI_DISABLE_AUTO_MOUNT = true;
+  window.PYDAH_AI_DISABLE_AUTO_MOUNT = true;
+  window.NEMO_AI_AUTO_MOUNT = false;
+  window.PYDAH_AI_AUTO_MOUNT = false;
   window.NEMO_AI_SERVICE_URL = portalUrl;
   window.NEMO_SERVICE_URL = portalUrl;
   window.PORTAL_BACKEND_URL = portalUrl;
@@ -259,12 +267,25 @@ function scopeCss(css: string, scopeSelector: string): string {
   return out;
 }
 
+let activeChatRoot: ReactDOMClient.Root | null = null;
+
 export function NemoChatWidget() {
   const { authorization, token } = useAuth();
   const isSuperAdmin = isUserSuperAdmin(authorization);
 
   useEffect(() => {
-    if (!isSuperAdmin) return;
+    if (!isSuperAdmin) {
+      if (activeChatRoot) {
+        try {
+          activeChatRoot.unmount();
+        } catch {}
+        activeChatRoot = null;
+      }
+      document
+        .querySelectorAll("#nemo-ai-chat-root, #pydah-ai-chat-root, .nemo-ai-root")
+        .forEach((el) => el.remove());
+      return;
+    }
 
     let isCancelled = false;
     const styleId = "nemo-ai-scoped-style";
@@ -298,6 +319,11 @@ export function NemoChatWidget() {
         : "");
 
     // 1. Configure Nemo & Pydah AI window globals for testing / production
+    // Strictly disable UMD auto-mount so only this React component controls mounting
+    window.NEMO_AI_DISABLE_AUTO_MOUNT = true;
+    window.PYDAH_AI_DISABLE_AUTO_MOUNT = true;
+    window.NEMO_AI_AUTO_MOUNT = false;
+    window.PYDAH_AI_AUTO_MOUNT = false;
     window.NEMO_AI_API_URL = nemoApiUrl;
     window.PYDAH_AI_API_URL = nemoApiUrl;
     window.NEMO_AI_SERVICE_URL = portalServiceUrl;
@@ -314,21 +340,26 @@ export function NemoChatWidget() {
     window.NEMO_AI_MODE = "widget";
     window.PYDAH_AI_MODE = "widget";
 
-    // Helper to manually mount widget if auto-mount didn't trigger
+    // Helper to mount exactly one widget instance
     const tryMountWidget = () => {
       if (typeof window === "undefined" || isCancelled) return;
-      if (document.getElementById("nemo-ai-chat-root")) return;
+      if (activeChatRoot || document.getElementById("nemo-ai-chat-root")) return;
 
       const WidgetComp = window.NemoAIChatWidget || window.PydahAIChatWidget;
       if (WidgetComp) {
+        // Clear any orphaned elements before creating
+        document
+          .querySelectorAll("#nemo-ai-chat-root, #pydah-ai-chat-root, .nemo-ai-root")
+          .forEach((el) => el.remove());
+
         const container = document.createElement("div");
         container.id = "nemo-ai-chat-root";
         container.className = "nemo-ai-root";
         document.body.appendChild(container);
 
         try {
-          const root = ReactDOMClient.createRoot(container);
-          root.render(
+          activeChatRoot = ReactDOMClient.createRoot(container);
+          activeChatRoot.render(
             React.createElement(WidgetComp, {
               apiBaseUrl: nemoApiUrl,
               serviceUrl: portalServiceUrl,
@@ -374,7 +405,6 @@ export function NemoChatWidget() {
       script.src = `${cdnBase}/index.umd.js`;
       script.async = true;
       script.onload = () => {
-        // In case UMD auto-mount didn't run, execute fallback
         setTimeout(tryMountWidget, 50);
       };
       document.body.appendChild(script);
@@ -382,11 +412,17 @@ export function NemoChatWidget() {
 
     return () => {
       isCancelled = true;
-      // Cleanup DOM on unmount if user navigates away from superadmin dashboard
-      const root = document.getElementById("nemo-ai-chat-root");
-      if (root) {
-        root.remove();
+      // Complete teardown on unmount
+      if (activeChatRoot) {
+        try {
+          activeChatRoot.unmount();
+        } catch {}
+        activeChatRoot = null;
       }
+      document
+        .querySelectorAll("#nemo-ai-chat-root, #pydah-ai-chat-root, .nemo-ai-root")
+        .forEach((el) => el.remove());
+
       const styleEl = document.getElementById(styleId);
       if (styleEl) {
         styleEl.remove();

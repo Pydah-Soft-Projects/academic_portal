@@ -433,19 +433,13 @@ export function DashboardView() {
     );
   }
 
-  if (loading && !summary && !attendance && !myTimetableSummary) {
-    return (
-      <>
-        {superAdminUser && <NemoChatWidget />}
-        <DashboardSkeleton />
-      </>
-    );
-  }
-
   return (
     <>
       {superAdminUser && <NemoChatWidget />}
-      <div className="space-y-4 sm:space-y-6 pb-12">
+      {loading && !summary && !attendance && !myTimetableSummary ? (
+        <DashboardSkeleton />
+      ) : (
+        <div className="space-y-4 sm:space-y-6 pb-12">
 
       {/* SECTION A — HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -1274,6 +1268,7 @@ export function DashboardView() {
         </div>
       </div>
     </div>
+      )}
     </>
   );
 }
