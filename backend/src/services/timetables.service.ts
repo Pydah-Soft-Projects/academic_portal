@@ -2536,7 +2536,7 @@ export async function publishTimetablePlan(
         AND (p.batch = ? OR p.batch IS NULL OR p.batch = '')
         AND (p.year_of_study = ? OR (? IS NULL AND p.year_of_study IS NULL))
         AND p.semester_number = ?
-        AND ((? IS NULL AND (p.section_name IS NULL OR p.section_name = '')) OR p.section_name = ?)
+        AND (? IS NULL OR p.section_name = ? OR p.section_name IS NULL OR p.section_name = '')
         AND p.status = 'published'
         AND p.id <> ?
         AND e.faculty_staff_link_id IS NOT NULL
@@ -2570,7 +2570,7 @@ export async function publishTimetablePlan(
         AND (batch = ? OR batch IS NULL OR batch = '')
         AND (year_of_study = ? OR (? IS NULL AND year_of_study IS NULL))
         AND semester_number = ?
-        AND ((? IS NULL AND (section_name IS NULL OR section_name = '')) OR section_name = ?)
+        AND (? IS NULL OR section_name = ? OR section_name IS NULL OR section_name = '')
         AND status = 'published'
         AND id <> ?
       `,

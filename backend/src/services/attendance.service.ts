@@ -209,7 +209,10 @@ function mergeSessionCards(
         : `name_${(card.subjectName || "").toLowerCase().trim()}`;
     const branchKey = card.branchId != null ? String(card.branchId) : "";
     const batchKey = (card.batchLabel || "").trim().toLowerCase();
-    const key = `${card.date}|${card.startTime}|${card.endTime || ""}|${card.facultyStaffLinkId}|${subKey}|${branchKey}|${batchKey}`;
+    const hasSection = Boolean(card.section && card.section.trim());
+    // An unsectioned card must not merge with a sectioned card
+    const secTag = hasSection ? "" : `_nosec_${card.id}`;
+    const key = `${card.date}|${card.startTime}|${card.endTime || ""}|${card.facultyStaffLinkId}|${subKey}|${branchKey}|${batchKey}${secTag}`;
 
     const existing = map.get(key);
     if (existing) {
@@ -237,7 +240,17 @@ function mergeSessionCards(
       continue;
     }
 
-    const primary = group[0];
+    // Deduplicate cards with the exact same section
+    const seenSecs = new Set<string>();
+    const effectiveGroup: typeof group = [];
+    for (const s of group) {
+      const norm = (s.section || "").trim().toLowerCase();
+      if (norm && seenSecs.has(norm)) continue;
+      if (norm) seenSecs.add(norm);
+      effectiveGroup.push(s);
+    }
+
+    const primary = effectiveGroup.find((s) => Boolean(s.section && s.section.trim())) || effectiveGroup[0];
     const sessionIds = group.map((s) => s.id);
     const rawSections = group.map((s) => s.section).filter(Boolean) as string[];
     const uniqueSections = Array.from(new Set(rawSections));
@@ -413,7 +426,7 @@ export async function listAttendanceSessions(filters: AttendanceListFilters) {
       cs.day_of_week,
       cs.start_time,
       cs.end_time,
-      cs.section_name,
+      COALESCE(NULLIF(TRIM(cs.section_name), ''), NULLIF(TRIM(p.section_name), '')) AS section_name,
       cs.college_id,
       p.course_id,
       cs.branch_id,
@@ -606,16 +619,17 @@ export async function listAttendanceSessions(filters: AttendanceListFilters) {
 }
 
 async function loadSessionContext(sessionId: number) {
-  const rows = await queryAcademic<SessionListRow[]>(
+  const rows = await queryAcademic<(SessionListRow & { plan_status?: string })[]>(
     `
     SELECT
       cs.id,
       cs.plan_id,
+      p.status AS plan_status,
       cs.session_date,
       cs.day_of_week,
       cs.start_time,
       cs.end_time,
-      cs.section_name,
+      COALESCE(NULLIF(TRIM(cs.section_name), ''), NULLIF(TRIM(p.section_name), '')) AS section_name,
       cs.college_id,
       p.course_id,
       cs.branch_id,
@@ -651,7 +665,33 @@ async function loadSessionContext(sessionId: number) {
     `,
     [sessionId],
   );
-  return rows[0] ?? null;
+
+  const primaryRow = rows[0] ?? null;
+  if (!primaryRow) return null;
+
+  // If session belongs to a superseded plan and an active published counterpart exists, load the published session instead
+  if (primaryRow.plan_status === "superseded" && primaryRow.faculty_staff_link_id && primaryRow.start_time && primaryRow.session_date) {
+    const publishedSiblings = await queryAcademic<{ id: number }[]>(
+      `
+      SELECT cs.id
+      FROM ap_class_sessions cs
+      INNER JOIN ap_timetable_plans p ON p.id = cs.plan_id
+      WHERE cs.session_date = ?
+        AND TIME_FORMAT(cs.start_time, '%H:%i') = TIME_FORMAT(?, '%H:%i')
+        AND cs.branch_id = ?
+        AND cs.faculty_staff_link_id = ?
+        AND p.status = 'published'
+        AND cs.status <> 'cancelled'
+      LIMIT 1
+      `,
+      [primaryRow.session_date, primaryRow.start_time, primaryRow.branch_id, primaryRow.faculty_staff_link_id],
+    );
+    if (publishedSiblings[0]?.id && publishedSiblings[0].id !== sessionId) {
+      return loadSessionContext(publishedSiblings[0].id);
+    }
+  }
+
+  return primaryRow;
 }
 
 function parseStudentIds(val: unknown): number[] {
@@ -772,6 +812,7 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
     "cs.faculty_staff_link_id = ?",
     "cs.status <> 'cancelled'",
     "cs.branch_id = ?",
+    "p.status = 'published'",
   ];
   const params: unknown[] = [
     asDate(row.session_date),
@@ -780,6 +821,20 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
     row.faculty_staff_link_id,
     row.branch_id,
   ];
+
+  if (row.section_name && row.section_name.trim()) {
+    // Only sibling sessions from published plans with a valid section
+    // (and not duplicate sessions with the same section_name)
+    where.push(
+      "(cs.id = ? OR (COALESCE(NULLIF(TRIM(cs.section_name), ''), NULLIF(TRIM(p.section_name), '')) IS NOT NULL AND TRIM(COALESCE(cs.section_name, p.section_name)) <> TRIM(?)))",
+    );
+    params.push(row.id, row.section_name);
+  } else {
+    // If this session has no section, only match other unsectioned sessions
+    where.push(
+      "(COALESCE(NULLIF(TRIM(cs.section_name), ''), NULLIF(TRIM(p.section_name), '')) IS NULL)",
+    );
+  }
 
   if (row.batch_label) {
     where.push("COALESCE(cs.batch_label, te.batch_label, '') = ?");
@@ -808,7 +863,7 @@ async function findSiblingSessions(row: SessionListRow): Promise<SessionListRow[
       cs.day_of_week,
       cs.start_time,
       cs.end_time,
-      cs.section_name,
+      COALESCE(NULLIF(TRIM(cs.section_name), ''), NULLIF(TRIM(p.section_name), '')) AS section_name,
       cs.college_id,
       p.course_id,
       cs.branch_id,
