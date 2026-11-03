@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { queryStudent } from "../db/pools.js";
+import type { AcademicScope } from "../authz/authorization.service.js";
 
 type CollegeRow = RowDataPacket & {
   id: number;
@@ -140,7 +141,7 @@ export function getCurrentAcademicYearLabel(now = new Date()): string {
   return `${startYear}-${startYear + 1}`;
 }
 
-export async function getAcademicMasters() {
+export async function getAcademicMasters(scope?: AcademicScope | null) {
   const [
     colleges,
     years,
@@ -242,6 +243,52 @@ export async function getAcademicMasters() {
     sortedYears[0]?.year_label ??
     "—";
 
+  // Apply academic scope filtering for non-global RBAC users
+  let effectiveColleges = colleges;
+  let effectiveBranches = branches;
+  let effectiveCourses = courses;
+
+  if (scope && !scope.isGlobal) {
+    const allowedCollegeIds =
+      scope.collegeIds && scope.collegeIds.length > 0
+        ? new Set(scope.collegeIds)
+        : null;
+    const allowedBranchIds =
+      scope.branchIds && scope.branchIds.length > 0
+        ? new Set(scope.branchIds)
+        : null;
+
+    if (allowedCollegeIds) {
+      effectiveColleges = colleges.filter((c) => allowedCollegeIds.has(Number(c.id)));
+    }
+
+    const courseCollegeMap = new Map(courses.map((c) => [Number(c.id), Number(c.college_id)]));
+
+    // Filter branches by allowed colleges and allowed branches
+    effectiveBranches = branches.filter((b) => {
+      const cId = courseCollegeMap.get(Number(b.course_id));
+      if (allowedCollegeIds && (cId == null || !allowedCollegeIds.has(cId))) {
+        return false;
+      }
+      if (allowedBranchIds && !allowedBranchIds.has(Number(b.id))) {
+        return false;
+      }
+      return true;
+    });
+
+    // Courses must belong to allowed colleges AND (if branch restricted) must have at least one allowed branch
+    const allowedBranchCourseIds = new Set(effectiveBranches.map((b) => Number(b.course_id)));
+    effectiveCourses = courses.filter((c) => {
+      if (allowedCollegeIds && !allowedCollegeIds.has(Number(c.college_id))) {
+        return false;
+      }
+      if (allowedBranchIds && !allowedBranchCourseIds.has(Number(c.id))) {
+        return false;
+      }
+      return true;
+    });
+  }
+
   const sections: Array<{
     branchId: number;
     name: string;
@@ -250,7 +297,7 @@ export async function getAcademicMasters() {
     strength: number | null;
   }> = [];
 
-  const branchPayload = branches.map((b) => {
+  const branchPayload = effectiveBranches.map((b) => {
     const parsed = parseBranchSections(b.metadata);
     const hasSections = parsed.enabled && parsed.items.length > 0;
 
@@ -276,8 +323,10 @@ export async function getAcademicMasters() {
     };
   });
 
+  const activeBranchIds = new Set(effectiveBranches.map((b) => Number(b.id)));
   const batchSet = new Map<string, { branchId: number; batch: string }>();
   for (const row of [...studentBatchRows, ...sectionBatchRows]) {
+    if (scope && !scope.isGlobal && !activeBranchIds.has(Number(row.branch_id))) continue;
     const batch = String(row.batch).trim();
     if (!batch) continue;
     batchSet.set(`${row.branch_id}::${batch}`, {
@@ -289,7 +338,7 @@ export async function getAcademicMasters() {
     b.batch.localeCompare(a.batch),
   );
 
-  const coursePayload = courses.map((c) => {
+  const coursePayload = effectiveCourses.map((c) => {
     const totalYears = Math.max(1, Number(c.total_years) || 4);
     const semestersPerYear = Math.max(1, Number(c.semesters_per_year) || 2);
     const yearSemesterConfig = parseYearSemesterConfig(c.year_semester_config);
@@ -313,7 +362,7 @@ export async function getAcademicMasters() {
       label: y.year_label,
       isActive: y.year_label === activeYear,
     })),
-    colleges: colleges.map((c) => ({
+    colleges: effectiveColleges.map((c) => ({
       id: c.id,
       name: c.name,
       code: c.code,
@@ -327,8 +376,8 @@ export async function getAcademicMasters() {
     semesterOptions: [1, 2],
     defaults: {
       academicYear: activeYear,
-      collegeId: null as number | null,
-      collegeName: "All Colleges",
+      collegeId: effectiveColleges.length === 1 ? effectiveColleges[0].id : (null as number | null),
+      collegeName: effectiveColleges.length === 1 ? effectiveColleges[0].name : "All Colleges",
     },
   };
 }

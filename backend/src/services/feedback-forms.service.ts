@@ -1,5 +1,6 @@
 import type { RowDataPacket, ResultSetHeader } from "mysql2";
 import { executeAcademic, queryAcademic, queryStudent, withAcademicTransaction } from "../db/pools.js";
+import type { AcademicScope } from "../authz/authorization.service.js";
 
 export type FeedbackQuestion = {
   id?: number;
@@ -35,9 +36,11 @@ export type MappedStaffSubject = {
   branchId?: number | null;
   branchName?: string | null;
   courseId?: number | null;
+  courseName?: string | null;
   collegeId?: number | null;
   academicYear?: string | null;
   batch?: string | null;
+  yearOfStudy?: number | null;
 };
 
 export type TargetAudienceScope = {
@@ -75,7 +78,85 @@ export type FeedbackPublication = {
   updatedAt: string;
 };
 
+export type QuestionSummary = {
+  questionId: number;
+  questionText: string;
+  questionType: string;
+  shortLabel: string;
+  abstract: string;
+  avgScore?: number | null;
+  ratingTier?: "excellent" | "good" | "average" | "poor" | "none";
+  distribution?: Record<string, number>;
+};
+
+export type StudentResponseDetail = {
+  id: number;
+  studentName: string;
+  tokenHash: string;
+  submittedAt: string;
+  branchName: string;
+  semester: number;
+  sectionName: string;
+  subjectName: string;
+  facultyName: string;
+  answers: Record<string, unknown>;
+  unitsCovered?: string | null;
+  facultyRating?: number | null;
+  unitStatus?: string | null;
+};
+
+export type SubjectSectionReportItem = {
+  id: string;
+  subjectId: number | null;
+  subjectCode: string;
+  subjectName: string;
+  staffLinkId: number | null;
+  facultyName: string;
+  employeeCode: string | null;
+  branchId: number | null;
+  branchName: string;
+  courseId: number | null;
+  courseName: string;
+  semester: number;
+  romanSemester: string;
+  yearOfStudy?: number;
+  sectionName: string | null;
+  count: number;
+  questions: QuestionSummary[];
+  studentDetails: StudentResponseDetail[];
+};
+
+export type SectionGroup = {
+  groupKey: string;
+  branchId: number | null;
+  branchName: string;
+  courseId: number | null;
+  courseName: string;
+  semester: number;
+  romanSemester: string;
+  yearOfStudy?: number;
+  sectionName: string | null;
+  sectionLabel: string;
+  subjectCount: number;
+  totalSubmissions: number;
+  subjects: SubjectSectionReportItem[];
+};
+
+export type FacultyGroup = {
+  facultyKey: string;
+  facultyName: string;
+  employeeCode: string | null;
+  staffLinkId: number | null;
+  totalSubjects: number;
+  totalSubmissions: number;
+  overallRating: number | null;
+  subjects: Array<SubjectSectionReportItem & { classLabel: string }>;
+};
+
 export type FeedbackReportData = {
+  publicationQuestions?: FeedbackQuestion[];
+  sectionGroups?: SectionGroup[];
+  facultyGroups?: FacultyGroup[];
   publication: FeedbackPublication | null;
   publications: Array<FeedbackPublication>;
   forms: Array<{ id: number; name: string; questionCount: number }>;
@@ -1134,7 +1215,12 @@ export async function getStaffSubjectsForScope(filter: {
       tp.course_id AS courseId,
       tp.branch_id AS branchId,
       tp.academic_year_label AS academicYear,
-      tp.semester_number AS semester,
+      CASE
+        WHEN tp.year_of_study IS NOT NULL AND tp.year_of_study > 0
+          THEN (tp.year_of_study - 1) * 2 + COALESCE(tp.semester_number, 1)
+        ELSE COALESCE(tp.semester_number, 1)
+      END AS semester,
+      tp.year_of_study AS yearOfStudy,
       tp.section_name AS sectionName,
       tp.batch AS batch
     FROM ap_timetable_entries te
@@ -1256,10 +1342,185 @@ async function loadSectionHeadcountHelper(): Promise<
 // Real Database Lookups & Report Generation
 // =========================================================================
 
+
+export function formatRomanYearSem(semesterNumber: number | null | undefined): string {
+  if (!semesterNumber || semesterNumber < 1) return "I-I";
+  const year = Math.ceil(semesterNumber / 2);
+  const semInYear = semesterNumber % 2 === 1 ? 1 : 2;
+  const romanYears = ["I", "II", "III", "IV", "V"];
+  const romanSem = semInYear === 1 ? "I" : "II";
+  return `${romanYears[year - 1] || year}-${romanSem}`;
+}
+
+export function shortenQuestionText(text: string): string {
+  if (!text) return "Question";
+  const trimmed = text.trim();
+  if (trimmed.length <= 25) return trimmed;
+  if (/smart\s*board/i.test(trimmed)) return "Smart Board";
+  if (/rate\s*subject\s*faculty/i.test(trimmed)) return "Rate Faculty";
+  if (/educational\s*applications.*useful/i.test(trimmed)) return "Digital Resources";
+  if (/which.*feature.*frequently/i.test(trimmed)) return "Frequent Feature";
+  if (/quality.*applications/i.test(trimmed)) return "Quality Rating";
+  return trimmed.slice(0, 22) + "...";
+}
+
+function computeQuestionSummary(
+  q: FeedbackQuestion,
+  responsesForSubject: ResponseRow[],
+): QuestionSummary {
+  const qIdStr = String(q.id);
+  const isRating =
+    q.questionType === "rating_scale" ||
+    (q.minValue != null && q.maxValue != null) ||
+    q.questionText.toLowerCase().includes("rate");
+
+  const extractedAnswers: string[] = [];
+  const extractedRatings: number[] = [];
+
+  for (const r of responsesForSubject) {
+    let ansValue: unknown = undefined;
+
+    if (r.answers_json) {
+      try {
+        const parsed =
+          typeof r.answers_json === "string" ? JSON.parse(r.answers_json) : r.answers_json;
+        if (parsed && typeof parsed === "object") {
+          const rec = parsed as Record<string, unknown>;
+          ansValue =
+            rec[qIdStr] ??
+            rec[Number(q.id)] ??
+            rec[`q_${q.id}`] ??
+            rec[`question_${q.id}`] ??
+            rec[q.questionText] ??
+            rec[q.questionText.toLowerCase().trim()];
+        }
+      } catch {}
+    }
+
+    if (ansValue === undefined || ansValue === null || ansValue === "") {
+      if (isRating && r.faculty_rating != null && r.faculty_rating > 0) {
+        ansValue = r.faculty_rating;
+      } else if (
+        q.questionText.toLowerCase().includes("unit") &&
+        q.questionText.toLowerCase().includes("covered") &&
+        r.units_covered
+      ) {
+        ansValue = r.units_covered;
+      } else if (
+        q.questionText.toLowerCase().includes("unit") &&
+        q.questionText.toLowerCase().includes("status") &&
+        r.unit_status
+      ) {
+        ansValue = r.unit_status;
+      }
+    }
+
+    if (ansValue != null && String(ansValue).trim() !== "") {
+      const str = String(ansValue).trim();
+      extractedAnswers.push(str);
+      const num = Number(ansValue);
+      if (!isNaN(num) && num > 0) {
+        extractedRatings.push(num);
+      }
+    }
+  }
+
+  const shortLabel = shortenQuestionText(q.questionText);
+
+  if (extractedAnswers.length === 0) {
+    return {
+      questionId: q.id ?? 0,
+      questionText: q.questionText,
+      questionType: q.questionType,
+      shortLabel,
+      abstract: "—",
+      avgScore: null,
+      ratingTier: "none",
+      distribution: {},
+    };
+  }
+
+  if (isRating && extractedRatings.length > 0) {
+    const avg =
+      extractedRatings.reduce((sum, val) => sum + val, 0) / extractedRatings.length;
+    const roundedAvg = Math.round(avg * 100) / 100;
+    let tier: "excellent" | "good" | "average" | "poor" = "good";
+    let label = "Good";
+    if (roundedAvg >= 4.5) {
+      tier = "excellent";
+      label = "Very Good";
+    } else if (roundedAvg >= 3.5) {
+      tier = "good";
+      label = "Good";
+    } else if (roundedAvg >= 2.5) {
+      tier = "average";
+      label = "Average";
+    } else {
+      tier = "poor";
+      label = "Below Average";
+    }
+
+    return {
+      questionId: q.id ?? 0,
+      questionText: q.questionText,
+      questionType: q.questionType,
+      shortLabel,
+      abstract: `${label} (${roundedAvg.toFixed(2)})`,
+      avgScore: roundedAvg,
+      ratingTier: tier,
+      distribution: {},
+    };
+  }
+
+  const counts: Record<string, number> = {};
+  for (const a of extractedAnswers) {
+    counts[a] = (counts[a] || 0) + 1;
+  }
+
+  let mostFrequent = "";
+  let maxCount = 0;
+  for (const [opt, count] of Object.entries(counts)) {
+    if (count > maxCount) {
+      maxCount = count;
+      mostFrequent = opt;
+    }
+  }
+
+  return {
+    questionId: q.id ?? 0,
+    questionText: q.questionText,
+    questionType: q.questionType,
+    shortLabel,
+    abstract: `${mostFrequent} (${maxCount})`,
+    avgScore: null,
+    ratingTier: "none",
+    distribution: counts,
+  };
+}
+
+
+function resolveActualSemester(item: MappedStaffSubject, pubAcademicYear?: string): number {
+  if (item.semester && Number(item.semester) > 2) {
+    return Number(item.semester);
+  }
+  if (item.batch) {
+    const batchYear = parseInt(String(item.batch).trim(), 10);
+    const acadYear = parseInt(String(pubAcademicYear || item.academicYear || "2026").slice(0, 4), 10) || 2026;
+    if (batchYear > 2000 && batchYear <= acadYear) {
+      const yearOfStudy = Math.min(4, Math.max(1, acadYear - batchYear + 1));
+      const semInYear = Number(item.semester) === 2 ? 2 : 1;
+      return (yearOfStudy - 1) * 2 + semInYear;
+    }
+  }
+  return Number(item.semester) || 1;
+}
+
 export async function getFeedbackReportData(
   publicationId?: number | null,
+  courseFilter?: string | null,
   branchFilter?: string | null,
   semesterFilter?: number | null,
+  scope?: AcademicScope | null,
 ): Promise<FeedbackReportData> {
   await ensureFeedbackFormsTable();
 
@@ -1331,14 +1592,44 @@ export async function getFeedbackReportData(
     isActive: lbl === currentAcademicYear || activeYearSet.has(lbl),
   }));
 
-  const availableCourses = courses.map((cr) => ({
+  // Scope filtering for RBAC users
+  const isGlobal = scope ? scope.isGlobal : true;
+  const allowedCollegeIds = !isGlobal && scope?.collegeIds && scope.collegeIds.length > 0 ? new Set(scope.collegeIds) : null;
+  const allowedBranchIds = !isGlobal && scope?.branchIds && scope.branchIds.length > 0 ? new Set(scope.branchIds) : null;
+
+  const courseCollegeMap = new Map(courses.map((c) => [Number(c.id), Number(c.college_id)]));
+
+  const filteredColleges = colleges.filter((c) => {
+    if (allowedCollegeIds && !allowedCollegeIds.has(Number(c.id))) return false;
+    return true;
+  });
+
+  const filteredBranches = branches.filter((b) => {
+    const cId = courseCollegeMap.get(Number(b.course_id));
+    if (allowedCollegeIds && (cId == null || !allowedCollegeIds.has(cId))) {
+      return false;
+    }
+    if (allowedBranchIds && !allowedBranchIds.has(Number(b.id))) {
+      return false;
+    }
+    return true;
+  });
+
+  const allowedBranchCourseIds = new Set(filteredBranches.map((b) => Number(b.course_id)));
+  const filteredCourses = courses.filter((c) => {
+    if (allowedCollegeIds && !allowedCollegeIds.has(Number(c.college_id))) return false;
+    if (allowedBranchIds && !allowedBranchCourseIds.has(Number(c.id))) return false;
+    return true;
+  });
+
+  const availableCourses = filteredCourses.map((cr) => ({
     id: Number(cr.id),
     name: cr.name,
     code: cr.code || "",
     collegeId: Number(cr.college_id),
   }));
 
-  const availableBranches = branches.map((b) => ({
+  const availableBranches = filteredBranches.map((b) => ({
     id: Number(b.id),
     name: b.name,
     code: b.code || "",
@@ -1580,6 +1871,223 @@ export async function getFeedbackReportData(
     overallSubmittedCount: allPubResponses.length,
   };
 
+    // 3b-ii. Query published questions for the form
+  let publicationQuestions: FeedbackQuestion[] = [];
+  if (targetPub?.formId) {
+    const qRows = await queryAcademic<QuestionRow[]>(
+      `SELECT * FROM ap_feedback_questions WHERE form_id = ? ORDER BY order_index ASC, id ASC`,
+      [targetPub.formId],
+    ).catch(() => []);
+    publicationQuestions = qRows.map((q) => ({
+      id: Number(q.id),
+      formId: Number(q.form_id),
+      questionText: q.question_text,
+      questionType: q.question_type as FeedbackQuestion["questionType"],
+      isRequired: Number(q.is_required) === 1,
+      orderIndex: Number(q.order_index),
+      minValue: q.min_value != null ? Number(q.min_value) : null,
+      maxValue: q.max_value != null ? Number(q.max_value) : null,
+      options: parseOptions(q.options_json),
+    }));
+  }
+
+  // 3b-iii. Build structured sectionGroups and facultyGroups for the report views
+  const branchMap = new Map(branches.map((b) => [Number(b.id), b.name]));
+  const branchCodeMap = new Map(branches.map((b) => [Number(b.id), b.code || b.name]));
+  const courseMap = new Map(courses.map((c) => [Number(c.id), c.name]));
+
+  const sectionGroupMap = new Map<string, SectionGroup>();
+  const facultyGroupMap = new Map<string, FacultyGroup>();
+
+  const mappedSubjects = targetPub?.mappedStaffSubjects || [];
+  const seenAlloc = new Set<string>();
+
+  for (const item of mappedSubjects) {
+    const itemBranchId = item.branchId ? Number(item.branchId) : null;
+    const itemCourseId = item.courseId ? Number(item.courseId) : null;
+    const itemCollegeId = item.collegeId ? Number(item.collegeId) : null;
+
+    if (allowedCollegeIds && itemCollegeId && !allowedCollegeIds.has(itemCollegeId)) {
+      continue;
+    }
+    if (allowedBranchIds && itemBranchId && !allowedBranchIds.has(itemBranchId)) {
+      continue;
+    }
+    if (allowedBranchIds && itemCourseId && !allowedBranchCourseIds.has(itemCourseId)) {
+      continue;
+    }
+
+    const rawBranchName =
+      item.branchName ||
+      branchMap.get(Number(item.branchId)) ||
+      branchCodeMap.get(Number(item.branchId)) ||
+      "Department";
+    const rawCourseName =
+      item.courseName || courseMap.get(Number(item.courseId)) || "Degree";
+    const sem = resolveActualSemester(item, targetPub?.academicYear);
+    const romanSem = formatRomanYearSem(sem);
+    const yearOfStudy = Math.ceil(sem / 2);
+    const sec = (item.sectionName || "").trim();
+    const secDisplay = sec ? `Section ${sec}` : "Section";
+
+    // Respect filters if selected
+    if (courseFilter && courseFilter !== "all") {
+      const cNorm = courseFilter.trim().toLowerCase();
+      const itemCNorm = rawCourseName.trim().toLowerCase();
+      if (cNorm !== itemCNorm && String(item.courseId) !== courseFilter) {
+        continue;
+      }
+    }
+    if (branchFilter && branchFilter !== "all") {
+      const bNorm = branchFilter.trim().toLowerCase();
+      const itemBNorm = rawBranchName.trim().toLowerCase();
+      const codeNorm = (item.branchId ? branchCodeMap.get(Number(item.branchId)) || "" : "").toLowerCase();
+      if (bNorm !== itemBNorm && bNorm !== codeNorm) continue;
+    }
+    if (semesterFilter != null && semesterFilter > 0 && sem !== semesterFilter) {
+      continue;
+    }
+
+    const allocKey = `${item.branchId}|${sem}|${sec}|${item.subjectCode}|${item.facultyName}`;
+    if (seenAlloc.has(allocKey)) continue;
+    seenAlloc.add(allocKey);
+
+    const groupKey = `${item.branchId || rawBranchName}|${sem}|${sec}`;
+    const sectionLabel = `${rawBranchName} - ${romanSem} - ${secDisplay}`;
+
+    const subjectResponses = allPubResponses.filter((r) => {
+      const fMatch =
+        (r.faculty_name || "").trim().toLowerCase() === item.facultyName.trim().toLowerCase();
+      const sMatch =
+        (r.subject_name || "").trim().toLowerCase() === item.subjectName.trim().toLowerCase() ||
+        (item.subjectCode &&
+          (r.subject_name || "").toLowerCase().includes(item.subjectCode.toLowerCase()));
+      const secMatch = !sec || (r.section_name || "").trim().toLowerCase() === sec.toLowerCase();
+      return fMatch && sMatch && secMatch;
+    });
+
+    const questionSummaries = publicationQuestions.map((q) =>
+      computeQuestionSummary(q, subjectResponses),
+    );
+
+    const studentDetails: StudentResponseDetail[] = subjectResponses.map((r) => {
+      let answers: Record<string, unknown> = {};
+      if (r.answers_json) {
+        try {
+          answers =
+            typeof r.answers_json === "string" ? JSON.parse(r.answers_json) : r.answers_json;
+        } catch {}
+      }
+      const tokenKey = String(r.student_token_hash || `anon_${r.id}`);
+      const studentName = (answers.studentName as string) || tokenKey;
+
+      return {
+        id: Number(r.id),
+        studentName,
+        tokenHash: tokenKey,
+        submittedAt: toIsoString(r.submitted_at),
+        branchName: r.branch_name || rawBranchName,
+        semester: Number(r.semester || sem),
+        sectionName: r.section_name || sec,
+        subjectName: r.subject_name || item.subjectName,
+        facultyName: r.faculty_name || item.facultyName,
+        answers,
+        unitsCovered: r.units_covered || null,
+        facultyRating: r.faculty_rating != null ? Number(r.faculty_rating) : null,
+        unitStatus: r.unit_status || null,
+      };
+    });
+
+    const reportItem: SubjectSectionReportItem = {
+      id: `${groupKey}|${item.subjectCode || item.subjectName}|${item.facultyName}`,
+      subjectId: item.subjectId ? Number(item.subjectId) : null,
+      subjectCode: item.subjectCode || "",
+      subjectName: item.subjectName,
+      staffLinkId: item.staffLinkId ? Number(item.staffLinkId) : null,
+      facultyName: item.facultyName,
+      employeeCode: item.employeeCode ?? null,
+      branchId: item.branchId ? Number(item.branchId) : null,
+      branchName: rawBranchName,
+      courseId: item.courseId ? Number(item.courseId) : null,
+      courseName: rawCourseName,
+      semester: sem,
+      romanSemester: romanSem,
+      sectionName: item.sectionName ?? null,
+      count: subjectResponses.length,
+      questions: questionSummaries,
+      studentDetails,
+    };
+
+    if (!sectionGroupMap.has(groupKey)) {
+      sectionGroupMap.set(groupKey, {
+        groupKey,
+        branchId: item.branchId ? Number(item.branchId) : null,
+        branchName: rawBranchName,
+        courseId: item.courseId ? Number(item.courseId) : null,
+        courseName: rawCourseName,
+        semester: sem,
+        romanSemester: romanSem,
+        yearOfStudy,
+        sectionName: item.sectionName ?? null,
+        sectionLabel,
+        subjectCount: 0,
+        totalSubmissions: 0,
+        subjects: [],
+      });
+    }
+    const secGroup = sectionGroupMap.get(groupKey)!;
+    secGroup.subjects.push(reportItem);
+    secGroup.subjectCount = secGroup.subjects.length;
+    secGroup.totalSubmissions += reportItem.count;
+
+    const fKey = item.facultyName.trim().toUpperCase();
+    if (!facultyGroupMap.has(fKey)) {
+      facultyGroupMap.set(fKey, {
+        facultyKey: fKey,
+        facultyName: item.facultyName,
+        employeeCode: item.employeeCode ?? null,
+        staffLinkId: item.staffLinkId ? Number(item.staffLinkId) : null,
+        totalSubjects: 0,
+        totalSubmissions: 0,
+        overallRating: null,
+        subjects: [],
+      });
+    }
+    const facGroup = facultyGroupMap.get(fKey)!;
+    facGroup.subjects.push({
+      ...reportItem,
+      classLabel: `${rawBranchName} - ${romanSem} - ${sec ? "Sec " + sec : "Section"}`,
+    });
+    facGroup.totalSubjects = facGroup.subjects.length;
+    facGroup.totalSubmissions += reportItem.count;
+  }
+
+  for (const facGroup of facultyGroupMap.values()) {
+    let rSum = 0;
+    let rCount = 0;
+    for (const s of facGroup.subjects) {
+      for (const q of s.questions) {
+        if (q.avgScore != null && q.avgScore > 0) {
+          rSum += q.avgScore * s.count;
+          rCount += s.count;
+        }
+      }
+    }
+    facGroup.overallRating = rCount > 0 ? Math.round((rSum / rCount) * 100) / 100 : null;
+  }
+
+  const sectionGroups = Array.from(sectionGroupMap.values());
+  sectionGroups.sort((a, b) => {
+    const yrA = a.yearOfStudy || Math.ceil((a.semester || 1) / 2);
+    const yrB = b.yearOfStudy || Math.ceil((b.semester || 1) / 2);
+    if (yrA !== yrB) return yrA - yrB;
+    if (a.semester !== b.semester) return a.semester - b.semester;
+    return a.sectionLabel.localeCompare(b.sectionLabel);
+  });
+  const facultyGroups = Array.from(facultyGroupMap.values());
+  facultyGroups.sort((a, b) => a.facultyName.localeCompare(b.facultyName));
+
+
   // 3c. Query filtered responses for analytics
   const responses = targetPub ? await queryAcademic<ResponseRow[]>(sql, params) : [];
   const totalSubmissions = responses.length;
@@ -1589,7 +2097,7 @@ export async function getFeedbackReportData(
       publication: targetPub,
       publications: publicationsList,
       forms: formsList.map((f) => ({ id: f.id, name: f.name, questionCount: f.questionCount ?? 0 })),
-      availableColleges: colleges.map((c) => ({ id: Number(c.id), name: c.name, code: c.code || "" })),
+      availableColleges: filteredColleges.map((c) => ({ id: Number(c.id), name: c.name, code: c.code || "" })),
       availableCourses,
       availableBranches,
       availableAcademicYears,
@@ -1630,6 +2138,9 @@ export async function getFeedbackReportData(
       ],
       facultyBreakdown: [],
       recentSubmissions: [],
+      publicationQuestions,
+      sectionGroups,
+      facultyGroups,
       submissionProgress,
       submissionSummary,
     };
@@ -1957,6 +2468,9 @@ export async function getFeedbackReportData(
     unitStatusDistribution,
     facultyBreakdown,
     recentSubmissions,
+    publicationQuestions,
+    sectionGroups,
+    facultyGroups,
     submissionProgress,
     submissionSummary,
   };

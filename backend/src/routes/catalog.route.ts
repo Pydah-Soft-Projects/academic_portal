@@ -27,9 +27,10 @@ function str(value: unknown) {
   return value;
 }
 
-catalogRouter.get("/masters", async (_req, res, next) => {
+catalogRouter.get("/masters", async (req: AuthedRequest, res, next) => {
   try {
-    res.json(await getAcademicMasters());
+    const scope = req.authz?.scope;
+    res.json(await getAcademicMasters(scope));
   } catch (error) {
     next(error);
   }

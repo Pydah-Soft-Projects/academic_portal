@@ -570,8 +570,11 @@ export function AttendancePostSessionView() {
                   {payload.session.sections && payload.session.sections.length > 1 ? (
                     <th className="px-3 py-2.5 text-center w-20 shrink-0">Section</th>
                   ) : null}
-                  <th className={cn("px-3 py-2.5 min-w-[140px]", payload.session.sections && payload.session.sections.length > 1 ? "w-[24%]" : "w-[26%]")}>
-                    Course & Branch
+                  <th className="px-3 py-2.5 min-w-[90px] w-[12%]">
+                    Course
+                  </th>
+                  <th className="px-3 py-2.5 min-w-[100px] w-[14%]">
+                    Branch
                   </th>
                   <th className={cn("px-3 py-2.5 hidden md:table-cell min-w-[120px]", payload.session.sections && payload.session.sections.length > 1 ? "w-[18%]" : "w-[20%]")}>
                     Year & Sem
@@ -643,11 +646,16 @@ export function AttendancePostSessionView() {
                         </td>
                       ) : null}
 
-                      {/* 4. Course & Branch */}
+                      {/* 4. Course */}
                       <td className="px-3 py-2.5 text-slate-600 truncate">
                         <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-xs font-semibold text-slate-700 truncate">
-                          {courseBranch}
+                          {student.course || "—"}
                         </span>
+                      </td>
+
+                      {/* 5. Branch */}
+                      <td className="px-3 py-2.5 text-slate-700 truncate text-xs font-semibold">
+                        {student.branch || "—"}
                       </td>
 
                       {/* 5. Year & Semester */}

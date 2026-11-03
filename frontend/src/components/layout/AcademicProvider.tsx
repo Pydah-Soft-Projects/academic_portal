@@ -111,6 +111,16 @@ export function computeInitialFilters(
     defaultCollegeId = masters.colleges[0]!.id;
   }
 
+  let defaultCourseId: number | "all" = "all";
+  if (!authorization?.scope?.isGlobal && masters?.courses?.length === 1) {
+    defaultCourseId = masters.courses[0]!.id;
+  }
+
+  let defaultBranchId: number | "all" = "all";
+  if (!authorization?.scope?.isGlobal && masters?.branches?.length === 1) {
+    defaultBranchId = masters.branches[0]!.id;
+  }
+
   const today = todayIso();
   const base: AcademicFilters = {
     date: today,
@@ -118,8 +128,8 @@ export function computeInitialFilters(
     endDate: today,
     academicYear: defaultYear,
     collegeId: defaultCollegeId,
-    courseId: "all",
-    branchId: "all",
+    courseId: defaultCourseId,
+    branchId: defaultBranchId,
     batch: "all",
     year: "all",
     semester: 1,
@@ -146,6 +156,26 @@ export function computeInitialFilters(
   // Scoped user to single college constraint
   if (defaultCollegeId !== "all") {
     merged.collegeId = defaultCollegeId;
+  }
+
+  // Validate saved courseId within scope
+  if (
+    merged.courseId !== "all" &&
+    masters?.courses &&
+    masters.courses.length > 0 &&
+    !masters.courses.some((c) => c.id === merged.courseId)
+  ) {
+    merged.courseId = defaultCourseId;
+  }
+
+  // Validate saved branchId within scope
+  if (
+    merged.branchId !== "all" &&
+    masters?.branches &&
+    masters.branches.length > 0 &&
+    !masters.branches.some((b) => b.id === merged.branchId)
+  ) {
+    merged.branchId = defaultBranchId;
   }
 
   // If no specific branch is selected, ensure section is 'all'
@@ -253,16 +283,29 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
           scopeAllowsCollege(authorization, college.id),
         );
         const allowedCollegeIds = new Set(scopedColleges.map((college) => college.id));
-        const scopedCourses = (data.courses ?? []).filter((course) =>
-          allowedCollegeIds.has(course.collegeId),
-        );
-        const allowedCourseIds = new Set(scopedCourses.map((course) => course.id));
-        const scopedBranches = (data.branches ?? []).filter(
-          (branch) =>
-            allowedCourseIds.has(branch.courseId) &&
-            scopeAllowsBranch(authorization, branch.id),
-        );
+
+        const isGlobal = authorization?.scope?.isGlobal ?? true;
+        const hasBranchRestriction = !isGlobal && Boolean(authorization?.scope?.branchIds?.length);
+
+        const scopedBranches = (data.branches ?? []).filter((branch) => {
+          const course = (data.courses ?? []).find((c) => c.id === branch.courseId);
+          if (course && !allowedCollegeIds.has(course.collegeId)) return false;
+          return scopeAllowsBranch(authorization, branch.id);
+        });
         const allowedBranchIds = new Set(scopedBranches.map((branch) => branch.id));
+        const allowedBranchCourseIds = new Set(scopedBranches.map((branch) => branch.courseId));
+
+        const scopedCourses = (data.courses ?? []).filter((course) => {
+          if (!allowedCollegeIds.has(course.collegeId)) return false;
+          if (hasBranchRestriction) {
+            return allowedBranchCourseIds.has(course.id);
+          }
+          return true;
+        });
+        const allowedCourseIds = new Set(scopedCourses.map((course) => course.id));
+
+        const finalBranches = scopedBranches.filter((b) => allowedCourseIds.has(b.courseId));
+
         const scopedBatches = (data.batches ?? []).filter((row) =>
           allowedBranchIds.has(row.branchId),
         );
@@ -274,7 +317,7 @@ export function AcademicProvider({ children }: { children: React.ReactNode }) {
           ...data,
           colleges: scopedColleges,
           courses: scopedCourses,
-          branches: scopedBranches,
+          branches: finalBranches,
           batches: scopedBatches,
           sections: scopedSections,
           yearOptions: data.yearOptions ?? [1, 2, 3, 4],

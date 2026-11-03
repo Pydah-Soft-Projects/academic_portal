@@ -38,6 +38,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ContentCardSkeleton } from "@/components/ui/CardSkeleton";
 import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { printElement } from "@/lib/print-service";
 import { cn } from "@/lib/cn";
 
@@ -61,6 +62,93 @@ export type TargetAudienceScope = {
   batches?: string[];
   sections?: string[];
   yearsOfStudy?: number[];
+};
+
+export type FeedbackQuestion = {
+  id?: number;
+  formId?: number;
+  questionText: string;
+  questionType: "short_text" | "long_text" | "rating_scale" | "yes_no" | "multiple_choice";
+  isRequired: boolean;
+  orderIndex: number;
+  minValue?: number | null;
+  maxValue?: number | null;
+  options: string[];
+};
+
+export type QuestionSummary = {
+  questionId: number;
+  questionText: string;
+  questionType: string;
+  shortLabel: string;
+  abstract: string;
+  avgScore?: number | null;
+  ratingTier?: "excellent" | "good" | "average" | "poor" | "none";
+  distribution?: Record<string, number>;
+};
+
+export type StudentResponseDetail = {
+  id: number;
+  studentName: string;
+  tokenHash: string;
+  submittedAt: string;
+  branchName: string;
+  semester: number;
+  sectionName: string;
+  subjectName: string;
+  facultyName: string;
+  answers: Record<string, unknown>;
+  unitsCovered?: string | null;
+  facultyRating?: number | null;
+  unitStatus?: string | null;
+};
+
+export type SubjectSectionReportItem = {
+  id: string;
+  subjectId: number | null;
+  subjectCode: string;
+  subjectName: string;
+  staffLinkId: number | null;
+  facultyName: string;
+  employeeCode: string | null;
+  branchId: number | null;
+  branchName: string;
+  courseId: number | null;
+  courseName: string;
+  semester: number;
+  romanSemester: string;
+  yearOfStudy?: number;
+  sectionName: string | null;
+  count: number;
+  questions: QuestionSummary[];
+  studentDetails: StudentResponseDetail[];
+};
+
+export type SectionGroup = {
+  groupKey: string;
+  branchId: number | null;
+  branchName: string;
+  courseId: number | null;
+  courseName: string;
+  semester: number;
+  romanSemester: string;
+  yearOfStudy?: number;
+  sectionName: string | null;
+  sectionLabel: string;
+  subjectCount: number;
+  totalSubmissions: number;
+  subjects: SubjectSectionReportItem[];
+};
+
+export type FacultyGroup = {
+  facultyKey: string;
+  facultyName: string;
+  employeeCode: string | null;
+  staffLinkId: number | null;
+  totalSubjects: number;
+  totalSubmissions: number;
+  overallRating: number | null;
+  subjects: Array<SubjectSectionReportItem & { classLabel: string }>;
 };
 
 export type FeedbackPublication = {
@@ -91,6 +179,9 @@ export type FeedbackPublication = {
 };
 
 export type FeedbackReportData = {
+  publicationQuestions?: FeedbackQuestion[];
+  sectionGroups?: SectionGroup[];
+  facultyGroups?: FacultyGroup[];
   publication: FeedbackPublication | null;
   publications: Array<FeedbackPublication>;
   forms: Array<{ id: number; name: string; questionCount: number }>;
@@ -1118,8 +1209,80 @@ function StaffQuestionBreakdownSection({
   );
 }
 
+
+function shortenQuestionText(text: string): string {
+  if (!text) return "Question";
+  const trimmed = text.trim();
+  if (trimmed.length <= 25) return trimmed;
+  if (/smart\s*board/i.test(trimmed)) return "Smart Board";
+  if (/rate\s*subject\s*faculty/i.test(trimmed)) return "Rate Faculty";
+  if (/educational\s*applications.*useful/i.test(trimmed)) return "Digital Resources";
+  if (/which.*feature.*frequently/i.test(trimmed)) return "Frequent Feature";
+  if (/quality.*applications/i.test(trimmed)) return "Quality Rating";
+  return trimmed.slice(0, 22) + "...";
+}
+
+function renderAbstractBadge(qSum: QuestionSummary | undefined, count: number) {
+  if (!qSum || count === 0 || qSum.abstract === "—") {
+    return <span className="text-slate-400 font-medium text-xs">—</span>;
+  }
+
+  if (qSum.ratingTier === "excellent" || qSum.ratingTier === "good") {
+    return (
+      <span className="inline-flex items-center justify-center rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 px-2.5 py-1 text-xs font-semibold shadow-2xs">
+        {qSum.abstract}
+      </span>
+    );
+  }
+  if (qSum.ratingTier === "average") {
+    return (
+      <span className="inline-flex items-center justify-center rounded-md bg-amber-100 text-amber-900 border border-amber-300 px-2.5 py-1 text-xs font-semibold shadow-2xs">
+        {qSum.abstract}
+      </span>
+    );
+  }
+  if (qSum.ratingTier === "poor") {
+    return (
+      <span className="inline-flex items-center justify-center rounded-md bg-rose-100 text-rose-900 border border-rose-300 px-2.5 py-1 text-xs font-semibold shadow-2xs">
+        {qSum.abstract}
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center justify-center rounded-md bg-slate-100 text-slate-800 border border-slate-200 px-2.5 py-1 text-xs font-medium">
+      {qSum.abstract}
+    </span>
+  );
+}
+
 export function FeedbackReportsView() {
+  const { authorization } = useAuth();
   const [report, setReport] = useState<FeedbackReportData | null>(null);
+
+  // Filter available branches and courses based on RBAC user scope
+  const scopedAvailableBranches = useMemo(() => {
+    if (!report?.availableBranches) return [];
+    if (!authorization?.scope || authorization.scope.isGlobal) return report.availableBranches;
+    const branchIds = authorization.scope.branchIds;
+    if (branchIds && branchIds.length > 0) {
+      return report.availableBranches.filter((b) => branchIds.includes(b.id));
+    }
+    return report.availableBranches;
+  }, [report?.availableBranches, authorization]);
+
+  const scopedAvailableCourses = useMemo(() => {
+    if (!report?.availableCourses) return [];
+    if (!authorization?.scope || authorization.scope.isGlobal) return report.availableCourses;
+    const branchIds = authorization.scope.branchIds;
+    if (branchIds && branchIds.length > 0) {
+      const allowedCourseIds = new Set(scopedAvailableBranches.map((b) => b.courseId).filter(Boolean));
+      return report.availableCourses.filter((c) => allowedCourseIds.has(c.id));
+    }
+    return report.availableCourses;
+  }, [report?.availableCourses, authorization, scopedAvailableBranches]);
+
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
@@ -1127,9 +1290,170 @@ export function FeedbackReportsView() {
 
   // Filters state
   const [selectedPublicationId, setSelectedPublicationId] = useState<number | undefined>(undefined);
+  const [selectedCourse, setSelectedCourse] = useState<string>("all");
   const [selectedBranch, setSelectedBranch] = useState<string>("all");
+  const [selectedYear, setSelectedYear] = useState<string>("all");
   const [selectedSemester, setSelectedSemester] = useState<string>("all");
+
+  // Branches filtered by selected course
+  const branchesForSelectedCourse = useMemo(() => {
+    if (!scopedAvailableBranches.length) return [];
+    if (selectedCourse === "all") return scopedAvailableBranches;
+    const matchingCourse = scopedAvailableCourses.find(
+      (c) => c.name.toLowerCase() === selectedCourse.toLowerCase() || String(c.id) === selectedCourse,
+    );
+    if (!matchingCourse) return scopedAvailableBranches;
+    return scopedAvailableBranches.filter((b) => b.courseId === matchingCourse.id);
+  }, [scopedAvailableBranches, scopedAvailableCourses, selectedCourse]);
   const [searchFaculty, setSearchFaculty] = useState<string>("");
+  const [activeReportTab, setActiveReportTab] = useState<"section_wise" | "faculty_wise">("section_wise");
+  const [reportSearchQuery, setReportSearchQuery] = useState("");
+  const [selectedStudentDetailsItem, setSelectedStudentDetailsItem] = useState<SubjectSectionReportItem | null>(null);
+
+  const filteredSectionGroups = useMemo(() => {
+    if (!report?.sectionGroups) return [];
+    let list = report.sectionGroups;
+
+    if (selectedCourse !== "all") {
+      const matchC = selectedCourse.toLowerCase();
+      list = list.filter((g) => g.courseName?.toLowerCase() === matchC || String(g.courseId) === selectedCourse);
+    }
+    if (selectedBranch !== "all") {
+      const matchB = selectedBranch.toLowerCase();
+      list = list.filter((g) => g.branchName?.toLowerCase() === matchB || String(g.branchId) === selectedBranch);
+    }
+    if (selectedYear !== "all") {
+      const yr = Number(selectedYear);
+      list = list.filter((g) => (g.yearOfStudy || Math.ceil((g.semester || 1) / 2)) === yr);
+    }
+    if (selectedSemester !== "all") {
+      const semNum = Number(selectedSemester);
+      list = list.filter((g) => g.semester === semNum);
+    }
+
+    if (!reportSearchQuery.trim()) return list;
+    const term = reportSearchQuery.toLowerCase();
+    return list
+      .map((g) => {
+        const groupMatches = g.sectionLabel.toLowerCase().includes(term);
+        const matchingSubjects = g.subjects.filter(
+          (s) =>
+            s.subjectCode.toLowerCase().includes(term) ||
+            s.subjectName.toLowerCase().includes(term) ||
+            s.facultyName.toLowerCase().includes(term) ||
+            (s.employeeCode && s.employeeCode.toLowerCase().includes(term)),
+        );
+        if (groupMatches) return g;
+        if (matchingSubjects.length > 0) {
+          return {
+            ...g,
+            subjectCount: matchingSubjects.length,
+            subjects: matchingSubjects,
+          };
+        }
+        return null;
+      })
+      .filter((g): g is SectionGroup => g !== null);
+  }, [report?.sectionGroups, selectedCourse, selectedBranch, selectedYear, selectedSemester, reportSearchQuery]);
+
+  const filteredFacultyGroups = useMemo(() => {
+    if (!report?.facultyGroups) return [];
+    let list = report.facultyGroups;
+
+    if (selectedCourse !== "all") {
+      const matchC = selectedCourse.toLowerCase();
+      list = list.map((f) => {
+        const matchingSubs = f.subjects.filter(
+          (s) => s.courseName?.toLowerCase() === matchC || String(s.courseId) === selectedCourse
+        );
+        if (matchingSubs.length === 0) return null;
+        return {
+          ...f,
+          totalSubjects: matchingSubs.length,
+          subjects: matchingSubs,
+        };
+      }).filter((f): f is FacultyGroup => f !== null);
+    }
+    if (selectedBranch !== "all") {
+      const matchB = selectedBranch.toLowerCase();
+      list = list.map((f) => {
+        const matchingSubs = f.subjects.filter(
+          (s) => s.branchName?.toLowerCase() === matchB || String(s.branchId) === selectedBranch
+        );
+        if (matchingSubs.length === 0) return null;
+        return {
+          ...f,
+          totalSubjects: matchingSubs.length,
+          subjects: matchingSubs,
+        };
+      }).filter((f): f is FacultyGroup => f !== null);
+    }
+    if (selectedYear !== "all") {
+      const yr = Number(selectedYear);
+      list = list.map((f) => {
+        const matchingSubs = f.subjects.filter((s) => (s.yearOfStudy || Math.ceil((s.semester || 1) / 2)) === yr);
+        if (matchingSubs.length === 0) return null;
+        return {
+          ...f,
+          totalSubjects: matchingSubs.length,
+          subjects: matchingSubs,
+        };
+      }).filter((f): f is FacultyGroup => f !== null);
+    }
+    if (selectedSemester !== "all") {
+      const semNum = Number(selectedSemester);
+      list = list.map((f) => {
+        const matchingSubs = f.subjects.filter((s) => s.semester === semNum);
+        if (matchingSubs.length === 0) return null;
+        return {
+          ...f,
+          totalSubjects: matchingSubs.length,
+          subjects: matchingSubs,
+        };
+      }).filter((f): f is FacultyGroup => f !== null);
+    }
+
+    if (!reportSearchQuery.trim()) return list;
+    const term = reportSearchQuery.toLowerCase();
+    return list
+      .map((f) => {
+        const facMatches =
+          f.facultyName.toLowerCase().includes(term) ||
+          (f.employeeCode && f.employeeCode.toLowerCase().includes(term));
+        const matchingSubjects = f.subjects.filter(
+          (s) =>
+            s.subjectCode.toLowerCase().includes(term) ||
+            s.subjectName.toLowerCase().includes(term) ||
+            (s.classLabel && s.classLabel.toLowerCase().includes(term)),
+        );
+        if (facMatches) return f;
+        if (matchingSubjects.length > 0) {
+          return {
+            ...f,
+            totalSubjects: matchingSubjects.length,
+            subjects: matchingSubjects,
+          };
+        }
+        return null;
+      })
+      .filter((f): f is FacultyGroup => f !== null);
+  }, [report?.facultyGroups, selectedCourse, selectedBranch, selectedYear, selectedSemester, reportSearchQuery]);
+
+  const questionsToDisplay = useMemo(() => {
+    if (report?.publicationQuestions && report.publicationQuestions.length > 0) {
+      return report.publicationQuestions.map((q) => ({
+        id: q.id ?? 0,
+        questionText: q.questionText,
+        shortLabel: q.questionText,
+      }));
+    }
+    // Fallback if no questions configured
+    return [
+      { id: 1, questionText: "Units Covered", shortLabel: "Units Covered" },
+      { id: 2, questionText: "Rate Subject Faculty", shortLabel: "Rate Faculty" },
+      { id: 3, questionText: "Unit Status", shortLabel: "Unit Status" },
+    ];
+  }, [report?.publicationQuestions]);
 
   // Publish Form Modal state (Supports Multi-College, Multi-Course & Actual Academic Year)
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false);
@@ -1181,31 +1505,32 @@ export function FeedbackReportsView() {
 
   // Filter courses based on selected colleges
   const relevantCourses = useMemo(() => {
-    if (!report?.availableCourses) return [];
-    if (selectedCollegeIds.length === 0) return report.availableCourses;
-    return report.availableCourses.filter((c) => selectedCollegeIds.includes(c.collegeId));
-  }, [report?.availableCourses, selectedCollegeIds]);
+    if (!scopedAvailableCourses.length) return [];
+    if (selectedCollegeIds.length === 0) return scopedAvailableCourses;
+    return scopedAvailableCourses.filter((c) => selectedCollegeIds.includes(c.collegeId));
+  }, [scopedAvailableCourses, selectedCollegeIds]);
 
   // Filter branches based on selected courses and colleges
   const relevantBranches = useMemo(() => {
-    if (!report?.availableBranches) return [];
+    if (!scopedAvailableBranches.length) return [];
     if (selectedCourseIds.length > 0) {
-      return report.availableBranches.filter((b) => b.courseId && selectedCourseIds.includes(b.courseId));
+      return scopedAvailableBranches.filter((b) => b.courseId && selectedCourseIds.includes(b.courseId));
     }
     if (selectedCollegeIds.length > 0) {
       const allowedCourseIds = new Set(relevantCourses.map((c) => c.id));
-      return report.availableBranches.filter((b) => b.courseId && allowedCourseIds.has(b.courseId));
+      return scopedAvailableBranches.filter((b) => b.courseId && allowedCourseIds.has(b.courseId));
     }
-    return report.availableBranches;
-  }, [report?.availableBranches, selectedCourseIds, selectedCollegeIds, relevantCourses]);
+    return scopedAvailableBranches;
+  }, [scopedAvailableBranches, selectedCourseIds, selectedCollegeIds, relevantCourses]);
 
   // Load report data
-  const fetchReport = async (pubId?: number, branch?: string, semester?: string) => {
+  const fetchReport = async (pubId?: number, course?: string, branch?: string, semester?: string) => {
     setLoading(true);
     setError(null);
     try {
       const queryParams = new URLSearchParams();
       if (pubId && pubId > 0) queryParams.set("publicationId", String(pubId));
+      if (course && course !== "all") queryParams.set("course", course);
       if (branch && branch !== "all") queryParams.set("branch", branch);
       if (semester && semester !== "all") queryParams.set("semester", semester);
 
@@ -1244,8 +1569,8 @@ export function FeedbackReportsView() {
   };
 
   useEffect(() => {
-    void fetchReport(selectedPublicationId, selectedBranch, selectedSemester);
-  }, [selectedPublicationId, selectedBranch, selectedSemester]);
+    void fetchReport(selectedPublicationId, selectedCourse, selectedBranch, selectedSemester);
+  }, [selectedPublicationId, selectedCourse, selectedBranch, selectedSemester]);
 
   // Check URL params for publishFormId if user was linked from Settings
   useEffect(() => {
@@ -1864,22 +2189,73 @@ export function FeedbackReportsView() {
               </select>
             </div>
 
-            {/* Department / Branch Filter */}
+            {/* Course Filter */}
             <div>
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                Department / Branch
+                Course
+              </label>
+              <select
+                value={selectedCourse}
+                onChange={(e) => {
+                  const nextCourse = e.target.value;
+                  setSelectedCourse(nextCourse);
+                  setSelectedBranch("all");
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[150px]"
+              >
+                <option value="all">All Courses</option>
+                {scopedAvailableCourses.map((c) => (
+                  <option key={c.id} value={c.name}>
+                    {c.name} {c.code ? `(${c.code})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Branch Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Branch
               </label>
               <select
                 value={selectedBranch}
                 onChange={(e) => setSelectedBranch(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[190px]"
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[180px]"
               >
-                <option value="all">All Departments</option>
-                {report?.availableBranches?.map((b) => (
+                <option value="all">All Branches</option>
+                {branchesForSelectedCourse.map((b) => (
                   <option key={b.id} value={b.name}>
-                    {b.name} ({b.code})
+                    {b.name} {b.code ? `(${b.code})` : ""}
                   </option>
                 ))}
+              </select>
+            </div>
+
+            {/* Year of Study Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Year
+              </label>
+              <select
+                value={selectedYear}
+                onChange={(e) => {
+                  const yr = e.target.value;
+                  setSelectedYear(yr);
+                  if (yr !== "all" && selectedSemester !== "all") {
+                    const yrNum = Number(yr);
+                    const semNum = Number(selectedSemester);
+                    if (Math.ceil(semNum / 2) !== yrNum) {
+                      setSelectedSemester("all");
+                    }
+                  }
+                }}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[130px]"
+              >
+                <option value="all">All Years</option>
+                <option value="1">1st Year</option>
+                <option value="2">2nd Year</option>
+                <option value="3">3rd Year</option>
+                <option value="4">4th Year</option>
               </select>
             </div>
 
@@ -1891,10 +2267,13 @@ export function FeedbackReportsView() {
               <select
                 value={selectedSemester}
                 onChange={(e) => setSelectedSemester(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[120px]"
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[130px]"
               >
                 <option value="all">All Semesters</option>
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+                {(selectedYear === "all"
+                  ? [1, 2, 3, 4, 5, 6, 7, 8]
+                  : [(Number(selectedYear) - 1) * 2 + 1, (Number(selectedYear) - 1) * 2 + 2]
+                ).map((sem) => (
                   <option key={sem} value={sem}>
                     Semester {sem}
                   </option>
@@ -1927,315 +2306,422 @@ export function FeedbackReportsView() {
           </div>
         ) : report ? (
           <>
-            {/* Top KPI Summary Cards */}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {/* Total Submissions */}
-              <Card className="relative overflow-hidden border-slate-200/90 bg-white p-5 shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Total Submissions
-                  </span>
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-navy-50 text-navy-800">
-                    <Users className="h-5 w-5" />
-                  </div>
-                </div>
-                <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-bold text-navy-900">
-                    {report.stats.totalSubmissions > 0 ? report.stats.totalSubmissions : "null"}
-                  </span>
-                  <span className="text-xs font-medium text-emerald-600">
-                    {report.stats.totalSubmissions > 0 ? "✓ Anonymous Verified" : "No submissions"}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  Evaluations submitted across evaluated subjects
-                </p>
-              </Card>
-
-              {/* Overall Faculty Rating */}
-              <Card className="relative overflow-hidden border-slate-200/90 bg-white p-5 shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Faculty Rating Avg
-                  </span>
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
-                    <Star className="h-5 w-5 fill-amber-500 text-amber-500" />
-                  </div>
-                </div>
-                <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-bold text-navy-900">
-                    {report.stats.averageRating != null ? report.stats.averageRating.toFixed(1) : "null"}
-                  </span>
-                  {report.stats.averageRating != null ? (
-                    <span className="text-sm font-semibold text-slate-400">/ 5.0</span>
-                  ) : null}
-                </div>
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-slate-600">
-                  {report.stats.ratingSatisfactionPct != null ? (
-                    <>
-                      <span className="font-semibold text-emerald-700">
-                        {report.stats.ratingSatisfactionPct}%
-                      </span>
-                      <span>rated 4 or 5 stars (Question 2)</span>
-                    </>
-                  ) : (
-                    <span className="text-slate-400">No ratings submitted yet</span>
+            {/* View Mode Switcher & Search Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 bg-white p-4 rounded-xl shadow-2xs">
+              <div className="flex items-center gap-1.5 bg-slate-100/90 p-1.5 rounded-xl border border-slate-200/80">
+                <button
+                  type="button"
+                  onClick={() => setActiveReportTab("section_wise")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                    activeReportTab === "section_wise"
+                      ? "bg-white text-navy-900 shadow-xs border border-slate-200/60"
+                      : "text-slate-600 hover:text-navy-900"
                   )}
-                </div>
-              </Card>
-
-              {/* Units Coverage Pace */}
-              <Card className="relative overflow-hidden border-slate-200/90 bg-white p-5 shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Units Covered Avg
+                >
+                  <BookOpen className="h-4 w-4 text-blue-600" />
+                  <span>Subject / Section Wise</span>
+                  <span className="ml-1 rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-extrabold text-blue-800">
+                    {filteredSectionGroups.length}
                   </span>
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
-                    <BookOpen className="h-5 w-5" />
-                  </div>
-                </div>
-                <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-bold text-navy-900">
-                    {report.stats.averageUnitsCovered != null ? report.stats.averageUnitsCovered.toFixed(1) : "null"}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveReportTab("faculty_wise")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                    activeReportTab === "faculty_wise"
+                      ? "bg-white text-navy-900 shadow-xs border border-slate-200/60"
+                      : "text-slate-600 hover:text-navy-900"
+                  )}
+                >
+                  <Users className="h-4 w-4 text-indigo-600" />
+                  <span>Faculty Wise</span>
+                  <span className="ml-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-extrabold text-indigo-800">
+                    {filteredFacultyGroups.length}
                   </span>
-                  {report.stats.averageUnitsCovered != null ? (
-                    <span className="text-sm font-semibold text-slate-400">/ 5 Units</span>
-                  ) : null}
-                </div>
-                <div className="mt-2 w-full bg-slate-100 rounded-full h-1.5">
-                  <div
-                    className="bg-blue-600 h-1.5 rounded-full"
-                    style={{
-                      width: report.stats.averageUnitsCovered != null
-                        ? `${Math.min(100, (report.stats.averageUnitsCovered / 5) * 100)}%`
-                        : "0%",
-                    }}
-                  />
-                </div>
-              </Card>
+                </button>
+              </div>
 
-              {/* Syllabus Completion Phase */}
-              <Card className="relative overflow-hidden border-slate-200/90 bg-white p-5 shadow-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-                    Syllabus Completion
-                  </span>
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
-                    <CheckCircle2 className="h-5 w-5" />
-                  </div>
-                </div>
-                <div className="mt-3 flex items-baseline gap-2">
-                  <span className="text-3xl font-bold text-emerald-700">
-                    {report.stats.completionRate != null ? `${report.stats.completionRate}%` : "null"}
-                  </span>
-                  <span className="text-xs font-medium text-slate-500">
-                    {report.stats.completionRate != null ? "Ending or Completed" : "No status reported"}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-500">
-                  Unit status reporting completion pace (Question 3)
-                </p>
-              </Card>
-            </div>
-
-            {/* ── Submission Progress Card (with per-staff Question Breakdown) ── */}
-            {report.submissionProgress && report.submissionProgress.length > 0 && (
-              <SubmissionProgressCard
-                progress={report.submissionProgress}
-                summary={report.submissionSummary}
-                selectedStaffKey={selectedStaffKey}
-                onSelectStaffKey={setSelectedStaffKey}
-              />
-            )}
-
-            {/* ── Staff-Wise Question Feedback Breakdown (Moved under Submission Progress) ── */}
-            {report.submissionProgress && report.submissionProgress.length > 0 && (
-              <StaffQuestionBreakdownSection
-                progress={report.submissionProgress}
-                selectedKey={selectedStaffKey}
-                onSelectKey={setSelectedStaffKey}
-              />
-            )}
-
-            {/* Faculty & Subject Evaluation Ranking Table */}
-            <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
-                <div>
-                  <h3 className="text-base font-bold text-navy-900">
-                    Faculty & Subject Evaluation Breakdown
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Comparative student feedback scores, units completed, and ratings by instructor
-                  </p>
-                </div>
-
+              {/* Search Box */}
+              <div className="relative flex-1 min-w-[240px] max-w-md">
+                <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Search faculty or subject..."
-                  value={searchFaculty}
-                  onChange={(e) => setSearchFaculty(e.target.value)}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs text-slate-800 outline-none focus:border-navy-500 w-64"
+                  placeholder="Search subject, faculty, code, or section..."
+                  value={reportSearchQuery}
+                  onChange={(e) => setReportSearchQuery(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-8 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-navy-500 focus:ring-1 focus:ring-navy-500 shadow-2xs"
                 />
+                {reportSearchQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => setReportSearchQuery("")}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                ) : null}
               </div>
+            </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-600">
-                      <th className="py-2.5 px-3 font-semibold">Faculty Name</th>
-                      <th className="py-2.5 px-3 font-semibold">Subject</th>
-                      <th className="py-2.5 px-3 font-semibold">Department</th>
-                      <th className="py-2.5 px-3 font-semibold text-center">Responses</th>
-                      <th className="py-2.5 px-3 font-semibold text-center">Avg Rating (1-5)</th>
-                      <th className="py-2.5 px-3 font-semibold text-center">Avg Units</th>
-                      <th className="py-2.5 px-3 font-semibold">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {filteredFaculty.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-500">
-                          <div className="flex flex-col items-center justify-center space-y-1">
-                            <FileText className="h-8 w-8 text-slate-300" />
-                            <span className="font-semibold text-slate-700">No student evaluations recorded yet</span>
-                            <span className="text-xs text-slate-400 max-w-md">
-                              Evaluations and ratings by faculty instructor will be calculated automatically when students submit their feedback.
+            {/* ═════════════════════════════════════════════════════════════════ */}
+            {/* TAB 1: SUBJECT / SECTION WISE (IMAGE 2 STYLE)                    */}
+            {/* ═════════════════════════════════════════════════════════════════ */}
+            {activeReportTab === "section_wise" ? (
+              <div className="space-y-6">
+                {filteredSectionGroups.length === 0 ? (
+                  <Card className="p-12 text-center text-slate-500 bg-white border-slate-200 shadow-xs">
+                    <BookOpen className="h-10 w-10 mx-auto text-slate-300 mb-2" />
+                    <p className="font-semibold text-slate-700">No class sections found</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Try adjusting the department, semester, or search filter.
+                    </p>
+                  </Card>
+                ) : (
+                  filteredSectionGroups.map((group) => (
+                    <div
+                      key={group.groupKey}
+                      className="overflow-hidden rounded-xl border border-slate-300 shadow-sm bg-white"
+                    >
+                      {/* Section Banner matching Image 2 */}
+                      <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 px-5 py-3 text-white flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white border border-white/25">
+                              Course: {group.courseName}
+                            </span>
+                            <span className="rounded-full bg-blue-300/25 px-2.5 py-0.5 text-[10px] font-semibold text-blue-100 border border-blue-200/30">
+                              Branch: {group.branchName}
+                            </span>
+                            <span className="rounded-full bg-amber-300/25 px-2.5 py-0.5 text-[10px] font-semibold text-amber-200 border border-amber-200/30">
+                              Year {group.yearOfStudy || Math.ceil((group.semester || 1) / 2)}
                             </span>
                           </div>
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredFaculty.map((f, i) => (
-                        <tr key={i} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-3 px-3 font-semibold text-navy-900 flex items-center gap-2">
-                            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-navy-100 text-navy-800 font-bold text-xs">
-                              {f.facultyName.charAt(0)}
-                            </span>
-                            <span>{f.facultyName}</span>
-                          </td>
-                          <td className="py-3 px-3 text-slate-800 font-medium">{f.subjectName}</td>
-                          <td className="py-3 px-3 text-slate-600">{f.branchName}</td>
-                          <td className="py-3 px-3 text-center font-semibold text-slate-700">
-                            {f.responsesCount}
-                          </td>
-                          <td className="py-3 px-3 text-center">
-                            <span className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 font-bold text-amber-900 border border-amber-200">
-                              <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
-                              {f.avgRating.toFixed(1)}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-center font-medium text-slate-700">
-                            {f.avgUnits.toFixed(1)} / 5
-                          </td>
-                          <td className="py-3 px-3">
-                            <span
-                              className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
-                                f.statusBadge === "Excellent"
-                                  ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                                  : f.statusBadge === "Good"
-                                  ? "bg-blue-50 text-blue-800 border border-blue-200"
-                                  : f.statusBadge === "Satisfactory"
-                                  ? "bg-amber-50 text-amber-800 border border-amber-200"
-                                  : "bg-rose-50 text-rose-800 border border-rose-200"
-                              }`}
-                            >
-                              {f.statusBadge}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
+                          <h3 className="text-sm sm:text-base font-bold tracking-wide">
+                            {group.branchName} — {group.romanSemester} {group.sectionName ? `· Section ${group.sectionName}` : ""}
+                          </h3>
+                          <p className="text-xs text-blue-100 font-medium mt-0.5">
+                            {group.subjectCount} subjects {group.totalSubmissions > 0 ? `· ${group.totalSubmissions} evaluations recorded` : "· 0 evaluations"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white backdrop-blur-xs border border-white/20">
+                            {group.courseName}
+                          </span>
+                        </div>
+                      </div>
 
-            {/* Recent Anonymous Submissions Stream */}
-            <Card className="border-slate-200 bg-white p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                  <h3 className="text-base font-bold text-navy-900">
-                    Recent Anonymous Student Submissions Log
-                  </h3>
-                </div>
-                <span className="text-xs text-slate-500">
-                  Showing latest {report.recentSubmissions.length} verified submissions
-                </span>
+                      {/* Section Table */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-blue-600 text-white font-bold tracking-wider text-[11px] uppercase border-b border-blue-700">
+                              <th className="py-2.5 px-4 min-w-[170px]">SUBJECT</th>
+                              <th className="py-2.5 px-4 min-w-[150px]">STAFF</th>
+                              <th className="py-2.5 px-3 text-center min-w-[70px]">COUNT</th>
+                              {questionsToDisplay.map((q, idx) => (
+                                <th
+                                  key={q.id ?? idx}
+                                  className="py-2.5 px-3 text-center min-w-[140px]"
+                                  title={q.questionText}
+                                >
+                                  {q.shortLabel || shortenQuestionText(q.questionText)} (Q${idx + 1})
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {group.subjects.map((sub, sIdx) => (
+                              <tr
+                                key={sub.id || sIdx}
+                                className="hover:bg-blue-50/40 transition-colors"
+                              >
+                                <td className="py-3 px-4">
+                                  <span className="block font-bold text-navy-900 text-xs">
+                                    {sub.subjectCode}
+                                  </span>
+                                  <span className="block text-[11px] text-slate-500 font-normal line-clamp-1">
+                                    {sub.subjectName}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 font-semibold text-slate-800">
+                                  <span className="block">{sub.facultyName}</span>
+                                  {sub.employeeCode ? (
+                                    <span className="block text-[10px] text-slate-400 font-normal">
+                                      Emp #{sub.employeeCode}
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold text-slate-800">
+                                  {sub.count}
+                                </td>
+                                {sub.questions.map((qSum, qIdx) => (
+                                  <td key={qIdx} className="py-3 px-3 text-center">
+                                    {renderAbstractBadge(qSum, sub.count)}
+                                  </td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 bg-slate-50/80 text-slate-600">
-                      <th className="py-2 px-3 font-semibold">Submitted</th>
-                      <th className="py-2 px-3 font-semibold">Department & Sem</th>
-                      <th className="py-2 px-3 font-semibold">Subject & Faculty</th>
-                      <th className="py-2 px-3 font-semibold text-center">Units Covered</th>
-                      <th className="py-2 px-3 font-semibold text-center">Faculty Rating</th>
-                      <th className="py-2 px-3 font-semibold">Unit Status</th>
-                      <th className="py-2 px-3 font-semibold text-right">Student Verification</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {report.recentSubmissions.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-500">
-                          <div className="flex flex-col items-center justify-center space-y-1">
-                            <ShieldCheck className="h-8 w-8 text-slate-300" />
-                            <span className="font-semibold text-slate-700">No submissions recorded yet</span>
-                            <span className="text-xs text-slate-400 max-w-md">
-                              Submissions will be verified and logged here anonymously as students submit feedback within the active period.
-                            </span>
+            ) : (
+              /* ═════════════════════════════════════════════════════════════════ */
+              /* TAB 2: FACULTY WISE                                              */
+              /* ═════════════════════════════════════════════════════════════════ */
+              <div className="space-y-6">
+                {filteredFacultyGroups.length === 0 ? (
+                  <Card className="p-12 text-center text-slate-500 bg-white border-slate-200 shadow-xs">
+                    <Users className="h-10 w-10 mx-auto text-slate-300 mb-2" />
+                    <p className="font-semibold text-slate-700">No faculty members found</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Try adjusting the department or search filter.
+                    </p>
+                  </Card>
+                ) : (
+                  filteredFacultyGroups.map((fac) => (
+                    <div
+                      key={fac.facultyKey}
+                      className="overflow-hidden rounded-xl border border-slate-300 shadow-sm bg-white"
+                    >
+                      {/* Faculty Header Bar */}
+                      <div className="bg-gradient-to-r from-slate-900 via-navy-900 to-indigo-950 px-5 py-3.5 text-white flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-600/30 text-white font-extrabold text-sm border border-blue-400/40">
+                            {fac.facultyName.charAt(0)}
                           </div>
-                        </td>
-                      </tr>
-                    ) : (
-                      report.recentSubmissions.map((sub) => (
-                        <tr key={sub.id} className="hover:bg-slate-50/60">
-                          <td className="py-2.5 px-3 text-slate-500">
-                            {formatDateTime(sub.submittedAt)}
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-700 font-medium">
-                            {sub.branchName} · Sem {sub.semester} ({sub.sectionName})
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className="block font-semibold text-slate-900">
-                              {sub.subjectName}
+                          <div>
+                            <h3 className="text-base font-bold tracking-wide flex items-center gap-2">
+                              <span>{fac.facultyName}</span>
+                              {fac.employeeCode && (
+                                <span className="rounded-md bg-white/15 px-2 py-0.5 text-[11px] font-medium text-blue-200">
+                                  Emp #{fac.employeeCode}
+                                </span>
+                              )}
+                            </h3>
+                            <p className="text-xs text-slate-300 font-medium mt-0.5">
+                              {fac.totalSubjects} assigned subjects · {fac.totalSubmissions} evaluations received
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          {fac.overallRating != null ? (
+                            <span className="inline-flex items-center gap-1.5 rounded-lg bg-amber-400/20 border border-amber-300/40 px-3 py-1 text-xs font-bold text-amber-200">
+                              <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />
+                              {fac.overallRating.toFixed(2)} Overall Rating
                             </span>
-                            <span className="block text-[11px] text-slate-500">
-                              {sub.facultyName}
+                          ) : (
+                            <span className="rounded-lg bg-white/10 px-3 py-1 text-xs text-slate-300">
+                              No ratings yet
                             </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            <span className="rounded bg-blue-50 px-2 py-0.5 font-semibold text-blue-700">
-                              {sub.unitsCovered}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-center">
-                            <span className="inline-flex items-center gap-1 font-bold text-amber-700">
-                              <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
-                              {sub.facultyRating}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className="font-medium text-slate-800">{sub.unitStatus}</span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            <span className="font-semibold text-xs text-slate-900">
-                              {sub.studentName || sub.tokenHash}
-                            </span>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Faculty Subjects Table */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-blue-600 text-white font-bold tracking-wider text-[11px] uppercase border-b border-blue-700">
+                              <th className="py-2.5 px-4 min-w-[160px]">SUBJECT</th>
+                              <th className="py-2.5 px-3 min-w-[100px]">COURSE</th>
+                              <th className="py-2.5 px-4 min-w-[160px]">BRANCH & SECTION</th>
+                              <th className="py-2.5 px-3 text-center min-w-[70px]">COUNT</th>
+                              {questionsToDisplay.map((q, idx) => (
+                                <th
+                                  key={q.id ?? idx}
+                                  className="py-2.5 px-3 text-center min-w-[140px]"
+                                  title={q.questionText}
+                                >
+                                  {q.shortLabel || shortenQuestionText(q.questionText)} (Q${idx + 1})
+                                </th>
+                              ))}
+                              <th className="py-2.5 px-3 text-center min-w-[130px]">STUDENT DETAILS</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {fac.subjects.map((sub, sIdx) => (
+                              <tr
+                                key={sub.id || sIdx}
+                                className="hover:bg-blue-50/40 transition-colors"
+                              >
+                                <td className="py-3 px-4">
+                                  <span className="block font-bold text-navy-900 text-xs">
+                                    {sub.subjectCode}
+                                  </span>
+                                  <span className="block text-[11px] text-slate-500 font-normal line-clamp-1">
+                                    {sub.subjectName}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3">
+                                  <span className="inline-flex rounded-md bg-blue-50 text-blue-800 px-2.5 py-1 border border-blue-200 text-xs font-semibold">
+                                    {sub.courseName || "Course"}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 font-semibold text-slate-800">
+                                  <span className="block font-bold text-navy-900 text-xs">{sub.branchName}</span>
+                                  <span className="block text-[11px] text-slate-500 font-normal">
+                                    {sub.romanSemester} {sub.sectionName ? `· Section ${sub.sectionName}` : ""}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 text-center font-bold text-slate-800">
+                                  {sub.count}
+                                </td>
+                                {sub.questions.map((qSum, qIdx) => (
+                                  <td key={qIdx} className="py-3 px-3 text-center">
+                                    {renderAbstractBadge(qSum, sub.count)}
+                                  </td>
+                                ))}
+                                <td className="py-3 px-3 text-center">
+                                  {sub.count > 0 ? (
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={() => setSelectedStudentDetailsItem(sub)}
+                                      className="h-7 text-[11px] font-semibold text-navy-700 border-navy-300 hover:bg-navy-50 cursor-pointer"
+                                    >
+                                      View Details ({sub.count})
+                                    </Button>
+                                  ) : (
+                                    <span className="text-slate-400 text-[11px] italic">No evaluations</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
-            </Card>
+            )}
           </>
         ) : null}
       </div>
+
+            {/* ========================================================================= */}
+      {/* STUDENT EVALUATION DETAILS MODAL (WITH INDIVIDUAL QUESTION RESPONSES)     */}
+      {/* ========================================================================= */}
+      {selectedStudentDetailsItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto backdrop-blur-xs">
+          <div className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            {/* Modal Header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/90 px-6 py-4">
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-navy-900 flex items-center gap-2">
+                  <Users className="h-5 w-5 text-indigo-600" />
+                  Student Feedback Evaluations
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  <strong className="text-slate-800 font-semibold">{selectedStudentDetailsItem.subjectName} ({selectedStudentDetailsItem.subjectCode})</strong>
+                  {" · "}
+                  <span>Faculty: <strong>{selectedStudentDetailsItem.facultyName}</strong></span>
+                  {" · "}
+                  <span>Class: <strong>{selectedStudentDetailsItem.branchName} ({selectedStudentDetailsItem.romanSemester} - {selectedStudentDetailsItem.sectionName ? 'Section ' + selectedStudentDetailsItem.sectionName : 'Section'})</strong></span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedStudentDetailsItem(null)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700 transition cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body: Table of student evaluations */}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {selectedStudentDetailsItem.studentDetails.length === 0 ? (
+                <div className="py-12 text-center text-slate-500">
+                  <ShieldCheck className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                  <p className="font-semibold text-slate-700">No student responses recorded yet</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 font-bold text-slate-700">
+                        <th className="py-2.5 px-3 w-10 text-center">#</th>
+                        <th className="py-2.5 px-3 min-w-[140px]">STUDENT NAME / ID</th>
+                        <th className="py-2.5 px-3 min-w-[130px]">SUBMITTED AT</th>
+                        {questionsToDisplay.map((q, qIdx) => (
+                          <th key={q.id ?? qIdx} className="py-2.5 px-3 text-center min-w-[130px]">
+                            {q.shortLabel || shortenQuestionText(q.questionText)} (Q${qIdx + 1})
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedStudentDetailsItem.studentDetails.map((st, idx) => (
+                        <tr key={st.id || idx} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="py-2.5 px-3 text-center text-slate-400 font-semibold">
+                            {idx + 1}
+                          </td>
+                          <td className="py-2.5 px-3 font-bold text-navy-900">
+                            {st.studentName}
+                          </td>
+                          <td className="py-2.5 px-3 text-slate-500">
+                            {formatDisplayDateTime(st.submittedAt)}
+                          </td>
+                          {questionsToDisplay.map((q, qIdx) => {
+                            const qId = String(q.id);
+                            const ans = st.answers[qId] ?? st.answers[`q_${q.id}`] ?? st.answers[q.questionText] ?? (
+                              q.shortLabel.toLowerCase().includes("rate") ? st.facultyRating :
+                              q.shortLabel.toLowerCase().includes("unit") && q.shortLabel.toLowerCase().includes("covered") ? st.unitsCovered :
+                              q.shortLabel.toLowerCase().includes("unit") && q.shortLabel.toLowerCase().includes("status") ? st.unitStatus :
+                              null
+                            );
+                            return (
+                              <td key={qIdx} className="py-2.5 px-3 text-center">
+                                {ans != null && String(ans).trim() !== "" ? (
+                                  q.shortLabel.toLowerCase().includes("rate") ? (
+                                    <span className="inline-flex items-center gap-1 font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                                      <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
+                                      {Number(ans).toFixed(1)}
+                                    </span>
+                                  ) : (
+                                    <span className="font-semibold text-slate-800 bg-slate-100 px-2 py-0.5 rounded">
+                                      {String(ans)}
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-slate-50/60 px-6 py-3">
+              <span className="text-xs text-slate-500">
+                Total {selectedStudentDetailsItem.studentDetails.length} evaluations recorded
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSelectedStudentDetailsItem(null)}
+                className="text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* ========================================================================= */}
       {/* PUBLISH FEEDBACK FORM MODAL (WITH ACTIVATION PERIOD DATES)                 */}

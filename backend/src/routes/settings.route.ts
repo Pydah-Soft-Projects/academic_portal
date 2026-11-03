@@ -309,9 +309,17 @@ settingsRouter.get(
         ? req.query.courseIds.split(",").map(Number).filter(Boolean)
         : undefined;
       const branchId = req.query.branchId ? Number(req.query.branchId) : undefined;
-      const branchIds = typeof req.query.branchIds === "string"
+      let branchIds = typeof req.query.branchIds === "string"
         ? req.query.branchIds.split(",").map(Number).filter(Boolean)
         : undefined;
+      const userScope = (req as AuthedRequest).authz?.scope;
+      if (userScope && !userScope.isGlobal && userScope.branchIds && userScope.branchIds.length > 0) {
+        if (!branchIds || branchIds.length === 0) {
+          branchIds = userScope.branchIds;
+        } else {
+          branchIds = branchIds.filter((b) => userScope.branchIds!.includes(b));
+        }
+      }
       const semester = req.query.semester ? Number(req.query.semester) : undefined;
       const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : undefined;
       const batch = typeof req.query.batch === "string" ? req.query.batch : undefined;
@@ -351,9 +359,10 @@ settingsRouter.get(
     try {
       const rawPubId = req.query.publicationId || req.query.formId;
       const pubId = rawPubId ? Number(rawPubId) : undefined;
+      const course = typeof req.query.course === "string" ? req.query.course : undefined;
       const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
       const semester = req.query.semester ? Number(req.query.semester) : undefined;
-      const report = await getFeedbackReportData(pubId, branch, semester);
+      const report = await getFeedbackReportData(pubId, course, branch, semester, (req as AuthedRequest).authz?.scope);
       res.json(report);
     } catch (error) {
       next(error);
