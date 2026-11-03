@@ -36,7 +36,7 @@ import { internalMarksRouter } from "./routes/internal-marks.route.js";
 import { classTeacherRouter } from "./routes/class-teacher.route.js";
 import { principalDashboardRouter } from "./routes/principal-dashboard.route.js";
 import { hodRouter } from "./routes/hod.route.js";
-import { aiRouter } from "./routes/ai.route.js";
+import { aiRouter } from "./ai/index.js";
 
 const app = express();
 

@@ -55,7 +55,6 @@ import { SubjectTeacherDashboard } from "./SubjectTeacherDashboard";
 import { HodDashboard } from "./HodDashboard";
 import { ClassTeacherDashboard } from "./ClassTeacherDashboard";
 import { PrincipalDashboard } from "./PrincipalDashboard";
-import { NemoChatWidget } from "@/components/nemo/NemoChatWidget";
 
 function todayIso() {
   const now = new Date();
@@ -435,7 +434,6 @@ export function DashboardView() {
 
   return (
     <>
-      {superAdminUser && <NemoChatWidget />}
       {loading && !summary && !attendance && !myTimetableSummary ? (
         <DashboardSkeleton />
       ) : (

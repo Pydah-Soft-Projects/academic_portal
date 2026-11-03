@@ -151,9 +151,10 @@ const DEFAULT_NEMO_CDN_URL =
   process.env.NEXT_PUBLIC_NEMO_CDN_URL || "https://nemo-chat.pydah.edu.in";
 
 /**
- * Checks if the user is a Super Admin or Global Administrator.
+ * Checks if the user is authorized to access the Nemo AI assistant:
+ * Super Admin, Principal / Vice Principal, or Head of Department (HOD).
  */
-function isUserSuperAdmin(authz: Authorization | null): boolean {
+export function isUserAuthorizedForNemo(authz: Authorization | null): boolean {
   if (!authz?.roles?.length) return false;
   return authz.roles.some((r) => {
     const key = (r.roleKey || "").toLowerCase();
@@ -162,9 +163,40 @@ function isUserSuperAdmin(authz: Authorization | null): boolean {
       key === "super_admin" ||
       key === "superadmin" ||
       label.includes("super admin") ||
+      key === "principal" ||
+      key === "vice_principal" ||
+      label.includes("principal") ||
+      label.includes("director") ||
+      key === "hod" ||
+      label.includes("hod") ||
+      label.includes("head of department") ||
       Boolean(authz.scope?.isGlobal && key.includes("admin"))
     );
   });
+}
+
+/**
+ * Derives the contextual title for the Nemo widget header based on user role.
+ */
+export function getNemoTitleForUser(authz: Authorization | null): string {
+  if (!authz?.roles?.length) return "Nemo";
+  for (const r of authz.roles) {
+    const key = (r.roleKey || "").toLowerCase();
+    const label = (r.label || "").toLowerCase();
+    if (key.includes("super_admin") || key.includes("superadmin") || label.includes("super admin")) {
+      return "Nemo (Super Admin)";
+    }
+    if (key.includes("vice_principal") || label.includes("vice principal")) {
+      return "Nemo (Vice Principal)";
+    }
+    if (key.includes("principal") || label.includes("principal") || label.includes("director")) {
+      return "Nemo (Principal)";
+    }
+    if (key.includes("hod") || label.includes("hod") || label.includes("head of department")) {
+      return "Nemo (HOD)";
+    }
+  }
+  return "Nemo";
 }
 
 /**
@@ -271,10 +303,11 @@ let activeChatRoot: ReactDOMClient.Root | null = null;
 
 export function NemoChatWidget() {
   const { authorization, token } = useAuth();
-  const isSuperAdmin = isUserSuperAdmin(authorization);
+  const isAuthorized = isUserAuthorizedForNemo(authorization);
+  const widgetTitle = getNemoTitleForUser(authorization);
 
   useEffect(() => {
-    if (!isSuperAdmin) {
+    if (!isAuthorized) {
       if (activeChatRoot) {
         try {
           activeChatRoot.unmount();
@@ -335,8 +368,8 @@ export function NemoChatWidget() {
     window.PYDAH_AI_AUTH_TOKEN = authToken;
     window.NEMO_AI_ASSISTANT_ID = "portal-assistant";
     window.PYDAH_AI_ASSISTANT_ID = "portal-assistant";
-    window.NEMO_AI_TITLE = "Nemo (Super Admin)";
-    window.PYDAH_AI_TITLE = "Nemo (Super Admin)";
+    window.NEMO_AI_TITLE = widgetTitle;
+    window.PYDAH_AI_TITLE = widgetTitle;
     window.NEMO_AI_MODE = "widget";
     window.PYDAH_AI_MODE = "widget";
 
@@ -367,7 +400,7 @@ export function NemoChatWidget() {
               portalUrl: portalServiceUrl,
               assistantId: "portal-assistant",
               authToken: authToken,
-              title: "Nemo (Super Admin)",
+              title: widgetTitle,
               mode: "widget",
             }),
           );
@@ -432,9 +465,9 @@ export function NemoChatWidget() {
         scriptEl.remove();
       }
     };
-  }, [isSuperAdmin, token]);
+  }, [isAuthorized, widgetTitle, token]);
 
-  if (!isSuperAdmin) {
+  if (!isAuthorized) {
     return null;
   }
 
