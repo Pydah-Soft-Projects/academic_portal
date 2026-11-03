@@ -153,10 +153,43 @@ export type FacultyGroup = {
   subjects: Array<SubjectSectionReportItem & { classLabel: string }>;
 };
 
+export type StudentSubjectEvaluation = {
+  subjectName: string;
+  subjectCode?: string;
+  facultyName: string;
+  unitsCovered?: string | null;
+  facultyRating?: number | null;
+  unitStatus?: string | null;
+  answers: Record<string, unknown>;
+  submittedAt: string;
+};
+
+export type StudentReportItem = {
+  id: string;
+  studentPin: string;
+  studentName: string;
+  tokenHash?: string;
+  collegeId?: number | null;
+  courseId?: number | null;
+  courseName: string;
+  branchId?: number | null;
+  branchName: string;
+  yearOfStudy: number;
+  semester: number;
+  romanSemester: string;
+  sectionName: string;
+  status: "submitted" | "partial" | "pending";
+  totalEvaluated: number;
+  totalExpected?: number;
+  lastSubmittedAt?: string | null;
+  evaluations: StudentSubjectEvaluation[];
+};
+
 export type FeedbackReportData = {
   publicationQuestions?: FeedbackQuestion[];
   sectionGroups?: SectionGroup[];
   facultyGroups?: FacultyGroup[];
+  studentReports?: StudentReportItem[];
   publication: FeedbackPublication | null;
   publications: Array<FeedbackPublication>;
   forms: Array<{ id: number; name: string; questionCount: number }>;
@@ -2118,6 +2151,181 @@ export async function getFeedbackReportData(
   const facultyGroups = Array.from(facultyGroupMap.values());
   facultyGroups.sort((a, b) => a.facultyName.localeCompare(b.facultyName));
 
+  // 3b-iv. Build studentReports
+  const responsesByStudent = new Map<string, StudentSubjectEvaluation[]>();
+  const studentMetaByIdentifier = new Map<
+    string,
+    {
+      studentPin?: string;
+      studentName?: string;
+      branchName?: string;
+      semester?: number;
+      sectionName?: string;
+      lastSubmittedAt?: string;
+    }
+  >();
+
+  for (const r of allPubResponses) {
+    let answers: Record<string, unknown> = {};
+    if (r.answers_json) {
+      try {
+        answers = typeof r.answers_json === "string" ? JSON.parse(r.answers_json) : r.answers_json;
+      } catch {}
+    }
+    const tokenKey = String(r.student_token_hash || `anon_${r.id}`);
+    const pin = String(answers.studentPin || answers.pin || answers.rollNumber || "").trim();
+    const name = String(answers.studentName || answers.name || "").trim();
+    const studentIdentifier = (pin || tokenKey).toUpperCase();
+
+    if (!responsesByStudent.has(studentIdentifier)) {
+      responsesByStudent.set(studentIdentifier, []);
+      studentMetaByIdentifier.set(studentIdentifier, {
+        studentPin: pin || undefined,
+        studentName: name || undefined,
+        branchName: r.branch_name || undefined,
+        semester: r.semester ? Number(r.semester) : undefined,
+        sectionName: r.section_name || undefined,
+        lastSubmittedAt: toIsoString(r.submitted_at),
+      });
+    }
+
+    responsesByStudent.get(studentIdentifier)!.push({
+      subjectName: r.subject_name || "Subject",
+      subjectCode: "",
+      facultyName: r.faculty_name || "Faculty",
+      unitsCovered: r.units_covered || null,
+      facultyRating: r.faculty_rating != null ? Number(r.faculty_rating) : null,
+      unitStatus: r.unit_status || null,
+      answers,
+      submittedAt: toIsoString(r.submitted_at),
+    });
+  }
+
+  // Load enrolled students from student_database
+  const studentWhere: string[] = ["(s.student_status = 'Regular' OR s.student_status IS NULL)"];
+  const studentParams: unknown[] = [];
+
+  if (allowedBranchIds && allowedBranchIds.size > 0) {
+    studentWhere.push(`s.branch_id IN (${Array.from(allowedBranchIds).map(() => "?").join(",")})`);
+    studentParams.push(...Array.from(allowedBranchIds));
+  }
+  if (allowedCollegeIds && allowedCollegeIds.size > 0) {
+    studentWhere.push(`s.college_id IN (${Array.from(allowedCollegeIds).map(() => "?").join(",")})`);
+    studentParams.push(...Array.from(allowedCollegeIds));
+  }
+
+  const enrolledStudents = await queryStudent<
+    (RowDataPacket & {
+      id: number;
+      pin: string;
+      name: string;
+      branch_id: number;
+      course_id: number;
+      college_id: number;
+      batch: string;
+      year_of_study: number;
+      current_semester: number;
+      section_name: string;
+    })[]
+  >(
+    `
+    SELECT
+      s.id,
+      COALESCE(s.pin_no, s.admission_number, CONCAT('STU-', s.id)) AS pin,
+      s.student_name AS name,
+      s.branch_id,
+      s.course_id,
+      s.college_id,
+      s.batch,
+      COALESCE(s.current_year, 1) AS year_of_study,
+      COALESCE(s.current_semester, 1) AS current_semester,
+      UPPER(TRIM(COALESCE(NULLIF(TRIM(ss.section_name), ''), NULLIF(TRIM(s.section), ''), 'A'))) AS section_name
+    FROM students s
+    LEFT JOIN student_sections ss ON ss.student_id = s.id
+    WHERE ${studentWhere.join(" AND ")}
+    ORDER BY s.branch_id, s.current_year, section_name, s.student_name ASC
+    LIMIT 3000
+    `,
+    studentParams,
+  ).catch(() => []);
+
+  const studentReports: StudentReportItem[] = [];
+  const processedIdentifiers = new Set<string>();
+
+  for (const s of enrolledStudents) {
+    const rawBranchName = branchMap.get(Number(s.branch_id)) || "Department";
+    const rawCourseName = courseMap.get(Number(s.course_id)) || "Degree";
+    const yr = Number(s.year_of_study || 1);
+    const sem = (yr - 1) * 2 + (Number(s.current_semester) === 2 ? 2 : 1);
+    const romanSem = formatRomanYearSem(sem);
+    const sec = (s.section_name || "A").trim();
+
+    const secKey = `${s.branch_id}|${sem}|${sec}`;
+    const secGroup = sectionGroupMap.get(secKey);
+    const expectedSubjectsCount = secGroup ? secGroup.subjects.length : 0;
+
+    const studentPin = String(s.pin).trim();
+    processedIdentifiers.add(studentPin.toUpperCase());
+
+    const evaluations = responsesByStudent.get(studentPin.toUpperCase()) || [];
+    const totalEvaluated = evaluations.length;
+    let status: "submitted" | "partial" | "pending" = "pending";
+    if (totalEvaluated > 0) {
+      status = expectedSubjectsCount > 0 && totalEvaluated >= expectedSubjectsCount ? "submitted" : "partial";
+    }
+
+    studentReports.push({
+      id: `stu_${s.id}`,
+      studentPin,
+      studentName: s.name || studentPin,
+      tokenHash: undefined,
+      collegeId: s.college_id ? Number(s.college_id) : null,
+      courseId: s.course_id ? Number(s.course_id) : null,
+      courseName: rawCourseName,
+      branchId: s.branch_id ? Number(s.branch_id) : null,
+      branchName: rawBranchName,
+      yearOfStudy: yr,
+      semester: sem,
+      romanSemester: romanSem,
+      sectionName: sec,
+      status,
+      totalEvaluated,
+      totalExpected: expectedSubjectsCount,
+      lastSubmittedAt: evaluations.length > 0 ? evaluations[0].submittedAt : null,
+      evaluations,
+    });
+  }
+
+  for (const [identifier, evals] of responsesByStudent.entries()) {
+    if (processedIdentifiers.has(identifier)) continue;
+    const meta = studentMetaByIdentifier.get(identifier);
+    const bName = meta?.branchName || "Department";
+    const sem = meta?.semester || 1;
+    const yr = Math.ceil(sem / 2);
+    const sec = meta?.sectionName || "A";
+
+    studentReports.push({
+      id: `resp_${identifier}`,
+      studentPin: meta?.studentPin || identifier,
+      studentName: meta?.studentName || meta?.studentPin || `Student (${identifier.slice(0, 8)})`,
+      tokenHash: identifier,
+      collegeId: null,
+      courseId: null,
+      courseName: "Degree",
+      branchId: null,
+      branchName: bName,
+      yearOfStudy: yr,
+      semester: sem,
+      romanSemester: formatRomanYearSem(sem),
+      sectionName: sec,
+      status: "submitted",
+      totalEvaluated: evals.length,
+      totalExpected: evals.length,
+      lastSubmittedAt: evals[0]?.submittedAt || null,
+      evaluations: evals,
+    });
+  }
+
 
   // 3c. Query filtered responses for analytics
   const responses = targetPub ? await queryAcademic<ResponseRow[]>(sql, params) : [];
@@ -2172,6 +2380,7 @@ export async function getFeedbackReportData(
       publicationQuestions,
       sectionGroups,
       facultyGroups,
+      studentReports,
       submissionProgress,
       submissionSummary,
     };
@@ -2502,6 +2711,7 @@ export async function getFeedbackReportData(
     publicationQuestions,
     sectionGroups,
     facultyGroups,
+    studentReports,
     submissionProgress,
     submissionSummary,
   };

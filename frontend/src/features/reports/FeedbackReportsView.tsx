@@ -33,6 +33,7 @@ import {
   BarChart2,
   TrendingUp,
   XCircle,
+  Eye,
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -151,6 +152,38 @@ export type FacultyGroup = {
   subjects: Array<SubjectSectionReportItem & { classLabel: string }>;
 };
 
+export type StudentSubjectEvaluation = {
+  subjectName: string;
+  subjectCode?: string;
+  facultyName: string;
+  unitsCovered?: string | null;
+  facultyRating?: number | null;
+  unitStatus?: string | null;
+  answers: Record<string, unknown>;
+  submittedAt: string;
+};
+
+export type StudentReportItem = {
+  id: string;
+  studentPin: string;
+  studentName: string;
+  tokenHash?: string;
+  collegeId?: number | null;
+  courseId?: number | null;
+  courseName: string;
+  branchId?: number | null;
+  branchName: string;
+  yearOfStudy: number;
+  semester: number;
+  romanSemester: string;
+  sectionName: string;
+  status: "submitted" | "partial" | "pending";
+  totalEvaluated: number;
+  totalExpected?: number;
+  lastSubmittedAt?: string | null;
+  evaluations: StudentSubjectEvaluation[];
+};
+
 export type FeedbackPublication = {
   id: number;
   formId: number;
@@ -182,6 +215,7 @@ export type FeedbackReportData = {
   publicationQuestions?: FeedbackQuestion[];
   sectionGroups?: SectionGroup[];
   facultyGroups?: FacultyGroup[];
+  studentReports?: StudentReportItem[];
   publication: FeedbackPublication | null;
   publications: Array<FeedbackPublication>;
   forms: Array<{ id: number; name: string; questionCount: number }>;
@@ -1294,6 +1328,7 @@ export function FeedbackReportsView() {
   const [selectedBranch, setSelectedBranch] = useState<string>("all");
   const [selectedYear, setSelectedYear] = useState<string>("all");
   const [selectedSemester, setSelectedSemester] = useState<string>("all");
+  const [selectedSection, setSelectedSection] = useState<string>("all");
 
   // Branches filtered by selected course
   const branchesForSelectedCourse = useMemo(() => {
@@ -1305,10 +1340,60 @@ export function FeedbackReportsView() {
     if (!matchingCourse) return scopedAvailableBranches;
     return scopedAvailableBranches.filter((b) => b.courseId === matchingCourse.id);
   }, [scopedAvailableBranches, scopedAvailableCourses, selectedCourse]);
+
+  const availableSectionsForFilter = useMemo(() => {
+    const set = new Set<string>();
+
+    const groups = report?.sectionGroups || [];
+    for (const g of groups) {
+      if (selectedCourse !== "all") {
+        const matchC = selectedCourse.toLowerCase();
+        if (g.courseName?.toLowerCase() !== matchC && String(g.courseId) !== selectedCourse) continue;
+      }
+      if (selectedBranch !== "all") {
+        const matchB = selectedBranch.toLowerCase();
+        if (g.branchName?.toLowerCase() !== matchB && String(g.branchId) !== selectedBranch) continue;
+      }
+      if (selectedYear !== "all") {
+        const yr = Number(selectedYear);
+        if ((g.yearOfStudy || Math.ceil((g.semester || 1) / 2)) !== yr) continue;
+      }
+      if (selectedSemester !== "all") {
+        const semNum = Number(selectedSemester);
+        if (g.semester !== semNum) continue;
+      }
+      if (g.sectionName && g.sectionName.trim()) {
+        set.add(g.sectionName.trim().toUpperCase());
+      }
+    }
+
+    if (set.size === 0) {
+      for (const g of groups) {
+        if (g.sectionName && g.sectionName.trim()) set.add(g.sectionName.trim().toUpperCase());
+      }
+      if (report?.availableSections) {
+        for (const s of report.availableSections) {
+          if (s && s.trim()) set.add(s.trim().toUpperCase());
+        }
+      }
+      if (report?.studentReports) {
+        for (const s of report.studentReports) {
+          if (s.sectionName && s.sectionName.trim()) set.add(s.sectionName.trim().toUpperCase());
+        }
+      }
+    }
+
+    if (set.size === 0) {
+      return ["A", "B", "C"];
+    }
+    return Array.from(set).sort();
+  }, [report?.sectionGroups, report?.availableSections, report?.studentReports, selectedCourse, selectedBranch, selectedYear, selectedSemester]);
   const [searchFaculty, setSearchFaculty] = useState<string>("");
-  const [activeReportTab, setActiveReportTab] = useState<"section_wise" | "faculty_wise">("section_wise");
+  const [activeReportTab, setActiveReportTab] = useState<"section_wise" | "faculty_wise" | "student_wise">("section_wise");
   const [reportSearchQuery, setReportSearchQuery] = useState("");
   const [selectedStudentDetailsItem, setSelectedStudentDetailsItem] = useState<SubjectSectionReportItem | null>(null);
+  const [selectedStudentReport, setSelectedStudentReport] = useState<StudentReportItem | null>(null);
+  const [studentStatusFilter, setStudentStatusFilter] = useState<"all" | "submitted" | "partial" | "pending">("all");
 
   const filteredSectionGroups = useMemo(() => {
     if (!report?.sectionGroups) return [];
@@ -1329,6 +1414,10 @@ export function FeedbackReportsView() {
     if (selectedSemester !== "all") {
       const semNum = Number(selectedSemester);
       list = list.filter((g) => g.semester === semNum);
+    }
+    if (selectedSection !== "all") {
+      const secNorm = selectedSection.trim().toUpperCase();
+      list = list.filter((g) => (g.sectionName || "").trim().toUpperCase() === secNorm);
     }
 
     if (!reportSearchQuery.trim()) return list;
@@ -1354,7 +1443,7 @@ export function FeedbackReportsView() {
         return null;
       })
       .filter((g): g is SectionGroup => g !== null);
-  }, [report?.sectionGroups, selectedCourse, selectedBranch, selectedYear, selectedSemester, reportSearchQuery]);
+  }, [report?.sectionGroups, selectedCourse, selectedBranch, selectedYear, selectedSemester, selectedSection, reportSearchQuery]);
 
   const filteredFacultyGroups = useMemo(() => {
     if (!report?.facultyGroups) return [];
@@ -1412,6 +1501,20 @@ export function FeedbackReportsView() {
         };
       }).filter((f): f is FacultyGroup => f !== null);
     }
+    if (selectedSection !== "all") {
+      const secNorm = selectedSection.trim().toUpperCase();
+      list = list.map((f) => {
+        const matchingSubs = f.subjects.filter(
+          (s) => (s.sectionName || "").trim().toUpperCase() === secNorm
+        );
+        if (matchingSubs.length === 0) return null;
+        return {
+          ...f,
+          totalSubjects: matchingSubs.length,
+          subjects: matchingSubs,
+        };
+      }).filter((f): f is FacultyGroup => f !== null);
+    }
 
     if (!reportSearchQuery.trim()) return list;
     const term = reportSearchQuery.toLowerCase();
@@ -1437,7 +1540,83 @@ export function FeedbackReportsView() {
         return null;
       })
       .filter((f): f is FacultyGroup => f !== null);
-  }, [report?.facultyGroups, selectedCourse, selectedBranch, selectedYear, selectedSemester, reportSearchQuery]);
+  }, [report?.facultyGroups, selectedCourse, selectedBranch, selectedYear, selectedSemester, selectedSection, reportSearchQuery]);
+
+  const filteredStudentReports = useMemo(() => {
+    if (!report?.studentReports) return [];
+    let list = report.studentReports;
+
+    if (selectedCourse !== "all") {
+      const matchC = selectedCourse.toLowerCase();
+      list = list.filter((s) => s.courseName?.toLowerCase() === matchC || String(s.courseId) === selectedCourse);
+    }
+    if (selectedBranch !== "all") {
+      const matchB = selectedBranch.toLowerCase();
+      list = list.filter((s) => s.branchName?.toLowerCase() === matchB || String(s.branchId) === selectedBranch);
+    }
+    if (selectedYear !== "all") {
+      const yr = Number(selectedYear);
+      list = list.filter((s) => (s.yearOfStudy || Math.ceil((s.semester || 1) / 2)) === yr);
+    }
+    if (selectedSemester !== "all") {
+      const semNum = Number(selectedSemester);
+      list = list.filter((s) => s.semester === semNum);
+    }
+    if (selectedSection !== "all") {
+      const secNorm = selectedSection.trim().toUpperCase();
+      list = list.filter((s) => (s.sectionName || "").trim().toUpperCase() === secNorm);
+    }
+
+    if (studentStatusFilter !== "all") {
+      list = list.filter((s) => s.status === studentStatusFilter);
+    }
+
+    if (!reportSearchQuery.trim()) return list;
+    const term = reportSearchQuery.toLowerCase();
+    return list.filter((s) =>
+      s.studentName.toLowerCase().includes(term) ||
+      s.studentPin.toLowerCase().includes(term) ||
+      s.branchName.toLowerCase().includes(term) ||
+      s.sectionName.toLowerCase().includes(term) ||
+      s.evaluations.some(
+        (ev) =>
+          ev.subjectName.toLowerCase().includes(term) ||
+          ev.facultyName.toLowerCase().includes(term),
+      ),
+    );
+  }, [report?.studentReports, selectedCourse, selectedBranch, selectedYear, selectedSemester, selectedSection, studentStatusFilter, reportSearchQuery]);
+
+  const studentStats = useMemo(() => {
+    const list = report?.studentReports || [];
+    let scoped = list;
+    if (selectedCourse !== "all") {
+      const matchC = selectedCourse.toLowerCase();
+      scoped = scoped.filter((s) => s.courseName?.toLowerCase() === matchC || String(s.courseId) === selectedCourse);
+    }
+    if (selectedBranch !== "all") {
+      const matchB = selectedBranch.toLowerCase();
+      scoped = scoped.filter((s) => s.branchName?.toLowerCase() === matchB || String(s.branchId) === selectedBranch);
+    }
+    if (selectedYear !== "all") {
+      const yr = Number(selectedYear);
+      scoped = scoped.filter((s) => (s.yearOfStudy || Math.ceil((s.semester || 1) / 2)) === yr);
+    }
+    if (selectedSemester !== "all") {
+      const semNum = Number(selectedSemester);
+      scoped = scoped.filter((s) => s.semester === semNum);
+    }
+    if (selectedSection !== "all") {
+      const secNorm = selectedSection.trim().toUpperCase();
+      scoped = scoped.filter((s) => (s.sectionName || "").trim().toUpperCase() === secNorm);
+    }
+
+    const total = scoped.length;
+    const submitted = scoped.filter((s) => s.status === "submitted").length;
+    const partial = scoped.filter((s) => s.status === "partial").length;
+    const pending = scoped.filter((s) => s.status === "pending").length;
+    const rate = total > 0 ? Math.round(((submitted + partial) / total) * 100) : 0;
+    return { total, submitted, partial, pending, rate };
+  }, [report?.studentReports, selectedCourse, selectedBranch, selectedYear, selectedSemester, selectedSection]);
 
   const questionsToDisplay = useMemo(() => {
     if (report?.publicationQuestions && report.publicationQuestions.length > 0) {
@@ -2281,6 +2460,25 @@ export function FeedbackReportsView() {
                 ))}
               </select>
             </div>
+
+            {/* Section Filter */}
+            <div>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                Section
+              </label>
+              <select
+                value={selectedSection}
+                onChange={(e) => setSelectedSection(e.target.value)}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[120px]"
+              >
+                <option value="all">All Sections</option>
+                {availableSectionsForFilter.map((sec) => (
+                  <option key={sec} value={sec}>
+                    Section {sec}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -2343,6 +2541,23 @@ export function FeedbackReportsView() {
                     {filteredFacultyGroups.length}
                   </span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveReportTab("student_wise")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer",
+                    activeReportTab === "student_wise"
+                      ? "bg-white text-navy-900 shadow-xs border border-slate-200/60"
+                      : "text-slate-600 hover:text-navy-900"
+                  )}
+                >
+                  <GraduationCap className="h-4 w-4 text-emerald-600" />
+                  <span>Student Wise</span>
+                  <span className="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-extrabold text-emerald-800">
+                    {filteredStudentReports.length}
+                  </span>
+                </button>
               </div>
 
               {/* Search Box */}
@@ -2350,7 +2565,11 @@ export function FeedbackReportsView() {
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
                 <input
                   type="text"
-                  placeholder="Search subject, faculty, code, or section..."
+                  placeholder={
+                    activeReportTab === "student_wise"
+                      ? "Search student name, PIN, branch, section..."
+                      : "Search subject, faculty, code, or section..."
+                  }
                   value={reportSearchQuery}
                   onChange={(e) => setReportSearchQuery(e.target.value)}
                   className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-8 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-navy-500 focus:ring-1 focus:ring-navy-500 shadow-2xs"
@@ -2440,12 +2659,14 @@ export function FeedbackReportsView() {
                                 className="hover:bg-blue-50/40 transition-colors"
                               >
                                 <td className="py-3 px-4">
-                                  <span className="block font-bold text-navy-900 text-xs">
-                                    {sub.subjectCode}
-                                  </span>
-                                  <span className="block text-[11px] text-slate-500 font-normal line-clamp-1">
+                                  <span className="block font-bold text-navy-900 text-xs leading-snug">
                                     {sub.subjectName}
                                   </span>
+                                  {sub.subjectCode ? (
+                                    <span className="block text-[11px] text-slate-500 font-medium font-mono mt-0.5">
+                                      {sub.subjectCode}
+                                    </span>
+                                  ) : null}
                                 </td>
                                 <td className="py-3 px-4 font-semibold text-slate-800">
                                   <span className="block">{sub.facultyName}</span>
@@ -2472,7 +2693,7 @@ export function FeedbackReportsView() {
                   ))
                 )}
               </div>
-            ) : (
+            ) : activeReportTab === "faculty_wise" ? (
               /* ═════════════════════════════════════════════════════════════════ */
               /* TAB 2: FACULTY WISE                                              */
               /* ═════════════════════════════════════════════════════════════════ */
@@ -2553,12 +2774,14 @@ export function FeedbackReportsView() {
                                 className="hover:bg-blue-50/40 transition-colors"
                               >
                                 <td className="py-3 px-4">
-                                  <span className="block font-bold text-navy-900 text-xs">
-                                    {sub.subjectCode}
-                                  </span>
-                                  <span className="block text-[11px] text-slate-500 font-normal line-clamp-1">
+                                  <span className="block font-bold text-navy-900 text-xs leading-snug">
                                     {sub.subjectName}
                                   </span>
+                                  {sub.subjectCode ? (
+                                    <span className="block text-[11px] text-slate-500 font-medium font-mono mt-0.5">
+                                      {sub.subjectCode}
+                                    </span>
+                                  ) : null}
                                 </td>
                                 <td className="py-3 px-3">
                                   <span className="inline-flex rounded-md bg-blue-50 text-blue-800 px-2.5 py-1 border border-blue-200 text-xs font-semibold">
@@ -2600,6 +2823,223 @@ export function FeedbackReportsView() {
                       </div>
                     </div>
                   ))
+                )}
+              </div>
+            ) : (
+              /* ═════════════════════════════════════════════════════════════════ */
+              /* TAB 3: STUDENT WISE                                              */
+              /* ═════════════════════════════════════════════════════════════════ */
+              <div className="space-y-6">
+                {/* 1. Student Submission Summary KPIs */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+                  <div className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider">Total Enrolled</span>
+                      <GraduationCap className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <div className="text-xl font-extrabold text-navy-900">{studentStats.total}</div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Students in selected scope</p>
+                  </div>
+
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 p-3.5 shadow-2xs">
+                    <div className="flex items-center justify-between text-emerald-700 mb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider">Fully Submitted</span>
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    </div>
+                    <div className="text-xl font-extrabold text-emerald-800">{studentStats.submitted}</div>
+                    <p className="text-[10px] text-emerald-600 mt-0.5">All subjects evaluated</p>
+                  </div>
+
+                  <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3.5 shadow-2xs">
+                    <div className="flex items-center justify-between text-amber-700 mb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider">Partial</span>
+                      <Clock className="h-4 w-4 text-amber-600" />
+                    </div>
+                    <div className="text-xl font-extrabold text-amber-800">{studentStats.partial}</div>
+                    <p className="text-[10px] text-amber-600 mt-0.5">Some subjects submitted</p>
+                  </div>
+
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3.5 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-600 mb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider">Pending</span>
+                      <AlertCircle className="h-4 w-4 text-slate-400" />
+                    </div>
+                    <div className="text-xl font-extrabold text-slate-700">{studentStats.pending}</div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">No responses yet</p>
+                  </div>
+
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50/50 p-3.5 shadow-2xs col-span-2 sm:col-span-4 lg:col-span-1">
+                    <div className="flex items-center justify-between text-indigo-700 mb-1">
+                      <span className="text-[11px] font-bold uppercase tracking-wider">Response Rate</span>
+                      <TrendingUp className="h-4 w-4 text-indigo-600" />
+                    </div>
+                    <div className="text-xl font-extrabold text-indigo-900">{studentStats.rate}%</div>
+                    <p className="text-[10px] text-indigo-600 mt-0.5">{studentStats.submitted + studentStats.partial} of {studentStats.total} active</p>
+                  </div>
+                </div>
+
+                {/* 2. Quick Filter Pills by Submission Status */}
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs font-bold text-slate-600 mr-1">Filter Status:</span>
+                    {(
+                      [
+                        { key: "all", label: "All Students", count: studentStats.total },
+                        { key: "submitted", label: "Submitted", count: studentStats.submitted },
+                        { key: "partial", label: "Partial", count: studentStats.partial },
+                        { key: "pending", label: "Pending", count: studentStats.pending },
+                      ] as const
+                    ).map((filter) => (
+                      <button
+                        key={filter.key}
+                        type="button"
+                        onClick={() => setStudentStatusFilter(filter.key)}
+                        className={cn(
+                          "rounded-full px-3 py-1 text-xs font-semibold transition-all cursor-pointer",
+                          studentStatusFilter === filter.key
+                            ? "bg-navy-900 text-white shadow-xs"
+                            : "bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-navy-900",
+                        )}
+                      >
+                        {filter.label} ({filter.count})
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="text-xs text-slate-500">
+                    Showing <strong className="text-slate-800">{filteredStudentReports.length}</strong> students
+                  </div>
+                </div>
+
+                {/* 3. Students Table */}
+                {filteredStudentReports.length === 0 ? (
+                  <Card className="p-12 text-center text-slate-500 bg-white border-slate-200 shadow-xs">
+                    <GraduationCap className="h-10 w-10 mx-auto text-slate-300 mb-2" />
+                    <p className="font-semibold text-slate-700">No students found matching your filters</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Try adjusting the course, branch, year, semester, status, or search query.
+                    </p>
+                  </Card>
+                ) : (
+                  <div className="overflow-hidden rounded-xl border border-slate-300 shadow-sm bg-white">
+                    <div className="bg-gradient-to-r from-emerald-800 via-teal-800 to-emerald-900 px-5 py-3 text-white flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-sm sm:text-base font-bold tracking-wide">
+                          Student Submissions & Response Records
+                        </h3>
+                        <p className="text-xs text-emerald-100 font-medium mt-0.5">
+                          Showing {filteredStudentReports.length} students · Click "View Responses" to inspect exact questions answered, ratings, and student remarks
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white border border-white/20">
+                        {filteredStudentReports.filter(s => s.totalEvaluated > 0).length} Active Responders
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold uppercase tracking-wider text-[11px]">
+                            <th className="py-2.5 px-3 w-10 text-center">#</th>
+                            <th className="py-2.5 px-4 min-w-[180px]">STUDENT NAME & PIN</th>
+                            <th className="py-2.5 px-3 min-w-[130px]">COURSE & BRANCH</th>
+                            <th className="py-2.5 px-3 min-w-[110px] text-center">YEAR & SEM</th>
+                            <th className="py-2.5 px-3 min-w-[90px] text-center">SECTION</th>
+                            <th className="py-2.5 px-3 min-w-[120px] text-center">STATUS</th>
+                            <th className="py-2.5 px-3 min-w-[130px] text-center">PROGRESS</th>
+                            <th className="py-2.5 px-3 min-w-[130px]">LAST SUBMITTED</th>
+                            <th className="py-2.5 px-4 min-w-[140px] text-center">ACTION</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {filteredStudentReports.map((st, idx) => (
+                            <tr
+                              key={st.id || idx}
+                              className={cn(
+                                "hover:bg-emerald-50/30 transition-colors",
+                                st.status === "submitted" ? "bg-white" : st.status === "partial" ? "bg-amber-50/20" : "bg-white"
+                              )}
+                            >
+                              <td className="py-3 px-3 text-center text-slate-400 font-semibold">
+                                {idx + 1}
+                              </td>
+                              <td className="py-3 px-4">
+                                <span className="block font-bold text-navy-900 text-xs">
+                                  {st.studentName}
+                                </span>
+                                <span className="block font-mono text-[11px] text-slate-500">
+                                  {st.studentPin}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className="inline-flex rounded-md bg-blue-50 text-blue-800 px-2 py-0.5 border border-blue-200 text-[11px] font-bold">
+                                  {st.courseName}
+                                </span>
+                                <span className="block text-[11px] text-slate-700 font-semibold mt-0.5">
+                                  {st.branchName}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-800 border border-slate-200">
+                                  {st.romanSemester || `Sem ${st.semester}`}
+                                </span>
+                                <span className="block text-[10px] text-slate-400 mt-0.5">
+                                  Year {st.yearOfStudy}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                <span className="inline-flex rounded-md bg-indigo-50 text-indigo-700 px-2 py-0.5 text-xs font-bold border border-indigo-200">
+                                  Sec {st.sectionName}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                {st.status === "submitted" ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 border border-emerald-200">
+                                    <CheckCircle2 className="h-3 w-3 text-emerald-600" />
+                                    Submitted
+                                  </span>
+                                ) : st.status === "partial" ? (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-[11px] font-bold text-amber-700 border border-amber-200">
+                                    <Clock className="h-3 w-3 text-amber-600" />
+                                    Partial
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-500 border border-slate-200">
+                                    Pending
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                <span className="font-bold text-slate-800 text-xs">
+                                  {st.totalEvaluated}
+                                  {st.totalExpected ? ` / ${st.totalExpected}` : ""}
+                                </span>
+                                <span className="text-[10px] text-slate-400 block">subjects evaluated</span>
+                              </td>
+                              <td className="py-3 px-3 text-slate-600 text-xs">
+                                {st.lastSubmittedAt ? formatDisplayDateTime(st.lastSubmittedAt) : "—"}
+                              </td>
+                              <td className="py-3 px-4 text-center">
+                                {st.totalEvaluated > 0 ? (
+                                  <Button
+                                    size="sm"
+                                    variant="secondary"
+                                    onClick={() => setSelectedStudentReport(st)}
+                                    className="h-7 text-[11px] font-semibold text-emerald-800 border-emerald-300 hover:bg-emerald-50 cursor-pointer flex items-center gap-1.5 mx-auto"
+                                  >
+                                    <Eye className="h-3.5 w-3.5 text-emerald-600" />
+                                    <span>View Responses ({st.totalEvaluated})</span>
+                                  </Button>
+                                ) : (
+                                  <span className="text-slate-400 text-[11px] italic">No submissions</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )}
               </div>
             )}
@@ -2715,6 +3155,223 @@ export function FeedbackReportsView() {
                 variant="secondary"
                 size="sm"
                 onClick={() => setSelectedStudentDetailsItem(null)}
+                className="text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ========================================================================= */}
+      {/* STUDENT SUBMISSION REPORT DETAILS MODAL (WHAT THE STUDENT SENT)           */}
+      {/* ========================================================================= */}
+      {selectedStudentReport ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto backdrop-blur-xs">
+          <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            {/* Modal Header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-gradient-to-r from-emerald-800 via-teal-800 to-navy-900 px-6 py-4 text-white">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white border border-white/25">
+                    {selectedStudentReport.courseName}
+                  </span>
+                  <span className="rounded-full bg-emerald-400/20 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-200 border border-emerald-300/30">
+                    {selectedStudentReport.branchName}
+                  </span>
+                  <span className="rounded-full bg-teal-400/20 px-2.5 py-0.5 text-[10px] font-semibold text-teal-200 border border-teal-300/30">
+                    {selectedStudentReport.romanSemester} · Sec {selectedStudentReport.sectionName}
+                  </span>
+                </div>
+                <h3 className="text-base sm:text-lg font-bold tracking-wide flex items-center gap-2">
+                  <GraduationCap className="h-5 w-5 text-emerald-300" />
+                  <span>{selectedStudentReport.studentName}</span>
+                  <span className="text-xs font-mono font-normal text-emerald-200">
+                    (PIN: {selectedStudentReport.studentPin})
+                  </span>
+                </h3>
+                <p className="text-xs text-emerald-100 font-medium mt-0.5">
+                  Submission Report · {selectedStudentReport.totalEvaluated} Subject Evaluations Submitted
+                  {selectedStudentReport.lastSubmittedAt ? ` · Last: ${formatDisplayDateTime(selectedStudentReport.lastSubmittedAt)}` : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedStudentReport(null)}
+                className="rounded-lg p-1.5 text-white/80 hover:bg-white/20 hover:text-white transition cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body: Evaluated Subjects by Student */}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
+                <div className="flex items-center gap-4">
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Status</span>
+                    <span className="font-bold text-slate-800 capitalize">{selectedStudentReport.status}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Evaluated Subjects</span>
+                    <span className="font-bold text-navy-900">{selectedStudentReport.totalEvaluated} / {selectedStudentReport.totalExpected || selectedStudentReport.totalEvaluated}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase font-bold">Student PIN / Roll</span>
+                    <span className="font-bold font-mono text-slate-800">{selectedStudentReport.studentPin}</span>
+                  </div>
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Responses verified from academic feedback publication
+                </span>
+              </div>
+
+              {selectedStudentReport.evaluations.length === 0 ? (
+                <div className="py-12 text-center text-slate-500">
+                  <AlertCircle className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                  <p className="font-semibold text-slate-700">No submissions recorded for this student</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {selectedStudentReport.evaluations.map((ev, evIdx) => (
+                    <div
+                      key={evIdx}
+                      className="rounded-xl border border-slate-200 bg-white p-4 shadow-2xs hover:border-slate-300 transition-colors"
+                    >
+                      {/* Evaluation Header */}
+                      <div className="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-3 mb-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-navy-100 text-navy-800 font-bold px-2 py-0.5 text-[11px]">
+                              Subject {evIdx + 1}
+                            </span>
+                            <h4 className="text-sm font-bold text-navy-900">
+                              {ev.subjectName}
+                              {ev.subjectCode ? <span className="ml-1.5 font-normal text-slate-500 font-mono text-xs">({ev.subjectCode})</span> : null}
+                            </h4>
+                          </div>
+                          <p className="text-xs text-slate-600 mt-1 flex items-center gap-1.5">
+                            <Users className="h-3.5 w-3.5 text-indigo-600" />
+                            <span>Faculty: <strong className="text-slate-900 font-semibold">{ev.facultyName}</strong></span>
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2">
+                          {ev.facultyRating != null ? (
+                            <span className="inline-flex items-center gap-1 font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 text-xs">
+                              <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+                              Rating: {Number(ev.facultyRating).toFixed(1)} / 5
+                            </span>
+                          ) : null}
+
+                          {ev.unitsCovered ? (
+                            <span className="inline-flex items-center rounded-lg bg-blue-50 text-blue-800 px-2.5 py-1 text-xs font-bold border border-blue-200">
+                              Units: {ev.unitsCovered}
+                            </span>
+                          ) : null}
+
+                          {ev.unitStatus ? (
+                            <span className="inline-flex items-center rounded-lg bg-emerald-50 text-emerald-800 px-2.5 py-1 text-xs font-bold border border-emerald-200">
+                              Status: {ev.unitStatus}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      {/* Question by Question Detailed Responses */}
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs border-collapse">
+                          <thead>
+                            <tr className="bg-slate-50 text-slate-600 font-bold text-[10px] uppercase border-b border-slate-200">
+                              <th className="py-2 px-3 w-8">#</th>
+                              <th className="py-2 px-3">EVALUATION QUESTION</th>
+                              <th className="py-2 px-3 min-w-[180px] text-right">STUDENT RESPONSE</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {questionsToDisplay.map((q, qIdx) => {
+                              const qId = String(q.id);
+                              const ans =
+                                ev.answers[qId] ??
+                                ev.answers[`q_${q.id}`] ??
+                                ev.answers[q.questionText] ??
+                                (q.shortLabel.toLowerCase().includes("rate")
+                                  ? ev.facultyRating
+                                  : q.shortLabel.toLowerCase().includes("unit") && q.shortLabel.toLowerCase().includes("covered")
+                                  ? ev.unitsCovered
+                                  : q.shortLabel.toLowerCase().includes("unit") && q.shortLabel.toLowerCase().includes("status")
+                                  ? ev.unitStatus
+                                  : null);
+
+                              return (
+                                <tr key={q.id ?? qIdx} className="hover:bg-slate-50/50">
+                                  <td className="py-2 px-3 text-slate-400 font-semibold">{qIdx + 1}</td>
+                                  <td className="py-2 px-3 font-medium text-slate-800">
+                                    {q.questionText}
+                                  </td>
+                                  <td className="py-2 px-3 text-right">
+                                    {ans != null && String(ans).trim() !== "" ? (
+                                      q.shortLabel.toLowerCase().includes("rate") ? (
+                                        <span className="inline-flex items-center gap-1 font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
+                                          <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
+                                          {Number(ans).toFixed(1)} / 5
+                                        </span>
+                                      ) : (
+                                        <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded text-xs">
+                                          {String(ans)}
+                                        </span>
+                                      )
+                                    ) : (
+                                      <span className="text-slate-400 italic">Not answered</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Additional Remarks from Answers if present */}
+                      {(() => {
+                        const remarksKeys = ["remarks", "feedback", "comments", "q_6", "6", "suggestions"];
+                        let remarksVal = null;
+                        for (const k of remarksKeys) {
+                          if (ev.answers[k] && typeof ev.answers[k] === "string" && ev.answers[k].trim()) {
+                            remarksVal = ev.answers[k].trim();
+                            break;
+                          }
+                        }
+                        if (!remarksVal) return null;
+                        return (
+                          <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50/70 p-3 text-xs text-blue-900">
+                            <span className="font-bold block text-[10px] uppercase text-blue-800 mb-0.5">
+                              Student Remarks & Suggestions:
+                            </span>
+                            <p className="italic">"{remarksVal}"</p>
+                          </div>
+                        );
+                      })()}
+
+                      <div className="mt-2 text-right text-[10px] text-slate-400">
+                        Submitted at: {formatDisplayDateTime(ev.submittedAt)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-slate-50/80 px-6 py-3">
+              <span className="text-xs text-slate-500">
+                Total {selectedStudentReport.evaluations.length} subject evaluations
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSelectedStudentReport(null)}
                 className="text-xs font-semibold cursor-pointer"
               >
                 Close
