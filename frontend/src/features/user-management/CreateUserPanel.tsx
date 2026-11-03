@@ -326,14 +326,7 @@ export function CreateUserPanel(props: Props) {
 
   return (
     <div>
-      <div className="mb-4 rounded-md border border-blue-100 bg-blue-50/70 px-3 py-2.5 text-xs leading-relaxed text-slate-700">
-        Same order as Student DB: <strong className="font-medium text-navy-900">Import HRMS employee</strong>{" "}
-        (from the employees directory — not HRMS login roles) → assign an{" "}
-        <strong className="font-medium text-navy-900">Academic Portal role</strong> → grant access by
-        college → course → branch → Create User. Sign-in password still comes from HRMS when their
-        login exists.
-      </div>
-
+      
       <div className="grid gap-4 xl:grid-cols-3">
         {/* 1 · User Information */}
         <section className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 shadow-sm">
@@ -395,12 +388,7 @@ export function CreateUserPanel(props: Props) {
               placeholder="HRMS password (not stored here)"
             />
           </label>
-          <p className="text-[11px] leading-relaxed text-slate-500">
-            We import staff from the HRMS <strong className="font-medium">employees</strong> directory.
-            Portal roles are assigned here (HRMS roles are separate). At sign-in we verify the password
-            live from HRMS login when it exists — never stored in Academic Portal.
-          </p>
-
+          
           {selected && !selected.canLink ? (
             <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900">
               {selected.linkBlockReason || "This employee cannot be added yet."}
@@ -431,9 +419,6 @@ export function CreateUserPanel(props: Props) {
               Single Role Hierarchy
             </span>
           </div>
-          <p className="mb-2.5 text-[11px] text-slate-500">
-            Assigned role governs student oversight and authority. Teaching subjects &amp; attendance roster access are automatic from timetable assignments.
-          </p>
           <div className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
             {creatableRoles.map((role) => {
               const active = role.roleKey === roleKey;
@@ -450,22 +435,7 @@ export function CreateUserPanel(props: Props) {
                   ? "L4 · Class & Mentoring"
                   : "L5 · Subject Faculty";
 
-              const description =
-                role.roleKey === "class_teacher"
-                  ? "Class Teacher / Section In-Charge — section students roster, mentoring, alerts & intervention."
-                  : role.roleKey === "staff"
-                  ? "Subject Faculty — dynamic teaching students list and reports strictly from assigned timetable subjects."
-                  : role.roleKey === "hod"
-                  ? "Department HOD — branch-wide student oversight, combined branches & faculty coordination."
-                  : role.roleKey === "principal"
-                  ? "Principal — college-wide institutional governance and leadership oversight."
-                  : role.roleKey === "vice_principal"
-                  ? "Vice Principal — academic operations, section oversight & college-wide analytics."
-                  : role.description ||
-                    (role.isGlobalCapable
-                      ? "Global role — institute-wide authority."
-                      : "College-scoped access for this portal.");
-
+              
               return (
                 <button
                   key={role.roleKey}
@@ -478,7 +448,7 @@ export function CreateUserPanel(props: Props) {
                     setError(null);
                   }}
                   className={cn(
-                    "flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition",
+                    "flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition",
                     active
                       ? cn(style.cardActive, style.border)
                       : "border-slate-200 bg-white/80 hover:border-slate-300",
@@ -486,7 +456,7 @@ export function CreateUserPanel(props: Props) {
                 >
                   <span
                     className={cn(
-                      "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-md",
                       active ? cn(style.iconBg, style.iconText) : "bg-slate-100 text-slate-500",
                     )}
                   >
@@ -498,9 +468,6 @@ export function CreateUserPanel(props: Props) {
                       <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
                         {levelLabel}
                       </span>
-                    </span>
-                    <span className="mt-0.5 block text-[11px] leading-snug text-slate-500">
-                      {description}
                     </span>
                   </span>
                 </button>
@@ -535,10 +502,6 @@ export function CreateUserPanel(props: Props) {
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-xs text-slate-600">
-                Select college(s), then courses, then branches — access is granted individually at each
-                level.
-              </p>
               <div className="max-h-[28rem] space-y-2 overflow-y-auto pr-1">
                 {props.colleges.map((college) => {
                   const checked = Boolean(collegeScopes[college.id]);

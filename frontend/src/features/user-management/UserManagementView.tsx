@@ -485,96 +485,7 @@ export function UserManagementView() {
       <PageHeader
         title="User Management"
         description="Create and manage users with role-based access. Import staff from the HRMS employees directory, then assign Academic Portal roles and scope here."
-        actions={
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => void loadStats()}
-              className="text-xs"
-              title="Refresh User & Role Statistics"
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              Refresh
-            </Button>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 shadow-2xs">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              {stats.active} Active / {stats.total} Total
-            </span>
-          </div>
-        }
       />
-
-      {/* INSTITUTIONAL ROLE HEADCOUNT / STATS CARDS */}
-      <div className="mb-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8 sm:gap-3">
-        {/* Total Users Card */}
-        <StatCard
-          compact
-          label="Total Users"
-          value={stats.total}
-          hint={roleKey === "all" ? "● All Roles" : "Click to view all"}
-          tone="info"
-          selected={roleKey === "all"}
-          onClick={() => {
-            setTab("users");
-            setRoleKey("all");
-          }}
-          className="transition-all hover:-translate-y-0.5"
-        />
-
-        {/* Roles in Hierarchical Order */}
-        {displayedRoleStats.map((r) => {
-          const isSelected = roleKey === r.roleKey;
-          const hLevel = HIERARCHY_ORDER[r.roleKey];
-          const levelTag = hLevel ? `L${hLevel}` : "R";
-          const style = getRoleStyle(r.roleKey);
-
-          return (
-            <StatCard
-              key={r.roleKey}
-              compact
-              badge={
-                <span className={cn("rounded px-1 py-0.2 text-[9px] font-bold uppercase", style.pill)}>
-                  {levelTag}
-                </span>
-              }
-              label={r.label}
-              value={r.totalCount}
-              hint={isSelected ? "● Filter active" : `${r.activeCount} active`}
-              tone={
-                r.roleKey === "super_admin"
-                  ? "default"
-                  : r.roleKey === "principal" || r.roleKey === "vice_principal"
-                  ? "warning"
-                  : r.roleKey === "hod"
-                  ? "success"
-                  : "info"
-              }
-              selected={isSelected}
-              onClick={() => {
-                setTab("users");
-                setRoleKey(isSelected ? "all" : r.roleKey);
-              }}
-              className="transition-all hover:-translate-y-0.5"
-            />
-          );
-        })}
-
-        {/* Active Accounts Card */}
-        <StatCard
-          compact
-          label="Active Users"
-          value={stats.active}
-          hint={stats.inactive > 0 ? `${stats.inactive} inactive` : "100% active"}
-          tone="success"
-          selected={status === "active"}
-          onClick={() => {
-            setTab("users");
-            setStatus((prev) => (prev === "active" ? "all" : "active"));
-          }}
-          className="transition-all hover:-translate-y-0.5"
-        />
-      </div>
 
       {syncResult && (
         <div
@@ -598,44 +509,63 @@ export function UserManagementView() {
         </div>
       )}
 
-      <div className="mb-4 flex gap-2 border-b border-border">
-        {canManage ? (
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-border">
+        <div className="flex gap-2">
+          {canManage ? (
+            <button
+              type="button"
+              className={`border-b-2 px-3 py-2 text-sm font-medium ${
+                tab === "create"
+                  ? "border-navy-800 text-navy-900"
+                  : "border-transparent text-slate-500 hover:text-navy-800"
+              }`}
+              onClick={() => setTab("create")}
+            >
+              Create User
+            </button>
+          ) : null}
           <button
             type="button"
             className={`border-b-2 px-3 py-2 text-sm font-medium ${
-              tab === "create"
+              tab === "users"
                 ? "border-navy-800 text-navy-900"
                 : "border-transparent text-slate-500 hover:text-navy-800"
             }`}
-            onClick={() => setTab("create")}
+            onClick={() => setTab("users")}
           >
-            Create User
+            All Users ({stats.total})
           </button>
-        ) : null}
-        <button
-          type="button"
-          className={`border-b-2 px-3 py-2 text-sm font-medium ${
-            tab === "users"
-              ? "border-navy-800 text-navy-900"
-              : "border-transparent text-slate-500 hover:text-navy-800"
-          }`}
-          onClick={() => setTab("users")}
-        >
-          All Users ({stats.total})
-        </button>
-        {canConfigureRoles ? (
-          <button
-            type="button"
-            className={`border-b-2 px-3 py-2 text-sm font-medium ${
-              tab === "roles"
-                ? "border-navy-800 text-navy-900"
-                : "border-transparent text-slate-500 hover:text-navy-800"
-            }`}
-            onClick={() => setTab("roles")}
+          {canConfigureRoles ? (
+            <button
+              type="button"
+              className={`border-b-2 px-3 py-2 text-sm font-medium ${
+                tab === "roles"
+                  ? "border-navy-800 text-navy-900"
+                  : "border-transparent text-slate-500 hover:text-navy-800"
+              }`}
+              onClick={() => setTab("roles")}
+            >
+              Role Configuration
+            </button>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2 pb-1.5">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => void loadStats()}
+            className="text-xs"
+            title="Refresh User & Role Statistics"
           >
-            Role Configuration
-          </button>
-        ) : null}
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            Refresh
+          </Button>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800 shadow-2xs">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            {stats.active} Active / {stats.total} Total
+          </span>
+        </div>
       </div>
 
       {tab === "create" && canManage ? (
