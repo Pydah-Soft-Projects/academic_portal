@@ -1533,6 +1533,7 @@ export function FeedbackReportsView() {
       if (course && course !== "all") queryParams.set("course", course);
       if (branch && branch !== "all") queryParams.set("branch", branch);
       if (semester && semester !== "all") queryParams.set("semester", semester);
+      queryParams.set("_t", String(Date.now()));
 
       const qs = queryParams.toString();
       const url = `/settings/feedback-forms/reports${qs ? `?${qs}` : ""}`;
@@ -1805,7 +1806,7 @@ export function FeedbackReportsView() {
       setIsPublishModalOpen(false);
       setActionNotice(`Feedback form "${createdPub.title}" has been published successfully!`);
       setSelectedPublicationId(createdPub.id);
-      await fetchReport(createdPub.id, "all", "all");
+      await fetchReport(createdPub.id, "all", "all", "all");
     } catch (err) {
       setPublishError(err instanceof Error ? err.message : "Error publishing feedback form");
     } finally {
@@ -1857,7 +1858,7 @@ export function FeedbackReportsView() {
 
       setIsEditDatesOpen(false);
       setActionNotice("Feedback session dates & status updated successfully!");
-      await fetchReport(report.publication.id, selectedBranch, selectedSemester);
+      await fetchReport(report.publication.id, selectedCourse, selectedBranch, selectedSemester);
     } catch (err) {
       setEditDatesError(err instanceof Error ? err.message : "Error updating dates");
     } finally {
@@ -1879,7 +1880,7 @@ export function FeedbackReportsView() {
       }
       setActionNotice(`Publication "${title}" deleted successfully.`);
       setSelectedPublicationId(undefined);
-      await fetchReport(undefined, "all", "all");
+      await fetchReport(undefined, "all", "all", "all");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete publication");
     }
@@ -1930,7 +1931,7 @@ export function FeedbackReportsView() {
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => void fetchReport(selectedPublicationId, selectedBranch, selectedSemester)}
+            onClick={() => void fetchReport(selectedPublicationId, selectedCourse, selectedBranch, selectedSemester)}
             className="flex items-center gap-1.5"
           >
             <RotateCcw className="h-3.5 w-3.5" />

@@ -1133,7 +1133,15 @@ export async function getStaffSubjectsForScope(filter: {
 }): Promise<MappedStaffSubject[]> {
   await ensureFeedbackFormsTable();
 
-  const conds: string[] = ["te.subject_name IS NOT NULL", "sl.display_name IS NOT NULL"];
+  const conds: string[] = [
+    "te.subject_name IS NOT NULL",
+    "TRIM(te.subject_name) != ''",
+    "te.subject_name != 'null'",
+    "sl.display_name IS NOT NULL",
+    "TRIM(sl.display_name) != ''",
+    "sl.display_name != 'null'",
+    "(tp.status = 'published' OR tp.status IS NULL)",
+  ];
   const params: unknown[] = [];
 
   if (filter.academicYear && filter.academicYear.trim() !== "" && filter.academicYear !== "all") {
@@ -1228,9 +1236,9 @@ export async function getStaffSubjectsForScope(filter: {
     LEFT JOIN ap_staff_link sl ON sl.id = te.faculty_staff_link_id
     WHERE ${conds.join(" AND ")}
     GROUP BY te.subject_id, te.subject_code, te.subject_name, sl.id, sl.display_name, sl.employee_code,
-             tp.college_id, tp.course_id, tp.branch_id, tp.semester_number, tp.section_name, tp.batch, tp.academic_year_label
-    ORDER BY sl.display_name ASC, te.subject_name ASC
-    LIMIT 200
+             tp.college_id, tp.course_id, tp.branch_id, tp.year_of_study, tp.semester_number, tp.section_name, tp.batch, tp.academic_year_label
+    ORDER BY tp.course_id, tp.branch_id, tp.year_of_study, tp.section_name, sl.display_name ASC, te.subject_name ASC
+    LIMIT 5000
     `,
     params,
   );
@@ -1246,6 +1254,7 @@ export async function getStaffSubjectsForScope(filter: {
     subjectName: r.subjectName,
     sectionName: r.sectionName || null,
     semester: r.semester ? Number(r.semester) : null,
+    yearOfStudy: (r as any).yearOfStudy ? Number((r as any).yearOfStudy) : null,
     branchId: r.branchId ? Number(r.branchId) : null,
     courseId: r.courseId ? Number(r.courseId) : null,
     collegeId: r.collegeId ? Number(r.collegeId) : null,
@@ -1699,14 +1708,38 @@ export async function getFeedbackReportData(
   // Real student headcount helper per section from student_database
   const getStudentCount = await loadSectionHeadcountHelper();
 
+  // Fetch full live published timetable allocations to guarantee no capping or missing subjects
+  const liveAllocations = await getStaffSubjectsForScope({
+    academicYear: targetPub?.academicYear || currentAcademicYear,
+    collegeId: targetPub?.collegeId,
+  });
+
+  const mergedMap = new Map<string, MappedStaffSubject>();
+  for (const item of liveAllocations) {
+    const k = `${item.branchId || ""}|${item.semester || ""}|${(item.sectionName || "").trim().toUpperCase()}|${(item.subjectCode || item.subjectName || "").trim().toUpperCase()}|${(item.facultyName || "").trim().toUpperCase()}`;
+    mergedMap.set(k, item);
+  }
+  if (targetPub?.mappedStaffSubjects) {
+    for (const item of targetPub.mappedStaffSubjects) {
+      const k = `${item.branchId || ""}|${item.semester || ""}|${(item.sectionName || "").trim().toUpperCase()}|${(item.subjectCode || item.subjectName || "").trim().toUpperCase()}|${(item.facultyName || "").trim().toUpperCase()}`;
+      if (!mergedMap.has(k)) {
+        mergedMap.set(k, item);
+      }
+    }
+  }
+  const mappedSubjects = Array.from(mergedMap.values());
+  if (targetPub) {
+    targetPub.mappedStaffSubjects = mappedSubjects;
+  }
+
   // Build submission progress grouped by faculty+subject (sections combined into one row)
   type GroupedEntry = FeedbackReportData["submissionProgress"][number];
   const groupMap = new Map<string, GroupedEntry>();
 
-  if (targetPub?.mappedStaffSubjects && targetPub.mappedStaffSubjects.length > 0) {
+  if (mappedSubjects && mappedSubjects.length > 0) {
     const seenSection = new Set<string>(); // dedup individual section entries
 
-    for (const item of targetPub.mappedStaffSubjects) {
+    for (const item of mappedSubjects) {
       // Check expected students enrolled in this section for this branch/batch
       const expectedCount = getStudentCount(item.branchId, item.batch, item.sectionName);
 
@@ -1898,8 +1931,6 @@ export async function getFeedbackReportData(
 
   const sectionGroupMap = new Map<string, SectionGroup>();
   const facultyGroupMap = new Map<string, FacultyGroup>();
-
-  const mappedSubjects = targetPub?.mappedStaffSubjects || [];
   const seenAlloc = new Set<string>();
 
   for (const item of mappedSubjects) {
