@@ -4122,7 +4122,7 @@ export function FeedbackReportsView() {
                   />
                   <Button
                     type="button"
-                    variant="outline"
+                    variant="secondary"
                     onClick={async () => {
                       const url = getSdmsFeedbackUrl(publishedSuccessPub.id);
                       try {
