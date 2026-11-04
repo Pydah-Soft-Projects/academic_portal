@@ -3638,6 +3638,24 @@ export function FeedbackReportsView() {
                   <Edit3 className="h-3.5 w-3.5" />
                   Edit Dates
                 </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(getSdmsFeedbackUrl(activePublication.id));
+                      setActionNotice(`Student link for "${activePublication.title}" copied!`);
+                    } catch {
+                      setError("Could not copy the student feedback link. Check clipboard permissions and try again.");
+                    }
+                  }}
+                  className="bg-white/10 hover:bg-white/20 text-white border-white/20 text-xs flex items-center justify-center gap-1.5"
+                  title="Copy student feedback link"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy Link
+                </Button>
                 <button
                   type="button"
                   onClick={() => void handleDeletePublication(activePublication.id, activePublication.title)}
