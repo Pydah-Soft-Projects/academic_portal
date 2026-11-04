@@ -438,12 +438,34 @@ function normalizeSqlDate(val: string | Date | unknown): string {
   return str.replace("T", " ").slice(0, 19);
 }
 
+function getCurrentIndianDateTime(): string {
+  const parts: Record<string, string> = {};
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  for (const part of formatter.formatToParts(new Date())) {
+    parts[part.type] = part.value;
+  }
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
 function toIsoString(val: string | Date | unknown): string {
   if (!val) return new Date().toISOString();
   if (val instanceof Date) return val.toISOString();
   const d = new Date(val as string);
   if (!isNaN(d.getTime())) return d.toISOString();
   return String(val);
+}
+
+function toPublicationDateTime(val: string | Date | unknown): string {
+  return normalizeSqlDate(val).replace(" ", "T");
 }
 
 function parseOptions(raw: string | string[] | null): string[] {
@@ -883,11 +905,11 @@ export async function listFeedbackPublications(): Promise<FeedbackPublication[]>
     ORDER BY p.id DESC
   `);
 
-  const now = Date.now();
+  const now = getCurrentIndianDateTime();
 
   return rows.map((r) => {
-    const start = new Date(r.start_date).getTime();
-    const end = new Date(r.end_date).getTime();
+    const start = normalizeSqlDate(r.start_date);
+    const end = normalizeSqlDate(r.end_date);
     let status: FeedbackPublication["status"] = "closed";
     if (Number(r.is_active) === 1) {
       if (now < start) status = "scheduled";
@@ -944,8 +966,8 @@ export async function listFeedbackPublications(): Promise<FeedbackPublication[]>
       mappedStaffSubjects,
       academicYear: r.academic_year,
       semester: r.semester ? Number(r.semester) : null,
-      startDate: toIsoString(r.start_date),
-      endDate: toIsoString(r.end_date),
+      startDate: toPublicationDateTime(r.start_date),
+      endDate: toPublicationDateTime(r.end_date),
       isActive: Number(r.is_active) === 1,
       status,
       responseCount: Number(r.response_count || 0),
