@@ -382,11 +382,34 @@ type ResponseRow = RowDataPacket & {
 let tableReady: Promise<void> | null = null;
 
 function normalizeSqlDate(val: string | Date | unknown): string {
-  if (!val) return new Date().toISOString().slice(0, 19).replace("T", " ");
+  if (!val) {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  }
   if (val instanceof Date) {
-    return val.toISOString().slice(0, 19).replace("T", " ");
+    const year = val.getFullYear();
+    const month = String(val.getMonth() + 1).padStart(2, "0");
+    const day = String(val.getDate()).padStart(2, "0");
+    const hours = String(val.getHours()).padStart(2, "0");
+    const min = String(val.getMinutes()).padStart(2, "0");
+    const sec = String(val.getSeconds()).padStart(2, "0");
+    return `${year}-${month}-${day} ${hours}:${min}:${sec}`;
   }
   const str = String(val).trim();
+  // If already standard ISO or datetime-local format: "YYYY-MM-DDTHH:mm(:ss)?" or "YYYY-MM-DD HH:mm(:ss)?"
+  const isoLocalMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (isoLocalMatch) {
+    const [, y, m, d, hh, mm, ss] = isoLocalMatch;
+    return `${y}-${m}-${d} ${String(hh).padStart(2, "0")}:${mm}:${ss || "00"}`;
+  }
+
+  // If date-only: "YYYY-MM-DD"
+  const dateOnlyMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    return `${dateOnlyMatch[1]}-${dateOnlyMatch[2]}-${dateOnlyMatch[3]} 00:00:00`;
+  }
+
+
   const ddmmyyyy = str.match(/^(\d{2})-(\d{2})-(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(AM|PM))?)?$/i);
   if (ddmmyyyy) {
     const day = ddmmyyyy[1];
@@ -403,7 +426,13 @@ function normalizeSqlDate(val: string | Date | unknown): string {
 
   const d = new Date(str);
   if (!isNaN(d.getTime())) {
-    return d.toISOString().slice(0, 19).replace("T", " ");
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const hours = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    const sec = String(d.getSeconds()).padStart(2, "0");
+    return `${year}-${month}-${day} ${hours}:${min}:${sec}`;
   }
 
   return str.replace("T", " ").slice(0, 19);

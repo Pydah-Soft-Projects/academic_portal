@@ -35,7 +35,15 @@ import {
   Copy,
   ExternalLink,
   Link as LinkIcon,
+  Download,
 } from "lucide-react";
+import {
+  downloadExcelWorkbook,
+  type ExcelWorkbookOptions,
+  type ExcelWorksheet,
+  type ExcelRow,
+  type ExcelCell,
+} from "@/lib/excel-service";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { ContentCardSkeleton } from "@/components/ui/CardSkeleton";
@@ -334,7 +342,17 @@ export type FeedbackReportData = {
 /** Format date string into "DD-MM-YYYY hh:mm A" */
 function formatDisplayDateTime(dateStr: string): string {
   if (!dateStr) return "—";
-  const d = new Date(dateStr);
+  const str = String(dateStr).trim();
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    const [, year, month, day, strH, strM] = match;
+    let hours = parseInt(strH, 10);
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${day}-${month}-${year} ${String(hours).padStart(2, "0")}:${strM} ${ampm}`;
+  }
+  const d = new Date(str);
   if (isNaN(d.getTime())) return dateStr;
 
   const day = String(d.getDate()).padStart(2, "0");
@@ -354,7 +372,14 @@ function formatDisplayDateTime(dateStr: string): string {
 /** Convert ISO or any Date to "YYYY-MM-DDTHH:mm" for datetime-local input */
 function toInputDateTime(dateStr?: string): string {
   if (!dateStr) return "";
-  const d = new Date(dateStr);
+  const str = String(dateStr).trim();
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(str)) {
+    return str.slice(0, 16);
+  }
+  if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}/.test(str)) {
+    return str.slice(0, 16).replace(" ", "T");
+  }
+  const d = new Date(str);
   if (isNaN(d.getTime())) return "";
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, "0");
@@ -1674,6 +1699,22 @@ export function FeedbackReportsView() {
 
   // Edit Dates Modal state
   const [isEditDatesOpen, setIsEditDatesOpen] = useState(false);
+  const [editingPublication, setEditingPublication] = useState<FeedbackPublication | null>(null);
+  const [isManageSessionsModalOpen, setIsManageSessionsModalOpen] = useState(false);
+
+  // Download Reports Modal state
+  const [isDownloadReportsModalOpen, setIsDownloadReportsModalOpen] = useState(false);
+  const [downloadScope, setDownloadScope] = useState<"master" | "college" | "course" | "branch" | "all_faculty" | "individual_faculty">("master");
+  const [downloadFormat, setDownloadFormat] = useState<"excel" | "csv">("excel");
+  const [selectedDownloadCollegeId, setSelectedDownloadCollegeId] = useState<number | "all">("all");
+  const [selectedDownloadCourseId, setSelectedDownloadCourseId] = useState<number | "all">("all");
+  const [selectedDownloadBranch, setSelectedDownloadBranch] = useState<string>("all");
+  const [selectedDownloadYear, setSelectedDownloadYear] = useState<string>("all");
+  const [selectedDownloadSemester, setSelectedDownloadSemester] = useState<string>("all");
+  const [selectedDownloadSection, setSelectedDownloadSection] = useState<string>("all");
+  const [selectedDownloadFaculty, setSelectedDownloadFaculty] = useState<string>("all");
+  const [selectedDownloadFacultyName, setSelectedDownloadFacultyName] = useState<string>("");
+  const [isExporting, setIsExporting] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editStartDate, setEditStartDate] = useState("");
   const [editEndDate, setEditEndDate] = useState("");
@@ -1699,6 +1740,12 @@ export function FeedbackReportsView() {
     return report.publications.filter((p) => p.status === "active" || p.isActive);
   }, [report?.publications]);
 
+  // Currently selected publication object from publications list
+  const selectedPubObject = useMemo(() => {
+    if (!report?.publications) return report?.publication || null;
+    return report.publications.find((p) => p.id === selectedPublicationId) || report.publication || (report.publications.length > 0 ? report.publications[0] : null);
+  }, [report?.publications, report?.publication, selectedPublicationId]);
+
   const printAreaRef = useRef<HTMLDivElement>(null);
 
   // Filter courses based on selected colleges
@@ -1720,6 +1767,26 @@ export function FeedbackReportsView() {
     }
     return scopedAvailableBranches;
   }, [scopedAvailableBranches, selectedCourseIds, selectedCollegeIds, relevantCourses]);
+
+  // Courses available for download filter (scoped by selected college if any)
+  const coursesForDownload = useMemo(() => {
+    if (!scopedAvailableCourses.length) return [];
+    if (selectedDownloadCollegeId === "all") return scopedAvailableCourses;
+    return scopedAvailableCourses.filter((c) => c.collegeId === selectedDownloadCollegeId);
+  }, [scopedAvailableCourses, selectedDownloadCollegeId]);
+
+  // Branches available for download filter (scoped by selected course if any)
+  const branchesForDownload = useMemo(() => {
+    if (!scopedAvailableBranches.length) return [];
+    if (selectedDownloadCourseId !== "all") {
+      return scopedAvailableBranches.filter((b) => b.courseId === selectedDownloadCourseId);
+    }
+    if (selectedDownloadCollegeId !== "all") {
+      const allowedCourseIds = new Set(coursesForDownload.map((c) => c.id));
+      return scopedAvailableBranches.filter((b) => b.courseId && allowedCourseIds.has(b.courseId));
+    }
+    return scopedAvailableBranches;
+  }, [scopedAvailableBranches, selectedDownloadCourseId, selectedDownloadCollegeId, coursesForDownload]);
 
   // Load report data
   const fetchReport = async (pubId?: number, course?: string, branch?: string, semester?: string) => {
@@ -2015,25 +2082,42 @@ export function FeedbackReportsView() {
     }
   };
 
-  const openEditDatesModal = () => {
-    if (!report?.publication) return;
+  const openEditDatesModal = (pub?: FeedbackPublication) => {
+    const target = pub || selectedPubObject || activePublication || report?.publication || null;
+    if (!target) return;
+    setEditingPublication(target);
     setEditDatesError(null);
-    setEditTitle(report.publication.title);
-    setEditStartDate(toInputDateTime(report.publication.startDate));
-    setEditEndDate(toInputDateTime(report.publication.endDate));
-    setEditIsActive(report.publication.isActive);
+    setEditTitle(target.title);
+    setEditStartDate(toInputDateTime(target.startDate));
+    setEditEndDate(toInputDateTime(target.endDate));
+    setEditIsActive(target.isActive);
     setIsEditDatesOpen(true);
   };
 
   const handleUpdateDatesSubmit = async () => {
-    if (!report?.publication) return;
+    const target = editingPublication || selectedPubObject || activePublication || report?.publication;
+    if (!target) {
+      setEditDatesError("No publication selected to update.");
+      return;
+    }
     setEditDatesError(null);
     if (!editTitle.trim()) {
-      setEditDatesError("Title cannot be empty.");
+      setEditDatesError("Session title cannot be empty.");
       return;
     }
     if (!editStartDate || !editEndDate) {
-      setEditDatesError("Start Date and End Date are required.");
+      setEditDatesError("Both Start Date & Time and End Date & Time are required.");
+      return;
+    }
+
+    const startMs = new Date(editStartDate).getTime();
+    const endMs = new Date(editEndDate).getTime();
+    if (isNaN(startMs) || isNaN(endMs)) {
+      setEditDatesError("Please provide valid dates.");
+      return;
+    }
+    if (endMs <= startMs) {
+      setEditDatesError("End Date & Time (Deadline) must be strictly after Start Date & Time.");
       return;
     }
 
@@ -2046,7 +2130,7 @@ export function FeedbackReportsView() {
         isActive: editIsActive,
       };
 
-      const res = await apiFetch(`/settings/feedback-publications/${report.publication.id}`, {
+      const res = await apiFetch(`/settings/feedback-publications/${target.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -2058,8 +2142,9 @@ export function FeedbackReportsView() {
       }
 
       setIsEditDatesOpen(false);
-      setActionNotice("Feedback session dates & status updated successfully!");
-      await fetchReport(report.publication.id, selectedCourse, selectedBranch, selectedSemester);
+      setActionNotice(`Feedback session "${payload.title}" schedule updated successfully!`);
+      setSelectedPublicationId(target.id);
+      await fetchReport(target.id, selectedCourse, selectedBranch, selectedSemester);
     } catch (err) {
       setEditDatesError(err instanceof Error ? err.message : "Error updating dates");
     } finally {
@@ -2084,6 +2169,1213 @@ export function FeedbackReportsView() {
       await fetchReport(undefined, "all", "all", "all");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete publication");
+    }
+  };
+
+  /* ───────────────────────────────────────────────────────────────────────── */
+  /* REPORTS DOWNLOAD ENGINE (COLLEGE, COURSE, BRANCH, INDIVIDUAL FACULTY)     */
+  /* ───────────────────────────────────────────────────────────────────────── */
+
+  const downloadCsvFile = (filename: string, headers: string[], rows: (string | number | null | undefined)[][]) => {
+    const csvRows = [
+      headers.map((h) => `"${String(h ?? "").replace(/"/g, '""')}"`).join(","),
+      ...rows.map((row) =>
+        row.map((val) => `"${String(val ?? "").replace(/"/g, '""')}"`).join(",")
+      ),
+    ];
+    const csvContent = "\uFEFF" + csvRows.join("\r\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const buildCollegeWiseData = (filterCollegeId?: number | "all") => {
+    if (!report) return { headers: [], rows: [], excelRows: [] };
+    const colleges = (report.availableColleges || []).filter(
+      (c) => filterCollegeId === "all" || !filterCollegeId || c.id === filterCollegeId
+    );
+
+    const headers = [
+      "S.No",
+      "College Name",
+      "College Code",
+      "Courses Evaluated",
+      "Branches Evaluated",
+      "Allocated Faculty-Subjects",
+      "Total Student Responses",
+      "Average Rating (★ / 5.00)",
+      "Rating Satisfaction %",
+      "Average Units Covered",
+      "Evaluation Status",
+    ];
+
+    const rows: (string | number)[][] = [];
+    const excelRows: ExcelRow[] = [
+      {
+        cells: headers.map((h) => ({ value: h, styleId: "ColHeaderNavy" })),
+      },
+    ];
+
+    colleges.forEach((col, idx) => {
+      const colCourses = (report.availableCourses || []).filter((cr) => cr.collegeId === col.id);
+      const colCourseIds = new Set(colCourses.map((cr) => cr.id));
+      const colBranches = (report.availableBranches || []).filter((b) => b.courseId && colCourseIds.has(b.courseId));
+      const colBranchNames = new Set(colBranches.map((b) => b.name.toUpperCase()));
+
+      const matchedSections = (report.sectionGroups || []).filter(
+        (sg) =>
+          colBranchNames.has(sg.branchName.toUpperCase()) ||
+          colCourses.some((cr) => cr.name.toUpperCase() === sg.courseName.toUpperCase())
+      );
+
+      const matchedFacultySubs = (report.submissionProgress || []).filter((sp) =>
+        sp.sections.some((sec) => sec.branchName && colBranchNames.has(sec.branchName.toUpperCase()))
+      );
+
+      const totalSubmissions = matchedSections.reduce((acc, sg) => acc + (sg.totalSubmissions || 0), 0);
+      const totalAllocations =
+        matchedFacultySubs.length || matchedSections.reduce((acc, sg) => acc + (sg.subjectCount || 0), 0);
+
+      const ratings = matchedFacultySubs
+        .map((sp) => sp.averageRating)
+        .filter((r): r is number => r != null && r > 0);
+      const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null;
+
+      const units = matchedFacultySubs
+        .map((sp) => sp.averageUnitsCovered)
+        .filter((u): u is number => u != null && u > 0);
+      const avgUnits = units.length > 0 ? units.reduce((a, b) => a + b, 0) / units.length : null;
+
+      const satPct = avgRating ? Math.round((avgRating / 5) * 100) : null;
+      const status =
+        totalSubmissions > 0 ? (avgRating && avgRating >= 4 ? "Excellent" : "Active") : "No Responses";
+
+      const rowData = [
+        idx + 1,
+        col.name,
+        col.code || "—",
+        colCourses.length,
+        colBranches.length,
+        totalAllocations,
+        totalSubmissions,
+        avgRating != null ? avgRating.toFixed(2) : "—",
+        satPct != null ? `${satPct}%` : "—",
+        avgUnits != null ? avgUnits.toFixed(2) : "—",
+        status,
+      ];
+      rows.push(rowData);
+
+      excelRows.push({
+        cells: [
+          { value: idx + 1, styleId: "CellCenter" },
+          { value: col.name, styleId: "CellNormal" },
+          { value: col.code || "—", styleId: "CellCenter" },
+          { value: colCourses.length, styleId: "CellCenter" },
+          { value: colBranches.length, styleId: "CellCenter" },
+          { value: totalAllocations, styleId: "CellCenter" },
+          { value: totalSubmissions, styleId: "CellBoldCenter" },
+          { value: avgRating != null ? Number(avgRating.toFixed(2)) : "—", styleId: "CellCenter" },
+          { value: satPct != null ? `${satPct}%` : "—", styleId: "CellCenter" },
+          { value: avgUnits != null ? Number(avgUnits.toFixed(2)) : "—", styleId: "CellCenter" },
+          { value: status, styleId: status === "Excellent" ? "CellPresent" : "CellNormal" },
+        ],
+      });
+    });
+
+    return { headers, rows, excelRows };
+  };
+
+  const buildCourseWiseData = (filterCourseId?: number | "all") => {
+    if (!report) return { headers: [], rows: [], excelRows: [] };
+    const courses = (report.availableCourses || []).filter(
+      (c) => filterCourseId === "all" || !filterCourseId || c.id === filterCourseId
+    );
+    const collegeMap = new Map((report.availableColleges || []).map((col) => [col.id, col.name]));
+
+    const headers = [
+      "S.No",
+      "Course Name",
+      "Course Code",
+      "College Name",
+      "Branches in Course",
+      "Allocated Subjects",
+      "Total Student Responses",
+      "Average Rating (★ / 5.00)",
+      "Rating Satisfaction %",
+      "Average Units Covered",
+      "Status",
+    ];
+
+    const rows: (string | number)[][] = [];
+    const excelRows: ExcelRow[] = [
+      {
+        cells: headers.map((h) => ({ value: h, styleId: "ColHeaderNavy" })),
+      },
+    ];
+
+    courses.forEach((cr, idx) => {
+      const colName = collegeMap.get(cr.collegeId) || "—";
+      const crBranches = (report.availableBranches || []).filter((b) => b.courseId === cr.id);
+      const crBranchNames = new Set(crBranches.map((b) => b.name.toUpperCase()));
+
+      const matchedSections = (report.sectionGroups || []).filter(
+        (sg) =>
+          sg.courseName.toUpperCase() === cr.name.toUpperCase() ||
+          crBranchNames.has(sg.branchName.toUpperCase())
+      );
+
+      const matchedProgress = (report.submissionProgress || []).filter((sp) =>
+        sp.sections.some((sec) => sec.branchName && crBranchNames.has(sec.branchName.toUpperCase()))
+      );
+
+      const totalSubmissions = matchedSections.reduce((acc, sg) => acc + (sg.totalSubmissions || 0), 0);
+      const totalAllocations =
+        matchedProgress.length || matchedSections.reduce((acc, sg) => acc + (sg.subjectCount || 0), 0);
+
+      const ratings = matchedProgress
+        .map((sp) => sp.averageRating)
+        .filter((r): r is number => r != null && r > 0);
+      const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : null;
+
+      const units = matchedProgress
+        .map((sp) => sp.averageUnitsCovered)
+        .filter((u): u is number => u != null && u > 0);
+      const avgUnits = units.length > 0 ? units.reduce((a, b) => a + b, 0) / units.length : null;
+
+      const satPct = avgRating ? Math.round((avgRating / 5) * 100) : null;
+      const status =
+        totalSubmissions > 0 ? (avgRating && avgRating >= 4 ? "Excellent" : "Active") : "No Responses";
+
+      const rowData = [
+        idx + 1,
+        cr.name,
+        cr.code || "—",
+        colName,
+        crBranches.length,
+        totalAllocations,
+        totalSubmissions,
+        avgRating != null ? avgRating.toFixed(2) : "—",
+        satPct != null ? `${satPct}%` : "—",
+        avgUnits != null ? avgUnits.toFixed(2) : "—",
+        status,
+      ];
+      rows.push(rowData);
+
+      excelRows.push({
+        cells: [
+          { value: idx + 1, styleId: "CellCenter" },
+          { value: cr.name, styleId: "CellNormal" },
+          { value: cr.code || "—", styleId: "CellCenter" },
+          { value: colName, styleId: "CellNormal" },
+          { value: crBranches.length, styleId: "CellCenter" },
+          { value: totalAllocations, styleId: "CellCenter" },
+          { value: totalSubmissions, styleId: "CellBoldCenter" },
+          { value: avgRating != null ? Number(avgRating.toFixed(2)) : "—", styleId: "CellCenter" },
+          { value: satPct != null ? `${satPct}%` : "—", styleId: "CellCenter" },
+          { value: avgUnits != null ? Number(avgUnits.toFixed(2)) : "—", styleId: "CellCenter" },
+          { value: status, styleId: status === "Excellent" ? "CellPresent" : "CellNormal" },
+        ],
+      });
+    });
+
+    return { headers, rows, excelRows };
+  };
+
+  const buildBranchWiseData = (filterBranch?: string) => {
+    if (!report) return { headers: [], rows: [], excelRows: [] };
+    const groups = (report.sectionGroups || []).filter(
+      (sg) => !filterBranch || filterBranch === "all" || sg.branchName.toLowerCase() === filterBranch.toLowerCase()
+    );
+
+    const headers = [
+      "S.No",
+      "Branch / Department",
+      "Course",
+      "Semester / Year",
+      "Section",
+      "Subject",
+      "Subject Code",
+      "Faculty Instructor",
+      "Evaluations Count",
+      "Faculty Rating (★ / 5.00)",
+      "Units Covered",
+      "Unit Status",
+    ];
+
+    const rows: (string | number)[][] = [];
+    const excelRows: ExcelRow[] = [
+      {
+        cells: headers.map((h) => ({ value: h, styleId: "ColHeaderEmerald" })),
+      },
+    ];
+
+    let sNo = 1;
+    groups.forEach((group) => {
+      group.subjects.forEach((sub) => {
+        const qRating = sub.questions?.find(
+          (q) => q.questionType === "rating_scale" || q.questionText.toLowerCase().includes("rate")
+        );
+        const qUnits = sub.questions?.find(
+          (q) => q.questionText.toLowerCase().includes("unit")
+        );
+        const qStatus = sub.questions?.find(
+          (q) => q.questionText.toLowerCase().includes("status")
+        );
+
+        const ratingVal = qRating?.avgScore != null ? Number(qRating.avgScore).toFixed(2) : "—";
+        const unitsVal = qUnits?.abstract || (qUnits?.avgScore != null ? String(qUnits.avgScore) : "—");
+        const statusVal = qStatus?.abstract || "—";
+
+        const rowData = [
+          sNo++,
+          group.branchName,
+          group.courseName,
+          group.romanSemester,
+          group.sectionName ? `Sec ${group.sectionName}` : "All",
+          sub.subjectName,
+          sub.subjectCode || "—",
+          sub.facultyName,
+          sub.count,
+          ratingVal,
+          unitsVal,
+          statusVal,
+        ];
+        rows.push(rowData);
+
+        excelRows.push({
+          cells: [
+            { value: sNo - 1, styleId: "CellCenter" },
+            { value: group.branchName, styleId: "CellNormal" },
+            { value: group.courseName, styleId: "CellNormal" },
+            { value: group.romanSemester, styleId: "CellCenter" },
+            { value: group.sectionName ? `Sec ${group.sectionName}` : "All", styleId: "CellCenter" },
+            { value: sub.subjectName, styleId: "CellNormal" },
+            { value: sub.subjectCode || "—", styleId: "CellCenter" },
+            { value: sub.facultyName, styleId: "CellNormal" },
+            { value: sub.count, styleId: "CellBoldCenter" },
+            { value: ratingVal !== "—" ? Number(ratingVal) : "—", styleId: "CellCenter" },
+            { value: unitsVal, styleId: "CellCenter" },
+            { value: statusVal, styleId: "CellCenter" },
+          ],
+        });
+      });
+    });
+
+    return { headers, rows, excelRows };
+  };
+
+  const buildFacultyData = (targetFacultyName?: string) => {
+    if (!report) return { headers: [], rows: [], excelRows: [], targetGroup: null };
+    const facGroups = (report.facultyGroups || []).filter(
+      (fg) =>
+        !targetFacultyName ||
+        targetFacultyName === "all" ||
+        fg.facultyName.toLowerCase() === targetFacultyName.toLowerCase()
+    );
+
+    const headers = [
+      "S.No",
+      "Faculty Name",
+      "Employee Code",
+      "Subject Name",
+      "Subject Code",
+      "Course",
+      "Branch",
+      "Semester",
+      "Section",
+      "Evaluations Count",
+      "Average Rating (★ / 5.00)",
+      "Satisfaction %",
+      "Units Covered",
+      "Unit Status",
+      "Status Badge",
+    ];
+
+    const rows: (string | number)[][] = [];
+    const excelRows: ExcelRow[] = [
+      {
+        cells: headers.map((h) => ({ value: h, styleId: "ColHeaderNavy" })),
+      },
+    ];
+
+    let sNo = 1;
+    facGroups.forEach((fac) => {
+      fac.subjects.forEach((sub) => {
+        const qRating = sub.questions?.find(
+          (q) => q.questionType === "rating_scale" || q.questionText.toLowerCase().includes("rate")
+        );
+        const qUnits = sub.questions?.find(
+          (q) => q.questionText.toLowerCase().includes("unit")
+        );
+        const qStatus = sub.questions?.find(
+          (q) => q.questionText.toLowerCase().includes("status")
+        );
+
+        const ratingNum = qRating?.avgScore != null ? Number(qRating.avgScore) : null;
+        const ratingStr = ratingNum != null ? ratingNum.toFixed(2) : "—";
+        const satPct = ratingNum != null ? `${Math.round((ratingNum / 5) * 100)}%` : "—";
+        const unitsVal = qUnits?.abstract || (qUnits?.avgScore != null ? String(qUnits.avgScore) : "—");
+        const statusVal = qStatus?.abstract || "—";
+        const badge =
+          ratingNum != null
+            ? ratingNum >= 4.2
+              ? "Excellent"
+              : ratingNum >= 3.5
+              ? "Good"
+              : ratingNum >= 2.8
+              ? "Satisfactory"
+              : "Needs Attention"
+            : "Pending";
+
+        const rowData = [
+          sNo++,
+          fac.facultyName,
+          fac.employeeCode || "—",
+          sub.subjectName,
+          sub.subjectCode || "—",
+          sub.courseName,
+          sub.branchName,
+          sub.romanSemester,
+          sub.sectionName ? `Sec ${sub.sectionName}` : "All",
+          sub.count,
+          ratingStr,
+          satPct,
+          unitsVal,
+          statusVal,
+          badge,
+        ];
+        rows.push(rowData);
+
+        excelRows.push({
+          cells: [
+            { value: sNo - 1, styleId: "CellCenter" },
+            { value: fac.facultyName, styleId: "CellNormal" },
+            { value: fac.employeeCode || "—", styleId: "CellCenter" },
+            { value: sub.subjectName, styleId: "CellNormal" },
+            { value: sub.subjectCode || "—", styleId: "CellCenter" },
+            { value: sub.courseName, styleId: "CellNormal" },
+            { value: sub.branchName, styleId: "CellNormal" },
+            { value: sub.romanSemester, styleId: "CellCenter" },
+            { value: sub.sectionName ? `Sec ${sub.sectionName}` : "All", styleId: "CellCenter" },
+            { value: sub.count, styleId: "CellBoldCenter" },
+            { value: ratingNum != null ? Number(ratingNum.toFixed(2)) : "—", styleId: "CellCenter" },
+            { value: satPct, styleId: "CellCenter" },
+            { value: unitsVal, styleId: "CellCenter" },
+            { value: statusVal, styleId: "CellCenter" },
+            {
+              value: badge,
+              styleId:
+                badge === "Excellent" || badge === "Good"
+                  ? "CellPresent"
+                  : badge === "Needs Attention"
+                  ? "CellAbsent"
+                  : "CellNormal",
+            },
+          ],
+        });
+      });
+    });
+
+    return { headers, rows, excelRows, targetGroup: facGroups[0] || null };
+  };
+
+  const scopedExportPreview = useMemo(() => {
+    if (!report?.sectionGroups) return { matchedSubjects: 0, matchedSubmissions: 0, avgRating: null };
+    let totalSubs = 0;
+    let totalSubmissions = 0;
+    let ratingSum = 0;
+    let ratingCount = 0;
+
+    const allowedCourseIdsForCollege = selectedDownloadCollegeId !== "all"
+      ? new Set((report.availableCourses || []).filter((c) => c.collegeId === selectedDownloadCollegeId).map((c) => c.id))
+      : null;
+
+    const filteredGroups = report.sectionGroups.filter((g) => {
+      if (allowedCourseIdsForCollege && g.courseId && !allowedCourseIdsForCollege.has(g.courseId)) return false;
+      if (selectedDownloadCourseId !== "all" && g.courseId && g.courseId !== selectedDownloadCourseId) return false;
+      if (selectedDownloadBranch !== "all" && g.branchName.toLowerCase() !== selectedDownloadBranch.toLowerCase()) return false;
+      if (selectedDownloadYear !== "all") {
+        const yr = Number(selectedDownloadYear);
+        if ((g.yearOfStudy || Math.ceil((g.semester || 1) / 2)) !== yr) return false;
+      }
+      if (selectedDownloadSemester !== "all" && g.semester !== Number(selectedDownloadSemester)) return false;
+      if (selectedDownloadSection !== "all" && (g.sectionName || "").toUpperCase() !== selectedDownloadSection.toUpperCase()) return false;
+      return true;
+    });
+
+    filteredGroups.forEach((g) => {
+      g.subjects.forEach((sub) => {
+        if (selectedDownloadFaculty !== "all" && sub.facultyName.toLowerCase() !== selectedDownloadFaculty.toLowerCase()) return false;
+        totalSubs++;
+        totalSubmissions += sub.count || 0;
+        const qRating = sub.questions?.find((q) => q.questionType === "rating_scale" || q.questionText.toLowerCase().includes("rate"));
+        if (qRating?.avgScore != null) {
+          ratingSum += Number(qRating.avgScore) * (sub.count || 1);
+          ratingCount += sub.count || 1;
+        }
+      });
+    });
+
+    const avgRating = ratingCount > 0 ? (ratingSum / ratingCount).toFixed(2) : null;
+    return { matchedSubjects: totalSubs, matchedSubmissions: totalSubmissions, avgRating };
+  }, [
+    report?.sectionGroups,
+    selectedDownloadCollegeId,
+    selectedDownloadCourseId,
+    selectedDownloadBranch,
+    selectedDownloadYear,
+    selectedDownloadSemester,
+    selectedDownloadSection,
+    selectedDownloadFaculty,
+  ]);
+
+  const buildGlobalScopedReportData = () => {
+    if (!report?.sectionGroups) return { headers: [], rows: [], excelRows: [], summary: { totalAllocations: 0, totalSubmissions: 0, weightedAvg: "—", collegeLabel: "", courseLabel: "", branchLabel: "", yearLabel: "", semLabel: "", secLabel: "", facultyLabel: "" } };
+
+    const selectedCollegeObj = selectedDownloadCollegeId !== "all"
+      ? (report.availableColleges || []).find((c) => c.id === selectedDownloadCollegeId)
+      : null;
+    const selectedCourseObj = selectedDownloadCourseId !== "all"
+      ? (scopedAvailableCourses || report.availableCourses || []).find((c) => c.id === selectedDownloadCourseId)
+      : null;
+
+    const headers = [
+      "S.No",
+      "College",
+      "Course",
+      "Branch / Department",
+      "Year of Study",
+      "Semester",
+      "Section",
+      "Subject Code",
+      "Subject Name",
+      "Faculty Instructor",
+      "Employee Code",
+      "Evaluations Count",
+      "Faculty Rating (★ / 5.00)",
+      "Satisfaction %",
+      "Units Covered",
+      "Unit Status",
+      "Performance",
+    ];
+
+    const rows: (string | number)[][] = [];
+    const excelRows: ExcelRow[] = [
+      {
+        cells: headers.map((h) => ({ value: h, styleId: "ColHeaderEmerald" })),
+      },
+    ];
+
+    let sNo = 1;
+    let totalSubmissions = 0;
+    let ratingSum = 0;
+    let ratingCount = 0;
+
+    const allowedCourseIdsForCollege = selectedDownloadCollegeId !== "all"
+      ? new Set((report.availableCourses || []).filter((c) => c.collegeId === selectedDownloadCollegeId).map((c) => c.id))
+      : null;
+
+    const filteredGroups = report.sectionGroups.filter((g) => {
+      if (allowedCourseIdsForCollege && g.courseId && !allowedCourseIdsForCollege.has(g.courseId)) return false;
+      if (selectedDownloadCourseId !== "all" && g.courseId && g.courseId !== selectedDownloadCourseId) return false;
+      if (selectedDownloadBranch !== "all" && g.branchName.toLowerCase() !== selectedDownloadBranch.toLowerCase()) return false;
+      if (selectedDownloadYear !== "all") {
+        const yr = Number(selectedDownloadYear);
+        if ((g.yearOfStudy || Math.ceil((g.semester || 1) / 2)) !== yr) return false;
+      }
+      if (selectedDownloadSemester !== "all" && g.semester !== Number(selectedDownloadSemester)) return false;
+      if (selectedDownloadSection !== "all" && (g.sectionName || "").toUpperCase() !== selectedDownloadSection.toUpperCase()) return false;
+      return true;
+    });
+
+    filteredGroups.forEach((g) => {
+      g.subjects.forEach((sub) => {
+        if (selectedDownloadFaculty !== "all" && sub.facultyName.toLowerCase() !== selectedDownloadFaculty.toLowerCase()) return false;
+
+        const qRating = sub.questions?.find(
+          (q) => q.questionType === "rating_scale" || q.questionText.toLowerCase().includes("rate")
+        );
+        const qUnits = sub.questions?.find(
+          (q) => q.questionText.toLowerCase().includes("unit")
+        );
+        const qStatus = sub.questions?.find(
+          (q) => q.questionText.toLowerCase().includes("status")
+        );
+
+        const ratingNum = qRating?.avgScore != null ? Number(qRating.avgScore) : null;
+        const ratingStr = ratingNum != null ? ratingNum.toFixed(2) : "—";
+        const satPct = ratingNum != null ? `${Math.round((ratingNum / 5) * 100)}%` : "—";
+        const unitsVal = qUnits?.abstract || (qUnits?.avgScore != null ? String(qUnits.avgScore) : "—");
+        const statusVal = qStatus?.abstract || "—";
+
+        const badge =
+          ratingNum != null
+            ? ratingNum >= 4.2
+              ? "Excellent"
+              : ratingNum >= 3.5
+              ? "Good"
+              : ratingNum >= 2.8
+              ? "Satisfactory"
+              : "Needs Attention"
+            : "Pending";
+
+        totalSubmissions += sub.count || 0;
+        if (ratingNum != null) {
+          ratingSum += ratingNum * (sub.count || 1);
+          ratingCount += sub.count || 1;
+        }
+
+        const collegeName = selectedCollegeObj?.name || report.publication?.collegeName || "Pydah College";
+        const courseName = g.courseName || sub.courseName || selectedCourseObj?.name || "Academic";
+        const yrLabel = g.yearOfStudy ? `Year ${g.yearOfStudy}` : `Year ${Math.ceil((g.semester || 1) / 2)}`;
+        const semLabel = g.romanSemester || `Sem ${g.semester}`;
+        const secLabel = g.sectionName ? `Sec ${g.sectionName}` : "All";
+
+        const rowData = [
+          sNo++,
+          collegeName,
+          courseName,
+          g.branchName,
+          yrLabel,
+          semLabel,
+          secLabel,
+          sub.subjectCode || "—",
+          sub.subjectName,
+          sub.facultyName,
+          sub.employeeCode || "—",
+          sub.count,
+          ratingStr,
+          satPct,
+          unitsVal,
+          statusVal,
+          badge,
+        ];
+        rows.push(rowData);
+
+        excelRows.push({
+          cells: [
+            { value: sNo - 1, styleId: "CellCenter" },
+            { value: collegeName, styleId: "CellNormal" },
+            { value: courseName, styleId: "CellNormal" },
+            { value: g.branchName, styleId: "CellNormal" },
+            { value: yrLabel, styleId: "CellCenter" },
+            { value: semLabel, styleId: "CellCenter" },
+            { value: secLabel, styleId: "CellCenter" },
+            { value: sub.subjectCode || "—", styleId: "CellCenter" },
+            { value: sub.subjectName, styleId: "CellNormal" },
+            { value: sub.facultyName, styleId: "CellNormal" },
+            { value: sub.employeeCode || "—", styleId: "CellCenter" },
+            { value: sub.count, styleId: "CellBoldCenter" },
+            { value: ratingNum != null ? Number(ratingNum.toFixed(2)) : "—", styleId: "CellCenter" },
+            { value: satPct, styleId: "CellCenter" },
+            { value: unitsVal, styleId: "CellCenter" },
+            { value: statusVal, styleId: "CellCenter" },
+            {
+              value: badge,
+              styleId:
+                badge === "Excellent" || badge === "Good"
+                  ? "CellPresent"
+                  : badge === "Needs Attention"
+                  ? "CellAbsent"
+                  : "CellNormal",
+            },
+          ],
+        });
+      });
+    });
+
+    const weightedAvg = ratingCount > 0 ? (ratingSum / ratingCount).toFixed(2) : "—";
+    return {
+      headers,
+      rows,
+      excelRows,
+      summary: {
+        totalAllocations: rows.length,
+        totalSubmissions,
+        weightedAvg,
+        collegeLabel: selectedCollegeObj ? `${selectedCollegeObj.name} (${selectedCollegeObj.code})` : "All Colleges",
+        courseLabel: selectedCourseObj ? `${selectedCourseObj.name} (${selectedCourseObj.code})` : "All Courses",
+        branchLabel: selectedDownloadBranch === "all" ? "All Branches" : selectedDownloadBranch,
+        yearLabel: selectedDownloadYear === "all" ? "All Years" : `Year ${selectedDownloadYear}`,
+        semLabel: selectedDownloadSemester === "all" ? "All Semesters" : `Semester ${selectedDownloadSemester}`,
+        secLabel: selectedDownloadSection === "all" ? "All Sections" : `Section ${selectedDownloadSection}`,
+        facultyLabel: selectedDownloadFaculty === "all" ? "All Faculty Members" : selectedDownloadFaculty,
+      },
+    };
+  };
+
+  const handleDownloadGlobalScopedReport = () => {
+    setIsExporting(true);
+    try {
+      const data = buildGlobalScopedReportData();
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const safeFac = selectedDownloadFaculty === "all" ? "" : `_${selectedDownloadFaculty.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_")}`;
+      const safeBranch = selectedDownloadBranch === "all" ? "" : `_${selectedDownloadBranch.replace(/[^a-zA-Z0-9_\-]/g, "_")}`;
+      const filename = `Academic_Feedback_Report${safeBranch}${safeFac}_${dateStr}`;
+
+      if (downloadFormat === "csv") {
+        downloadCsvFile(filename, data.headers, data.rows);
+      } else {
+        const sum = data.summary;
+        const sheets: ExcelWorksheet[] = [
+          {
+            name: "Feedback Evaluation Report",
+            columns: [
+              { width: 8 },
+              { width: 22 },
+              { width: 20 },
+              { width: 22 },
+              { width: 14 },
+              { width: 12 },
+              { width: 10 },
+              { width: 14 },
+              { width: 28 },
+              { width: 24 },
+              { width: 14 },
+              { width: 16 },
+              { width: 16 },
+              { width: 14 },
+              { width: 14 },
+              { width: 14 },
+              { width: 16 },
+            ],
+            rows: [
+              { cells: [{ value: "PYDAH EDUCATIONAL ACADEMY - ACADEMIC FEEDBACK REPORT", styleId: "Title", mergeAcross: 7 }] },
+              { cells: [{ value: `Session: ${report?.publication?.title || "Academic Feedback"} • Academic Year: ${report?.publication?.academicYear || "—"}`, styleId: "Subtitle", mergeAcross: 7 }] },
+              { cells: [{ value: `Generated on: ${new Date().toLocaleString()}`, styleId: "Subtitle", mergeAcross: 7 }] },
+              { cells: [] },
+              { cells: [{ value: "APPLIED FILTER PARAMETERS & SCOPE SUMMARY", styleId: "SectionHeader", mergeAcross: 7 }] },
+              { cells: [{ value: "College Filter:", styleId: "CellBoldCenter" }, { value: sum.collegeLabel, styleId: "CellNormal" }, { value: "Course Filter:", styleId: "CellBoldCenter" }, { value: sum.courseLabel, styleId: "CellNormal" }] },
+              { cells: [{ value: "Branch Filter:", styleId: "CellBoldCenter" }, { value: sum.branchLabel, styleId: "CellNormal" }, { value: "Year of Study:", styleId: "CellBoldCenter" }, { value: sum.yearLabel, styleId: "CellNormal" }] },
+              { cells: [{ value: "Semester Filter:", styleId: "CellBoldCenter" }, { value: sum.semLabel, styleId: "CellNormal" }, { value: "Section Filter:", styleId: "CellBoldCenter" }, { value: sum.secLabel, styleId: "CellNormal" }] },
+              { cells: [{ value: "Faculty Filter:", styleId: "CellBoldCenter" }, { value: sum.facultyLabel, styleId: "CellNormal" }, { value: "Allocations Matched:", styleId: "CellBoldCenter" }, { value: sum.totalAllocations, styleId: "CellNormal" }] },
+              { cells: [{ value: "Total Student Evaluations:", styleId: "CellBoldCenter" }, { value: sum.totalSubmissions, styleId: "CellNormal" }, { value: "Overall Rating (★):", styleId: "CellBoldCenter" }, { value: `${sum.weightedAvg} / 5.00`, styleId: "CellNormal" }] },
+              { cells: [] },
+              ...data.excelRows,
+            ],
+          },
+        ];
+
+        downloadExcelWorkbook({ author: "Pydah Academic Portal", sheets }, `${filename}.xls`);
+      }
+
+      setIsDownloadReportsModalOpen(false);
+      setActionNotice("Feedback report generated and downloaded successfully!");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error exporting report");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleDownloadMasterWorkbook = () => {
+    if (!report) return;
+    const pubTitle = report.publication?.title || "Academic_Feedback";
+    const safeTitle = pubTitle.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_");
+    const dateStr = new Date().toISOString().slice(0, 10);
+
+    const colData = buildCollegeWiseData("all");
+    const crData = buildCourseWiseData("all");
+    const brData = buildBranchWiseData("all");
+    const facData = buildFacultyData("all");
+
+    const sheets: ExcelWorksheet[] = [
+      {
+        name: "Executive Summary",
+        columns: [{ width: 25 }, { width: 45 }],
+        rows: [
+          { cells: [{ value: "PYDAH EDUCATIONAL ACADEMY - FEEDBACK SUMMARY", styleId: "Title", mergeAcross: 1 }] },
+          { cells: [{ value: `Generated: ${new Date().toLocaleString()}`, styleId: "Subtitle", mergeAcross: 1 }] },
+          { cells: [] },
+          { cells: [{ value: "FEEDBACK SESSION DETAILS", styleId: "SectionHeader", mergeAcross: 1 }] },
+          {
+            cells: [
+              { value: "Session Title:", styleId: "CellBoldCenter" },
+              { value: report.publication?.title || "Academic Feedback", styleId: "CellNormal" },
+            ],
+          },
+          {
+            cells: [
+              { value: "Form Template:", styleId: "CellBoldCenter" },
+              { value: report.publication?.formName || "—", styleId: "CellNormal" },
+            ],
+          },
+          {
+            cells: [
+              { value: "Academic Year:", styleId: "CellBoldCenter" },
+              { value: report.publication?.academicYear || "—", styleId: "CellNormal" },
+            ],
+          },
+          {
+            cells: [
+              { value: "Semester Scope:", styleId: "CellBoldCenter" },
+              {
+                value: report.publication?.semester ? `Sem ${report.publication.semester}` : "All Semesters",
+                styleId: "CellNormal",
+              },
+            ],
+          },
+          {
+            cells: [
+              { value: "Activation Period:", styleId: "CellBoldCenter" },
+              {
+                value: `${formatDisplayDateTime(report.publication?.startDate || "")} to ${formatDisplayDateTime(
+                  report.publication?.endDate || ""
+                )}`,
+                styleId: "CellNormal",
+              },
+            ],
+          },
+          {
+            cells: [
+              { value: "Session Status:", styleId: "CellBoldCenter" },
+              { value: report.publication?.status?.toUpperCase() || "ACTIVE", styleId: "CellNormal" },
+            ],
+          },
+          { cells: [] },
+          { cells: [{ value: "CORE METRICS & PARTICIPATION", styleId: "SectionHeader", mergeAcross: 1 }] },
+          {
+            cells: [
+              { value: "Total Student Evaluations:", styleId: "CellBoldCenter" },
+              { value: report.stats.totalSubmissions, styleId: "CellNormal" },
+            ],
+          },
+          {
+            cells: [
+              { value: "Overall Average Rating:", styleId: "CellBoldCenter" },
+              {
+                value: report.stats.averageRating ? `${report.stats.averageRating.toFixed(2)} / 5.00` : "—",
+                styleId: "CellNormal",
+              },
+            ],
+          },
+          {
+            cells: [
+              { value: "Satisfaction Score:", styleId: "CellBoldCenter" },
+              { value: report.stats.ratingSatisfactionPct ? `${report.stats.ratingSatisfactionPct}%` : "—", styleId: "CellNormal" },
+            ],
+          },
+          {
+            cells: [
+              { value: "Average Units Completed:", styleId: "CellBoldCenter" },
+              {
+                value: report.stats.averageUnitsCovered ? `${report.stats.averageUnitsCovered.toFixed(2)} Units` : "—",
+                styleId: "CellNormal",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        name: "College Summary",
+        columns: [
+          { width: 8 },
+          { width: 30 },
+          { width: 15 },
+          { width: 14 },
+          { width: 14 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+        ],
+        rows: colData.excelRows,
+      },
+      {
+        name: "Course Summary",
+        columns: [
+          { width: 8 },
+          { width: 25 },
+          { width: 14 },
+          { width: 25 },
+          { width: 14 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+          { width: 16 },
+        ],
+        rows: crData.excelRows,
+      },
+      {
+        name: "Branch Breakdown",
+        columns: [
+          { width: 8 },
+          { width: 25 },
+          { width: 18 },
+          { width: 14 },
+          { width: 10 },
+          { width: 25 },
+          { width: 14 },
+          { width: 22 },
+          { width: 12 },
+          { width: 15 },
+          { width: 14 },
+          { width: 16 },
+        ],
+        rows: brData.excelRows,
+      },
+      {
+        name: "Faculty Evaluations",
+        columns: [
+          { width: 8 },
+          { width: 22 },
+          { width: 14 },
+          { width: 25 },
+          { width: 14 },
+          { width: 18 },
+          { width: 22 },
+          { width: 12 },
+          { width: 10 },
+          { width: 12 },
+          { width: 14 },
+          { width: 14 },
+          { width: 14 },
+          { width: 14 },
+          { width: 16 },
+        ],
+        rows: facData.excelRows,
+      },
+    ];
+
+    downloadExcelWorkbook(
+      { author: "Pydah Academic Portal", sheets },
+      `Feedback_Master_Workbook_${safeTitle}_${dateStr}.xls`
+    );
+  };
+
+  const handleDownloadCollegeWiseReport = (format: "excel" | "csv" = "excel", collegeId: number | "all" = "all") => {
+    const data = buildCollegeWiseData(collegeId);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `College_Wise_Feedback_Report_${dateStr}`;
+    if (format === "csv") {
+      downloadCsvFile(filename, data.headers, data.rows);
+    } else {
+      downloadExcelWorkbook(
+        {
+          author: "Pydah Academic Portal",
+          sheets: [
+            {
+              name: "College Report",
+              columns: [
+                { width: 8 },
+                { width: 30 },
+                { width: 15 },
+                { width: 15 },
+                { width: 15 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+              ],
+              rows: [
+                { cells: [{ value: "COLLEGE-WISE FEEDBACK EVALUATION REPORT", styleId: "Title", mergeAcross: 5 }] },
+                { cells: [{ value: `Generated: ${new Date().toLocaleString()}`, styleId: "Subtitle", mergeAcross: 5 }] },
+                { cells: [] },
+                ...data.excelRows,
+              ],
+            },
+          ],
+        },
+        `${filename}.xls`
+      );
+    }
+  };
+
+  const handleDownloadCourseWiseReport = (format: "excel" | "csv" = "excel", courseId: number | "all" = "all") => {
+    const data = buildCourseWiseData(courseId);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `Course_Wise_Feedback_Report_${dateStr}`;
+    if (format === "csv") {
+      downloadCsvFile(filename, data.headers, data.rows);
+    } else {
+      downloadExcelWorkbook(
+        {
+          author: "Pydah Academic Portal",
+          sheets: [
+            {
+              name: "Course Report",
+              columns: [
+                { width: 8 },
+                { width: 25 },
+                { width: 14 },
+                { width: 25 },
+                { width: 15 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+                { width: 18 },
+              ],
+              rows: [
+                { cells: [{ value: "COURSE-WISE FEEDBACK EVALUATION REPORT", styleId: "Title", mergeAcross: 5 }] },
+                { cells: [{ value: `Generated: ${new Date().toLocaleString()}`, styleId: "Subtitle", mergeAcross: 5 }] },
+                { cells: [] },
+                ...data.excelRows,
+              ],
+            },
+          ],
+        },
+        `${filename}.xls`
+      );
+    }
+  };
+
+  const handleDownloadBranchWiseReport = (format: "excel" | "csv" = "excel", branchName: string = "all") => {
+    const data = buildBranchWiseData(branchName);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const safeBranch = branchName === "all" ? "All_Branches" : branchName.replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const filename = `Branch_Wise_Feedback_Report_${safeBranch}_${dateStr}`;
+    if (format === "csv") {
+      downloadCsvFile(filename, data.headers, data.rows);
+    } else {
+      downloadExcelWorkbook(
+        {
+          author: "Pydah Academic Portal",
+          sheets: [
+            {
+              name: "Branch Report",
+              columns: [
+                { width: 8 },
+                { width: 25 },
+                { width: 18 },
+                { width: 15 },
+                { width: 10 },
+                { width: 25 },
+                { width: 14 },
+                { width: 22 },
+                { width: 12 },
+                { width: 15 },
+                { width: 14 },
+                { width: 16 },
+              ],
+              rows: [
+                { cells: [{ value: `BRANCH FEEDBACK REPORT (${safeBranch.replace(/_/g, " ")})`, styleId: "Title", mergeAcross: 6 }] },
+                { cells: [{ value: `Generated: ${new Date().toLocaleString()}`, styleId: "Subtitle", mergeAcross: 6 }] },
+                { cells: [] },
+                ...data.excelRows,
+              ],
+            },
+          ],
+        },
+        `${filename}.xls`
+      );
+    }
+  };
+
+  const handleDownloadFacultyReport = (fac: FacultyGroup, format: "excel" | "csv" = "excel") => {
+    const facData = buildFacultyData(fac.facultyName);
+    const safeName = fac.facultyName.replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_");
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `Faculty_Evaluation_${safeName}_${dateStr}`;
+
+    if (format === "csv") {
+      downloadCsvFile(filename, facData.headers, facData.rows);
+      return;
+    }
+
+    const sheets: ExcelWorksheet[] = [
+      {
+        name: "Faculty Overview",
+        columns: [{ width: 25 }, { width: 35 }],
+        rows: [
+          { cells: [{ value: `FACULTY FEEDBACK EVALUATION - ${fac.facultyName.toUpperCase()}`, styleId: "Title", mergeAcross: 1 }] },
+          { cells: [{ value: `Session: ${report?.publication?.title || "Academic Feedback"} · ${report?.publication?.academicYear || ""}`, styleId: "Subtitle", mergeAcross: 1 }] },
+          { cells: [] },
+          { cells: [{ value: "FACULTY PROFILE & METRICS", styleId: "SectionHeader", mergeAcross: 1 }] },
+          { cells: [{ value: "Faculty Name:", styleId: "CellBoldCenter" }, { value: fac.facultyName, styleId: "CellNormal" }] },
+          { cells: [{ value: "Employee Code:", styleId: "CellBoldCenter" }, { value: fac.employeeCode || "—", styleId: "CellNormal" }] },
+          { cells: [{ value: "Assigned Subjects Count:", styleId: "CellBoldCenter" }, { value: fac.totalSubjects, styleId: "CellNormal" }] },
+          { cells: [{ value: "Total Student Evaluations:", styleId: "CellBoldCenter" }, { value: fac.totalSubmissions, styleId: "CellNormal" }] },
+          {
+            cells: [
+              { value: "Overall Rating (★):", styleId: "CellBoldCenter" },
+              { value: fac.overallRating != null ? `${fac.overallRating.toFixed(2)} / 5.00` : "No ratings", styleId: "CellNormal" },
+            ],
+          },
+        ],
+      },
+      {
+        name: "Subject Allocations",
+        columns: [
+          { width: 8 },
+          { width: 22 },
+          { width: 14 },
+          { width: 25 },
+          { width: 14 },
+          { width: 18 },
+          { width: 22 },
+          { width: 12 },
+          { width: 10 },
+          { width: 12 },
+          { width: 14 },
+          { width: 14 },
+          { width: 14 },
+          { width: 14 },
+          { width: 16 },
+        ],
+        rows: facData.excelRows,
+      },
+    ];
+
+    downloadExcelWorkbook({ author: "Pydah Academic Portal", sheets }, `${filename}.xls`);
+  };
+
+  const handleDownloadSectionReport = (group: SectionGroup, format: "excel" | "csv" = "excel") => {
+    const data = buildBranchWiseData(group.branchName);
+    const safeBranch = group.branchName.replace(/[^a-zA-Z0-9_\-]/g, "_");
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `Section_Feedback_${safeBranch}_${group.romanSemester}_Sec${group.sectionName || "All"}_${dateStr}`;
+
+    if (format === "csv") {
+      downloadCsvFile(filename, data.headers, data.rows);
+    } else {
+      downloadExcelWorkbook(
+        {
+          author: "Pydah Academic Portal",
+          sheets: [
+            {
+              name: "Section Feedback",
+              columns: [
+                { width: 8 },
+                { width: 25 },
+                { width: 18 },
+                { width: 15 },
+                { width: 10 },
+                { width: 25 },
+                { width: 14 },
+                { width: 22 },
+                { width: 12 },
+                { width: 15 },
+                { width: 14 },
+                { width: 16 },
+              ],
+              rows: [
+                { cells: [{ value: `FEEDBACK REPORT: ${group.branchName} (${group.romanSemester} - Sec ${group.sectionName || "All"})`, styleId: "Title", mergeAcross: 6 }] },
+                { cells: [{ value: `Generated: ${new Date().toLocaleString()}`, styleId: "Subtitle", mergeAcross: 6 }] },
+                { cells: [] },
+                ...data.excelRows,
+              ],
+            },
+          ],
+        },
+        `${filename}.xls`
+      );
+    }
+  };
+
+  const handleExecuteDownloadModal = () => {
+    setIsExporting(true);
+    try {
+      if (downloadScope === "master") {
+        handleDownloadMasterWorkbook();
+      } else if (downloadScope === "college") {
+        handleDownloadCollegeWiseReport(downloadFormat, selectedDownloadCollegeId);
+      } else if (downloadScope === "course") {
+        handleDownloadCourseWiseReport(downloadFormat, selectedDownloadCourseId);
+      } else if (downloadScope === "branch") {
+        handleDownloadBranchWiseReport(downloadFormat, selectedDownloadBranch);
+      } else if (downloadScope === "all_faculty") {
+        const facData = buildFacultyData("all");
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const filename = `Faculty_Comprehensive_Feedback_${dateStr}`;
+        if (downloadFormat === "csv") {
+          downloadCsvFile(filename, facData.headers, facData.rows);
+        } else {
+          downloadExcelWorkbook(
+            {
+              author: "Pydah Academic Portal",
+              sheets: [
+                {
+                  name: "Faculty Evaluations",
+                  columns: [
+                    { width: 8 },
+                    { width: 22 },
+                    { width: 14 },
+                    { width: 25 },
+                    { width: 14 },
+                    { width: 18 },
+                    { width: 22 },
+                    { width: 12 },
+                    { width: 10 },
+                    { width: 12 },
+                    { width: 14 },
+                    { width: 14 },
+                    { width: 14 },
+                    { width: 14 },
+                    { width: 16 },
+                  ],
+                  rows: facData.excelRows,
+                },
+              ],
+            },
+            `${filename}.xls`
+          );
+        }
+      } else if (downloadScope === "individual_faculty") {
+        const targetFac = (report?.facultyGroups || []).find(
+          (f) => f.facultyName.toLowerCase() === selectedDownloadFacultyName.toLowerCase()
+        );
+        if (targetFac) {
+          handleDownloadFacultyReport(targetFac, downloadFormat);
+        } else {
+          const facData = buildFacultyData(selectedDownloadFacultyName);
+          const safeName = (selectedDownloadFacultyName || "Faculty").replace(/[^a-zA-Z0-9_\- ]/g, "").replace(/\s+/g, "_");
+          const dateStr = new Date().toISOString().slice(0, 10);
+          const filename = `Faculty_Evaluation_${safeName}_${dateStr}`;
+          if (downloadFormat === "csv") {
+            downloadCsvFile(filename, facData.headers, facData.rows);
+          } else {
+            downloadExcelWorkbook(
+              {
+                author: "Pydah Academic Portal",
+                sheets: [
+                  {
+                    name: "Faculty Evaluation",
+                    columns: [
+                      { width: 8 },
+                      { width: 22 },
+                      { width: 14 },
+                      { width: 25 },
+                      { width: 14 },
+                      { width: 18 },
+                      { width: 22 },
+                      { width: 12 },
+                      { width: 10 },
+                      { width: 12 },
+                      { width: 14 },
+                      { width: 14 },
+                      { width: 14 },
+                      { width: 14 },
+                      { width: 16 },
+                    ],
+                    rows: facData.excelRows,
+                  },
+                ],
+              },
+              `${filename}.xls`
+            );
+          }
+        }
+      }
+      setIsDownloadReportsModalOpen(false);
+      setActionNotice("Report downloaded successfully!");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error exporting report");
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -2133,6 +3425,18 @@ export function FeedbackReportsView() {
           >
             <Printer className="h-3.5 w-3.5" />
             Print Report
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setIsDownloadReportsModalOpen(true)}
+            disabled={loading || !report}
+            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-xs border-emerald-600"
+            title="Open global download dialog with filters for college, course, branch, year, semester, section, and faculty"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Global Download Reports
           </Button>
         </div>
       </div>
@@ -2318,7 +3622,7 @@ export function FeedbackReportsView() {
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={openEditDatesModal}
+                  onClick={() => openEditDatesModal()}
                   className="bg-white/10 hover:bg-white/20 text-white border-white/20 text-xs flex items-center justify-center gap-1.5"
                 >
                   <Edit3 className="h-3.5 w-3.5" />
@@ -2349,21 +3653,49 @@ export function FeedbackReportsView() {
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Published Feedback Session
               </label>
-              <select
-                value={selectedPublicationId || ""}
-                onChange={(e) => setSelectedPublicationId(Number(e.target.value))}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-navy-900 outline-none transition focus:border-navy-500 focus:ring-1 focus:ring-navy-500 min-w-[240px]"
-              >
-                {report?.publications && report.publications.length > 0 ? (
-                  report.publications.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.title} ({p.status.toUpperCase()})
-                    </option>
-                  ))
-                ) : (
-                  <option value="">No Published Sessions Found</option>
-                )}
-              </select>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <select
+                  value={selectedPublicationId || ""}
+                  onChange={(e) => setSelectedPublicationId(Number(e.target.value))}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-navy-900 outline-none transition focus:border-navy-500 focus:ring-1 focus:ring-navy-500 min-w-[240px]"
+                >
+                  {report?.publications && report.publications.length > 0 ? (
+                    report.publications.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.title} ({p.status.toUpperCase()})
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No Published Sessions Found</option>
+                  )}
+                </select>
+
+                {selectedPubObject ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => openEditDatesModal(selectedPubObject)}
+                    className="h-8 text-xs bg-slate-50 hover:bg-slate-100 text-navy-900 border-slate-300 flex items-center gap-1 font-semibold"
+                    title={`Edit schedule & dates for "${selectedPubObject.title}"`}
+                  >
+                    <Calendar className="h-3.5 w-3.5 text-navy-600" />
+                    <span>Edit Schedule</span>
+                  </Button>
+                ) : null}
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsManageSessionsModalOpen(true)}
+                  className="h-8 text-xs text-slate-600 hover:text-navy-900 flex items-center gap-1"
+                  title="View and manage all feedback sessions"
+                >
+                  <Clock className="h-3.5 w-3.5 text-slate-400" />
+                  <span>All Sessions ({report?.publications?.length || 0})</span>
+                </Button>
+              </div>
             </div>
 
             {/* Course Filter */}
@@ -2627,6 +3959,16 @@ export function FeedbackReportsView() {
                           <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold text-white backdrop-blur-xs border border-white/20">
                             {group.courseName}
                           </span>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleDownloadSectionReport(group, "excel")}
+                            className="h-7 text-xs bg-white/15 hover:bg-white/25 text-white border-white/25 flex items-center gap-1 font-semibold"
+                            title={`Download evaluation report for ${group.branchName} ${group.romanSemester}`}
+                          >
+                            <Download className="h-3.5 w-3.5 text-blue-100" />
+                            <span>Download Section</span>
+                          </Button>
                         </div>
                       </div>
 
@@ -2740,6 +4082,16 @@ export function FeedbackReportsView() {
                               No ratings yet
                             </span>
                           )}
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleDownloadFacultyReport(fac, "excel")}
+                            className="h-7 text-xs bg-white/15 hover:bg-white/25 text-white border-white/25 flex items-center gap-1 font-semibold"
+                            title={`Download feedback evaluation report for ${fac.facultyName}`}
+                          >
+                            <Download className="h-3.5 w-3.5 text-blue-200" />
+                            <span>Download Report</span>
+                          </Button>
                         </div>
                       </div>
 
@@ -4204,23 +5556,142 @@ export function FeedbackReportsView() {
       {/* ========================================================================= */}
       {/* EDIT DATES & STATUS MODAL                                                  */}
       {/* ========================================================================= */}
-      {isEditDatesOpen && activePublication ? (
+      {isEditDatesOpen && (editingPublication || selectedPubObject || activePublication || report?.publication) ? (() => {
+        const targetPubForEdit = editingPublication || selectedPubObject || activePublication || report?.publication;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto backdrop-blur-xs">
+            <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+              {/* Modal Header */}
+              <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/80 px-6 py-4">
+                <div>
+                  <h3 className="text-base font-bold text-navy-900 flex items-center gap-2">
+                    <Calendar className="h-4 w-4 text-navy-700" />
+                    Edit Feedback Activation Dates
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Update active dates or extend deadline for {targetPubForEdit?.title}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsEditDatesOpen(false)}
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
+                {editDatesError ? (
+                  <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
+                    {editDatesError}
+                  </div>
+                ) : null}
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Session Title
+                  </label>
+                  <input
+                    type="text"
+                    value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 outline-none focus:border-navy-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Start Date & Time
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={editStartDate}
+                    onChange={(e) => setEditStartDate(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 outline-none focus:border-navy-500"
+                  />
+                  <span className="mt-1 block text-[10px] text-slate-500">
+                    Formatted: {formatDisplayDateTime(editStartDate)}
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    End Date & Time (Deadline)
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={editEndDate}
+                    onChange={(e) => setEditEndDate(e.target.value)}
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 outline-none focus:border-navy-500"
+                  />
+                  <span className="mt-1 block text-[10px] text-slate-500">
+                    Formatted: {formatDisplayDateTime(editEndDate)}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <input
+                    type="checkbox"
+                    id="editIsActive"
+                    checked={editIsActive}
+                    onChange={(e) => setEditIsActive(e.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-navy-600 focus:ring-navy-500"
+                  />
+                  <label htmlFor="editIsActive" className="text-xs font-medium text-slate-800 cursor-pointer">
+                    Session is Active (Allow student submissions within period)
+                  </label>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-slate-50/80 px-6 py-4">
+                <Button
+                  variant="ghost"
+                  onClick={() => setIsEditDatesOpen(false)}
+                  disabled={updatingDates}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => void handleUpdateDatesSubmit()}
+                  disabled={updatingDates}
+                  className="bg-navy-800 hover:bg-navy-900 text-white"
+                >
+                  {updatingDates ? "Updating..." : "Save Changes"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
+
+      {/* ========================================================================= */}
+      {/* MANAGE ALL SESSIONS MODAL                                                  */}
+      {/* ========================================================================= */}
+      {isManageSessionsModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto backdrop-blur-xs">
-          <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+          <div className="relative flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
             {/* Modal Header */}
             <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/80 px-6 py-4">
-              <div>
-                <h3 className="text-base font-bold text-navy-900 flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-navy-700" />
-                  Edit Feedback Activation Dates
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Update active dates or extend deadline for {activePublication.title}
-                </p>
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-navy-100 text-navy-800">
+                  <Layers className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-navy-900">
+                    Published Feedback Sessions ({report?.publications?.length || 0})
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Manage activation schedules, deadlines, active status, and direct student submission links
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => setIsEditDatesOpen(false)}
+                onClick={() => setIsManageSessionsModalOpen(false)}
                 className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
               >
                 <X className="h-5 w-5" />
@@ -4228,86 +5699,527 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Modal Body */}
-            <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-4">
-              {editDatesError ? (
-                <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">
-                  {editDatesError}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6">
+              {!report?.publications || report.publications.length === 0 ? (
+                <div className="text-center py-12 text-slate-500">
+                  <Calendar className="mx-auto h-12 w-12 text-slate-300 mb-3" />
+                  <p className="font-semibold text-slate-700">No Published Feedback Sessions Found</p>
+                  <p className="text-xs text-slate-500 mt-1">Publish a feedback session to begin collecting student responses.</p>
                 </div>
-              ) : null}
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-semibold">
+                        <th className="py-3 px-4">Session Title & Form</th>
+                        <th className="py-3 px-3">Scope / Target</th>
+                        <th className="py-3 px-3">Active Period</th>
+                        <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3 text-center">Submissions</th>
+                        <th className="py-3 px-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {report.publications.map((pub) => {
+                        const isCurrentlyActive = pub.isActive && pub.status === "active";
+                        const isScheduled = pub.status === "scheduled";
+                        const isSelected = selectedPublicationId === pub.id;
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Session Title
-                </label>
-                <input
-                  type="text"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 outline-none focus:border-navy-500"
-                />
+                        return (
+                          <tr
+                            key={pub.id}
+                            className={cn(
+                              "hover:bg-slate-50/80 transition-colors",
+                              isSelected && "bg-sky-50/50"
+                            )}
+                          >
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900">{pub.title}</span>
+                                {isSelected && (
+                                  <span className="rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold text-sky-800">
+                                    Viewing
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Template: {pub.formName || "Feedback Form"} • #{pub.id}
+                              </p>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              <div className="font-medium text-slate-800">
+                                {pub.courseName || pub.collegeName || "All Academic"}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                {pub.academicYear} {pub.semester ? `• Sem ${pub.semester}` : ""}
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-3 whitespace-nowrap">
+                              <div className="text-[11px] text-slate-800 font-medium">
+                                {pub.startDate ? formatDisplayDateTime(pub.startDate) : "Immediate"}
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                to {pub.endDate ? formatDisplayDateTime(pub.endDate) : "Indefinite"}
+                              </div>
+                            </td>
+
+                            <td className="py-3 px-3">
+                              {isCurrentlyActive ? (
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 border border-emerald-200">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                  Active
+                                </span>
+                              ) : isScheduled ? (
+                                <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 border border-blue-200">
+                                  <Clock className="h-3 w-3" />
+                                  Scheduled
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 border border-slate-200">
+                                  Closed
+                                </span>
+                              )}
+                            </td>
+
+                            <td className="py-3 px-3 text-center">
+                              <span className="font-bold text-slate-900 bg-slate-100 px-2.5 py-1 rounded-full text-xs">
+                                {pub.responseCount ?? "—"}
+                              </span>
+                            </td>
+
+                            <td className="py-3 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    openEditDatesModal(pub);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 shadow-2xs"
+                                  title="Edit schedule and active dates"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5 text-navy-700" />
+                                  Edit Schedule
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const url = getSdmsFeedbackUrl(pub.id);
+                                    try {
+                                      await navigator.clipboard.writeText(url);
+                                      setActionNotice(`Student link for "${pub.title}" copied!`);
+                                    } catch {
+                                      // fallback
+                                    }
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 shadow-2xs"
+                                  title="Copy direct SDMS student submission link"
+                                >
+                                  <Copy className="h-3.5 w-3.5 text-slate-600" />
+                                  Copy Link
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedPublicationId(pub.id);
+                                    setIsManageSessionsModalOpen(false);
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md bg-navy-800 px-2 py-1 text-[11px] font-semibold text-white hover:bg-navy-900 shadow-2xs"
+                                  title="View reports for this session"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  View Report
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => void handleDeletePublication(pub.id, pub.title)}
+                                  className="inline-flex items-center justify-center rounded-md p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                                  title="Delete publication session"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-slate-50/80 px-6 py-4">
+              <span className="text-xs text-slate-500">
+                Total Sessions: {report?.publications?.length || 0}
+              </span>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setIsManageSessionsModalOpen(false)}
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ========================================================================= */}
+      {/* GLOBAL DOWNLOAD REPORTS MODAL (COLLEGE, COURSE, BRANCH, YEAR, SEM, SEC, FACULTY) */}
+      {/* ========================================================================= */}
+      {isDownloadReportsModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 overflow-y-auto backdrop-blur-xs">
+          <div className="relative flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl">
+            {/* Modal Header */}
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-slate-50/80 px-6 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 text-emerald-800">
+                  <Download className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-navy-900 flex items-center gap-2">
+                    Global Feedback Reports Download
+                    <span className="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                      Scoped Export
+                    </span>
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Filter by College, Course, Branch, Year, Semester, Section, or Faculty to export tailored reports
+                  </p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setIsDownloadReportsModalOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Start Date & Time
-                </label>
-                <input
-                  type="datetime-local"
-                  value={editStartDate}
-                  onChange={(e) => setEditStartDate(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 outline-none focus:border-navy-500"
-                />
-                <span className="mt-1 block text-[10px] text-slate-500">
-                  Formatted: {formatDisplayDateTime(editStartDate)}
+            {/* Modal Body */}
+            <div className="min-h-0 flex-1 overflow-y-auto p-6 space-y-5">
+              {/* Top Filter Header & Reset Button */}
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
+                  <Target className="h-4 w-4 text-emerald-600" />
+                  1. Configure Report Scope Dropdowns
                 </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedDownloadCollegeId("all");
+                    setSelectedDownloadCourseId("all");
+                    setSelectedDownloadBranch("all");
+                    setSelectedDownloadYear("all");
+                    setSelectedDownloadSemester("all");
+                    setSelectedDownloadSection("all");
+                    setSelectedDownloadFaculty("all");
+                  }}
+                  className="text-xs font-semibold text-navy-700 hover:text-navy-900 flex items-center gap-1"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Reset All Dropdowns
+                </button>
               </div>
 
+              {/* 7-Dropdown Selection Grid */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-3.5 shadow-2xs">
+                {/* Row 1: Academic Scope (College, Course, Branch) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* College Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      College
+                    </label>
+                    <select
+                      value={selectedDownloadCollegeId}
+                      onChange={(e) => {
+                        const val = e.target.value === "all" ? "all" : Number(e.target.value);
+                        setSelectedDownloadCollegeId(val);
+                        setSelectedDownloadCourseId("all");
+                        setSelectedDownloadBranch("all");
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs"
+                    >
+                      <option value="all">All Colleges (Combined)</option>
+                      {(report?.availableColleges || []).map((col) => (
+                        <option key={col.id} value={col.id}>
+                          {col.name} ({col.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Course Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Course / Degree
+                    </label>
+                    <select
+                      value={selectedDownloadCourseId}
+                      onChange={(e) => {
+                        const val = e.target.value === "all" ? "all" : Number(e.target.value);
+                        setSelectedDownloadCourseId(val);
+                        setSelectedDownloadBranch("all");
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs"
+                    >
+                      <option value="all">All Courses</option>
+                      {coursesForDownload.map((cr) => (
+                        <option key={cr.id} value={cr.id}>
+                          {cr.name} ({cr.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Branch Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Branch / Department
+                    </label>
+                    <select
+                      value={selectedDownloadBranch}
+                      onChange={(e) => setSelectedDownloadBranch(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs"
+                    >
+                      <option value="all">All Branches</option>
+                      {branchesForDownload.map((br) => (
+                        <option key={br.id} value={br.name}>
+                          {br.name} ({br.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Row 2: Cohort Scope (Year of Study, Semester, Section) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {/* Year of Study Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Year of Study
+                    </label>
+                    <select
+                      value={selectedDownloadYear}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setSelectedDownloadYear(val);
+                        if (val !== "all" && selectedDownloadSemester !== "all") {
+                          const yrNum = Number(val);
+                          const semNum = Number(selectedDownloadSemester);
+                          if (Math.ceil(semNum / 2) !== yrNum) {
+                            setSelectedDownloadSemester("all");
+                          }
+                        }
+                      }}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs"
+                    >
+                      <option value="all">All Years</option>
+                      <option value="1">1st Year (Sem I - II)</option>
+                      <option value="2">2nd Year (Sem III - IV)</option>
+                      <option value="3">3rd Year (Sem V - VI)</option>
+                      <option value="4">4th Year (Sem VII - VIII)</option>
+                    </select>
+                  </div>
+
+                  {/* Semester Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Semester
+                    </label>
+                    <select
+                      value={selectedDownloadSemester}
+                      onChange={(e) => setSelectedDownloadSemester(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs"
+                    >
+                      <option value="all">All Semesters</option>
+                      {selectedDownloadYear === "1" ? (
+                        <>
+                          <option value="1">Semester 1 (I)</option>
+                          <option value="2">Semester 2 (II)</option>
+                        </>
+                      ) : selectedDownloadYear === "2" ? (
+                        <>
+                          <option value="3">Semester 3 (III)</option>
+                          <option value="4">Semester 4 (IV)</option>
+                        </>
+                      ) : selectedDownloadYear === "3" ? (
+                        <>
+                          <option value="5">Semester 5 (V)</option>
+                          <option value="6">Semester 6 (VI)</option>
+                        </>
+                      ) : selectedDownloadYear === "4" ? (
+                        <>
+                          <option value="7">Semester 7 (VII)</option>
+                          <option value="8">Semester 8 (VIII)</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="1">Semester 1 (I)</option>
+                          <option value="2">Semester 2 (II)</option>
+                          <option value="3">Semester 3 (III)</option>
+                          <option value="4">Semester 4 (IV)</option>
+                          <option value="5">Semester 5 (V)</option>
+                          <option value="6">Semester 6 (VI)</option>
+                          <option value="7">Semester 7 (VII)</option>
+                          <option value="8">Semester 8 (VIII)</option>
+                        </>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Section Dropdown */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      Section
+                    </label>
+                    <select
+                      value={selectedDownloadSection}
+                      onChange={(e) => setSelectedDownloadSection(e.target.value)}
+                      className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs"
+                    >
+                      <option value="all">All Sections</option>
+                      {availableSectionsForFilter.map((sec) => (
+                        <option key={sec} value={sec}>
+                          Section {sec}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Row 3: Individual Faculty Dropdown */}
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1 flex items-center justify-between">
+                    <span>Faculty Member</span>
+                    <span className="text-[10px] font-normal text-slate-500">
+                      Select specific teacher or leave as "All Faculty"
+                    </span>
+                  </label>
+                  <select
+                    value={selectedDownloadFaculty}
+                    onChange={(e) => setSelectedDownloadFaculty(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs text-slate-900 outline-none focus:border-navy-500 shadow-2xs font-medium"
+                  >
+                    <option value="all">All Faculty (Comprehensive Report)</option>
+                    {(report?.facultyGroups || []).map((f) => (
+                      <option key={f.facultyName} value={f.facultyName}>
+                        {f.facultyName} {f.employeeCode ? `(#${f.employeeCode})` : ""} — {f.totalSubmissions} evaluations, {f.overallRating ? `★ ${f.overallRating.toFixed(2)}` : "No rating"} ({f.totalSubjects} subjects)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Live Scope Match Preview */}
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2 text-emerald-900 font-bold">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>
+                    Matched: {scopedExportPreview.matchedSubjects} Subject Allocations
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-emerald-800 font-medium">
+                  <span>
+                    Evaluations: <strong className="font-bold text-emerald-900">{scopedExportPreview.matchedSubmissions}</strong>
+                  </span>
+                  <span>•</span>
+                  <span>
+                    Average Rating: <strong className="font-bold text-emerald-900">{scopedExportPreview.avgRating ? `★ ${scopedExportPreview.avgRating}` : "—"}</strong>
+                  </span>
+                </div>
+              </div>
+
+              {/* File Format Selection */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  End Date & Time (Deadline)
+                <label className="block text-xs font-bold text-slate-800 mb-2 uppercase tracking-wide">
+                  2. Select File Format
                 </label>
-                <input
-                  type="datetime-local"
-                  value={editEndDate}
-                  onChange={(e) => setEditEndDate(e.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-xs text-slate-900 outline-none focus:border-navy-500"
-                />
-                <span className="mt-1 block text-[10px] text-slate-500">
-                  Formatted: {formatDisplayDateTime(editEndDate)}
-                </span>
-              </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <label
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg border p-3 cursor-pointer transition-all",
+                      downloadFormat === "excel"
+                        ? "border-emerald-600 bg-emerald-50/50 ring-1 ring-emerald-500"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadFormat"
+                      checked={downloadFormat === "excel"}
+                      onChange={() => setDownloadFormat("excel")}
+                      className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <div className="font-bold text-xs text-slate-900">Excel Spreadsheet (.xls)</div>
+                      <p className="text-[10px] text-slate-500">Formatted workbook with summary cards and color badges</p>
+                    </div>
+                  </label>
 
-              <div className="flex items-center gap-2 pt-2">
-                <input
-                  type="checkbox"
-                  id="editIsActive"
-                  checked={editIsActive}
-                  onChange={(e) => setEditIsActive(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-navy-600 focus:ring-navy-500"
-                />
-                <label htmlFor="editIsActive" className="text-xs font-medium text-slate-800 cursor-pointer">
-                  Session is Active (Allow student submissions within period)
-                </label>
+                  <label
+                    className={cn(
+                      "flex items-center gap-3 rounded-lg border p-3 cursor-pointer transition-all",
+                      downloadFormat === "csv"
+                        ? "border-emerald-600 bg-emerald-50/50 ring-1 ring-emerald-500"
+                        : "border-slate-200 bg-white hover:bg-slate-50"
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="downloadFormat"
+                      checked={downloadFormat === "csv"}
+                      onChange={() => setDownloadFormat("csv")}
+                      className="h-4 w-4 text-emerald-600 focus:ring-emerald-500"
+                    />
+                    <div>
+                      <div className="font-bold text-xs text-slate-900">CSV Delimited (.csv)</div>
+                      <p className="text-[10px] text-slate-500">Raw tabular data suitable for external analysis</p>
+                    </div>
+                  </label>
+                </div>
               </div>
             </div>
 
             {/* Modal Footer */}
-            <div className="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-slate-50/80 px-6 py-4">
+            <div className="flex shrink-0 items-center justify-between border-t border-slate-200 bg-slate-50/80 px-6 py-4">
               <Button
-                variant="ghost"
-                onClick={() => setIsEditDatesOpen(false)}
-                disabled={updatingDates}
+                variant="secondary"
+                size="sm"
+                onClick={handleDownloadMasterWorkbook}
+                className="text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border-slate-300 flex items-center gap-1.5"
+                title="Download full multi-sheet Excel workbook with all tabs"
               >
-                Cancel
+                <Layers className="h-3.5 w-3.5 text-navy-700" />
+                <span>Full Master Workbook (.xls)</span>
               </Button>
-              <Button
-                variant="primary"
-                onClick={() => void handleUpdateDatesSubmit()}
-                disabled={updatingDates}
-                className="bg-navy-800 hover:bg-navy-900 text-white"
-              >
-                {updatingDates ? "Updating..." : "Save Changes"}
-              </Button>
+
+              <div className="flex items-center gap-2.5">
+                <Button
+                  variant="ghost"
+                  onClick={() => setIsDownloadReportsModalOpen(false)}
+                  disabled={isExporting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={handleDownloadGlobalScopedReport}
+                  disabled={isExporting || scopedExportPreview.matchedSubjects === 0}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 font-bold shadow-xs"
+                >
+                  <Download className="h-4 w-4" />
+                  {isExporting ? "Generating..." : "Download Scoped Report"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>
