@@ -1282,6 +1282,13 @@ function shortenQuestionText(text: string): string {
   return trimmed.slice(0, 22) + "...";
 }
 
+function toSentenceCase(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return trimmed;
+  const normalized = trimmed.toLocaleLowerCase();
+  return normalized.charAt(0).toLocaleUpperCase() + normalized.slice(1);
+}
+
 function renderAbstractBadge(qSum: QuestionSummary | undefined, count: number) {
   if (!qSum || count === 0 || qSum.abstract === "—") {
     return <span className="text-slate-400 font-medium text-xs">—</span>;
@@ -3477,11 +3484,11 @@ export function FeedbackReportsView() {
       {/* ACTIVE PUBLICATION & ACTIVATION PERIOD BANNER                             */}
       {/* ========================================================================= */}
       {activePublication ? (
-        <Card className="border-navy-200/90 bg-gradient-to-r from-navy-900 via-navy-800 to-slate-900 text-white p-5 shadow-md">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="space-y-2">
+        <Card className="overflow-hidden border-navy-800 bg-navy-900 p-4 text-white shadow-md sm:p-4">
+          <div className="flex flex-col justify-between gap-4 xl:flex-row xl:items-center">
+            <div className="min-w-0 space-y-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
+                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-300">
                   Published Session
                 </span>
                 {activePublication.status === "active" ? (
@@ -3504,37 +3511,37 @@ export function FeedbackReportsView() {
                 </span>
               </div>
 
-              <h3 className="text-lg font-bold text-white tracking-tight">
+              <h3 className="text-lg font-bold tracking-tight text-white">
                 {activePublication.title}
               </h3>
 
-              <div className="flex flex-wrap items-center gap-4 text-xs text-slate-300">
-                <div>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11px] text-slate-300">
+                <div className="rounded-md bg-white/5 px-2 py-1">
                   <span className="text-slate-400">Target College: </span>
                   <span className="font-semibold text-white">
                     {activePublication.collegeName || "All Colleges"}
                   </span>
                 </div>
-                <div>
+                <div className="rounded-md bg-white/5 px-2 py-1">
                   <span className="text-slate-400">Courses: </span>
                   <span className="font-semibold text-white">
                     {activePublication.courseName || "All Courses"}
                   </span>
                 </div>
-                <div>
+                <div className="rounded-md bg-white/5 px-2 py-1">
                   <span className="text-slate-400">Branch: </span>
                   <span className="font-semibold text-white">
                     {activePublication.branchName || "All Branches"}
                   </span>
                 </div>
-                <div>
+                <div className="rounded-md bg-white/5 px-2 py-1">
                   <span className="text-slate-400">Academic Year: </span>
                   <span className="font-semibold text-white">
                     {activePublication.academicYear}
                   </span>
                 </div>
                 {activePublication.semester ? (
-                  <div>
+                  <div className="rounded-md bg-white/5 px-2 py-1">
                     <span className="text-slate-400">Semester: </span>
                     <span className="font-semibold text-white">
                       Sem {activePublication.semester}
@@ -3596,29 +3603,32 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Activation Period Card Box */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              <div className="rounded-xl border border-white/15 bg-white/10 backdrop-blur-md p-3.5 text-xs space-y-1">
-                <div className="flex items-center gap-1.5 font-semibold text-emerald-300">
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row sm:items-stretch xl:items-center">
+              <div className="min-w-[270px] rounded-xl border border-white/15 bg-white/5 p-3 text-xs">
+                <div className="mb-2 flex items-center gap-2 font-semibold text-emerald-300">
                   <Calendar className="h-3.5 w-3.5" />
-                  <span>Activation Period (Live in System):</span>
+                  <span>Activation period</span>
+                  <span className="ml-auto rounded-full bg-emerald-400/10 px-2 py-0.5 text-[10px] font-medium text-emerald-200">
+                    Live in system
+                  </span>
                 </div>
-                <div className="grid grid-cols-2 gap-3 text-slate-200 pt-0.5">
+                <div className="grid grid-cols-2 gap-2 text-slate-200">
                   <div>
-                    <span className="block text-[10px] text-slate-400 uppercase">Start Date:</span>
-                    <span className="font-semibold text-white">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Starts</span>
+                    <span className="font-semibold leading-tight text-white">
                       {formatDisplayDateTime(activePublication.startDate)}
                     </span>
                   </div>
                   <div>
-                    <span className="block text-[10px] text-slate-400 uppercase">End Date:</span>
-                    <span className="font-semibold text-white">
+                    <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Ends</span>
+                    <span className="font-semibold leading-tight text-white">
                       {formatDisplayDateTime(activePublication.endDate)}
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="flex sm:flex-col gap-2">
+              <div className="flex gap-2 sm:flex-col">
                 <Button
                   variant="secondary"
                   size="sm"
@@ -3646,18 +3656,18 @@ export function FeedbackReportsView() {
       {/* FILTER CONTROLS BAR                                                       */}
       {/* ========================================================================= */}
       <Card className="border-slate-200 bg-white p-4 shadow-xs">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="overflow-x-auto pb-1">
+          <div className="grid min-w-[1220px] grid-cols-[minmax(450px,2.1fr)_minmax(170px,1fr)_minmax(175px,1.05fr)_minmax(110px,.65fr)_minmax(130px,.8fr)_minmax(120px,.75fr)] items-end gap-3">
             {/* Published Session Selector */}
-            <div>
+            <div className="min-w-0">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Published Feedback Session
               </label>
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex items-center gap-1.5">
                 <select
                   value={selectedPublicationId || ""}
                   onChange={(e) => setSelectedPublicationId(Number(e.target.value))}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-navy-900 outline-none transition focus:border-navy-500 focus:ring-1 focus:ring-navy-500 min-w-[240px]"
+                  className="h-9 min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2.5 text-sm font-semibold text-navy-900 outline-none transition focus:border-navy-500 focus:ring-1 focus:ring-navy-500"
                 >
                   {report?.publications && report.publications.length > 0 ? (
                     report.publications.map((p) => (
@@ -3676,7 +3686,7 @@ export function FeedbackReportsView() {
                     variant="secondary"
                     size="sm"
                     onClick={() => openEditDatesModal(selectedPubObject)}
-                    className="h-8 text-xs bg-slate-50 hover:bg-slate-100 text-navy-900 border-slate-300 flex items-center gap-1 font-semibold"
+                    className="h-9 shrink-0 bg-slate-50 px-2 text-xs font-semibold text-navy-900 hover:bg-slate-100"
                     title={`Edit schedule & dates for "${selectedPubObject.title}"`}
                   >
                     <Calendar className="h-3.5 w-3.5 text-navy-600" />
@@ -3689,7 +3699,7 @@ export function FeedbackReportsView() {
                   variant="ghost"
                   size="sm"
                   onClick={() => setIsManageSessionsModalOpen(true)}
-                  className="h-8 text-xs text-slate-600 hover:text-navy-900 flex items-center gap-1"
+                  className="h-9 shrink-0 px-2 text-xs text-slate-600 hover:text-navy-900"
                   title="View and manage all feedback sessions"
                 >
                   <Clock className="h-3.5 w-3.5 text-slate-400" />
@@ -3699,7 +3709,7 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Course Filter */}
-            <div>
+            <div className="min-w-0">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Course
               </label>
@@ -3710,7 +3720,7 @@ export function FeedbackReportsView() {
                   setSelectedCourse(nextCourse);
                   setSelectedBranch("all");
                 }}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[150px]"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-navy-500"
               >
                 <option value="all">All Courses</option>
                 {scopedAvailableCourses.map((c) => (
@@ -3722,14 +3732,14 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Branch Filter */}
-            <div>
+            <div className="min-w-0">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Branch
               </label>
               <select
                 value={selectedBranch}
                 onChange={(e) => setSelectedBranch(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[180px]"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2.5 text-sm text-slate-800 outline-none transition focus:border-navy-500"
               >
                 <option value="all">All Branches</option>
                 {branchesForSelectedCourse.map((b) => (
@@ -3741,7 +3751,7 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Year of Study Filter */}
-            <div>
+            <div className="min-w-0">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Year
               </label>
@@ -3758,7 +3768,7 @@ export function FeedbackReportsView() {
                     }
                   }
                 }}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[130px]"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-navy-500"
               >
                 <option value="all">All Years</option>
                 <option value="1">1st Year</option>
@@ -3769,14 +3779,14 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Semester Filter */}
-            <div>
+            <div className="min-w-0">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Semester
               </label>
               <select
                 value={selectedSemester}
                 onChange={(e) => setSelectedSemester(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[130px]"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-navy-500"
               >
                 <option value="all">All Semesters</option>
                 {(selectedYear === "all"
@@ -3791,14 +3801,14 @@ export function FeedbackReportsView() {
             </div>
 
             {/* Section Filter */}
-            <div>
+            <div className="min-w-0">
               <label className="block text-[11px] font-semibold uppercase tracking-wider text-slate-500 mb-1">
                 Section
               </label>
               <select
                 value={selectedSection}
                 onChange={(e) => setSelectedSection(e.target.value)}
-                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-800 outline-none transition focus:border-navy-500 min-w-[120px]"
+                className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm text-slate-800 outline-none transition focus:border-navy-500"
               >
                 <option value="all">All Sections</option>
                 {availableSectionsForFilter.map((sec) => (
@@ -3809,12 +3819,9 @@ export function FeedbackReportsView() {
               </select>
             </div>
           </div>
-
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">
-              Showing reports for: <strong className="text-navy-900">{activePublication ? activePublication.title : "All"}</strong>
-            </span>
-          </div>
+        </div>
+        <div className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
+          Showing reports for: <strong className="text-navy-900">{activePublication ? activePublication.title : "All"}</strong>
         </div>
       </Card>
 
@@ -3976,7 +3983,7 @@ export function FeedbackReportsView() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-xs border-collapse">
                           <thead>
-                            <tr className="bg-blue-600 text-white font-bold tracking-wider text-[11px] uppercase border-b border-blue-700">
+                            <tr className="bg-blue-600 text-white font-bold tracking-wide text-[11px] border-b border-blue-700">
                               <th className="py-2.5 px-4 min-w-[170px]">SUBJECT</th>
                               <th className="py-2.5 px-4 min-w-[150px]">STAFF</th>
                               <th className="py-2.5 px-3 text-center min-w-[70px]">COUNT</th>
@@ -3986,7 +3993,7 @@ export function FeedbackReportsView() {
                                   className="py-2.5 px-3 text-center min-w-[140px]"
                                   title={q.questionText}
                                 >
-                                  {q.shortLabel || shortenQuestionText(q.questionText)} (Q${idx + 1})
+                                  {toSentenceCase(q.shortLabel || shortenQuestionText(q.questionText))} (Q${idx + 1})
                                 </th>
                               ))}
                             </tr>
@@ -4099,7 +4106,7 @@ export function FeedbackReportsView() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-xs border-collapse">
                           <thead>
-                            <tr className="bg-blue-600 text-white font-bold tracking-wider text-[11px] uppercase border-b border-blue-700">
+                            <tr className="bg-blue-600 text-white font-bold tracking-wide text-[11px] border-b border-blue-700">
                               <th className="py-2.5 px-4 min-w-[160px]">SUBJECT</th>
                               <th className="py-2.5 px-3 min-w-[100px]">COURSE</th>
                               <th className="py-2.5 px-4 min-w-[160px]">BRANCH & SECTION</th>
@@ -4110,7 +4117,7 @@ export function FeedbackReportsView() {
                                   className="py-2.5 px-3 text-center min-w-[140px]"
                                   title={q.questionText}
                                 >
-                                  {q.shortLabel || shortenQuestionText(q.questionText)} (Q${idx + 1})
+                                  {toSentenceCase(q.shortLabel || shortenQuestionText(q.questionText))} (Q${idx + 1})
                                 </th>
                               ))}
                               <th className="py-2.5 px-3 text-center min-w-[130px]">STUDENT DETAILS</th>
@@ -4443,7 +4450,7 @@ export function FeedbackReportsView() {
                         <th className="py-2.5 px-3 min-w-[130px]">SUBMITTED AT</th>
                         {questionsToDisplay.map((q, qIdx) => (
                           <th key={q.id ?? qIdx} className="py-2.5 px-3 text-center min-w-[130px]">
-                            {q.shortLabel || shortenQuestionText(q.questionText)} (Q${qIdx + 1})
+                            {toSentenceCase(q.shortLabel || shortenQuestionText(q.questionText))} (Q${qIdx + 1})
                           </th>
                         ))}
                       </tr>
