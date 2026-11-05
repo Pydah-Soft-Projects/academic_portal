@@ -67,7 +67,7 @@ if (typeof window !== "undefined") {
   const portalUrl =
     process.env.NEXT_PUBLIC_PORTAL_BACKEND_URL ||
     process.env.NEXT_PUBLIC_NEMO_AI_SERVICE_URL ||
-    (isLocal ? "http://localhost:4000" : "https://acad.pydah.edu.in");
+    (isLocal ? "http://localhost:4000" : (window.location.origin || "https://acad.pydah.edu.in"));
   const nemoApi =
     process.env.NEXT_PUBLIC_NEMO_AI_API_URL ||
     (isLocal ? "http://localhost:8000" : "https://nemo-ai.pydah.edu.in");
@@ -141,10 +141,11 @@ function resolvePortalServiceUrl(): string {
     if (isLocal) {
       return "http://localhost:4000";
     }
+    if (window.location.origin && window.location.origin.startsWith("http")) {
+      return window.location.origin;
+    }
   }
-  return process.env.NODE_ENV === "production"
-    ? "https://acad.pydah.edu.in"
-    : "http://localhost:4000";
+  return "https://acad.pydah.edu.in";
 }
 
 const DEFAULT_NEMO_CDN_URL =

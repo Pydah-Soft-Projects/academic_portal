@@ -46,6 +46,10 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: https://acad-backend.pydah.edu.in/api
           NEXT_PUBLIC_CRM_FRONTEND_URL: https://crm.pydah.edu.in
           NEXT_PUBLIC_CRM_BACKEND_URL: https://crm.pydah.edu.in
+          NEXT_PUBLIC_NEMO_AI_API_URL: https://nemo-ai.pydah.edu.in
+          NEXT_PUBLIC_PORTAL_BACKEND_URL: https://acad.pydah.edu.in
+          NEXT_PUBLIC_NEMO_AI_SERVICE_URL: https://acad.pydah.edu.in
+          NEXT_PUBLIC_NEMO_CDN_URL: https://nemo-chat.pydah.edu.in
         run: |
           npm run build
 
