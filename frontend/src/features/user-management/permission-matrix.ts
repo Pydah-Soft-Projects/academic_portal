@@ -464,8 +464,8 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
     label: "Pending Requests & Approvals",
     href: "/requests/pending",
     iconName: "Clock3",
-    sidebarUnlockPermissions: ["request.approve"],
-    permissions: [asDef("request.approve"), asDef("request.workflow.manage")],
+    sidebarUnlockPermissions: ["request.approve", "request.view"],
+    permissions: [asDef("request.view"), asDef("request.approve")],
   },
   {
     group: "Requests",
@@ -596,6 +596,14 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
       asDef("semester_dates.view"),
       asDef("semester_dates.edit"),
     ],
+  },
+  {
+    group: "System",
+    label: "Request Workflows",
+    href: "/settings/request-workflows",
+    iconName: "GitMerge",
+    sidebarUnlockPermissions: ["request.workflow.manage"],
+    permissions: [asDef("request.workflow.manage")],
   },
 ];
 

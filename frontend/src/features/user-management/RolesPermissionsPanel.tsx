@@ -214,6 +214,12 @@ export function RolesPermissionsPanel({ canManage }: Props) {
     setEditingDetails(false);
   }, [selected?.id, savedPermKey, selected?.label, selected?.description, selected?.isGlobalCapable]);
 
+  useEffect(() => {
+    if (!success) return;
+    const t = setTimeout(() => setSuccess(null), 4500);
+    return () => clearTimeout(t);
+  }, [success]);
+
   function discardChanges() {
     if (!selected) return;
     setDraftKeys([...selected.permissions]);
@@ -1166,19 +1172,21 @@ export function RolesPermissionsPanel({ canManage }: Props) {
                                     >
                                       No Access
                                     </button>
-                                    <button
-                                      type="button"
-                                      disabled={busy || reads.length === 0}
-                                      onClick={() => applyModuleLevel(mod, "view")}
-                                      className={cn(
-                                        "rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
-                                        level === "view"
-                                          ? "bg-blue-600 text-white shadow-2xs"
-                                          : "text-slate-600 hover:text-navy-900"
-                                      )}
-                                    >
-                                      View
-                                    </button>
+                                    {reads.length > 0 ? (
+                                      <button
+                                        type="button"
+                                        disabled={busy}
+                                        onClick={() => applyModuleLevel(mod, "view")}
+                                        className={cn(
+                                          "rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
+                                          level === "view"
+                                            ? "bg-blue-600 text-white shadow-2xs"
+                                            : "text-slate-600 hover:text-navy-900"
+                                        )}
+                                      >
+                                        View
+                                      </button>
+                                    ) : null}
                                     {hasWrites ? (
                                       <button
                                         type="button"
@@ -1337,7 +1345,7 @@ export function RolesPermissionsPanel({ canManage }: Props) {
 
       {/* 5. FLOATING DOCKED SAVE BAR WHEN DIRTY */}
       {dirty && selected ? (
-        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 rounded-2xl border border-navy-800 bg-navy-950/95 px-5 py-3 text-white shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-2xl border border-navy-800 bg-navy-950/95 px-5 py-3 text-white shadow-2xl backdrop-blur-md animate-in fade-in slide-in-from-bottom-2">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
             <span className="text-xs font-semibold">
@@ -1349,7 +1357,7 @@ export function RolesPermissionsPanel({ canManage }: Props) {
               type="button"
               disabled={busy}
               onClick={discardChanges}
-              className="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white transition-colors"
+              className="rounded-lg px-2.5 py-1 text-xs font-medium text-slate-300 hover:text-white transition-colors cursor-pointer"
             >
               Discard
             </button>
@@ -1358,12 +1366,48 @@ export function RolesPermissionsPanel({ canManage }: Props) {
               variant="primary"
               disabled={busy}
               onClick={() => void saveAll()}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs border-none shadow-xs"
+              className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs border-none shadow-xs cursor-pointer"
             >
               <Save className="mr-1.5 h-3.5 w-3.5" />
               {busy ? "Saving…" : "Save Changes"}
             </Button>
           </div>
+        </div>
+      ) : null}
+
+      {/* Sticky Feedback Toast visible anywhere on screen */}
+      {success || error ? (
+        <div className="fixed top-4 right-4 z-50 max-w-md animate-in fade-in slide-in-from-top-2">
+          {success ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-300 bg-emerald-600 px-4 py-3 text-xs text-white shadow-xl">
+              <div className="flex items-center gap-2">
+                <Check className="h-4 w-4 shrink-0 text-white" />
+                <span className="font-semibold">{success}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSuccess(null)}
+                className="text-white/80 hover:text-white font-bold ml-2 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          ) : null}
+          {error ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-rose-300 bg-rose-600 px-4 py-3 text-xs text-white shadow-xl">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0 text-white" />
+                <span className="font-semibold">{error}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="text-white/80 hover:text-white font-bold ml-2 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
