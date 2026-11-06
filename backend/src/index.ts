@@ -36,6 +36,7 @@ import { internalMarksRouter } from "./routes/internal-marks.route.js";
 import { classTeacherRouter } from "./routes/class-teacher.route.js";
 import { principalDashboardRouter } from "./routes/principal-dashboard.route.js";
 import { hodRouter } from "./routes/hod.route.js";
+import { timetableRequestsRouter } from "./routes/timetable-requests.route.js";
 import { aiRouter } from "./ai/index.js";
 
 const app = express();
@@ -81,6 +82,7 @@ app.use("/api/students", studentsRouter);
 app.use("/api/semester-dates", semesterDatesRouter);
 app.use("/api/timetables", timetablesRouter);
 app.use("/api/today-timetable", todayTimetableRouter);
+app.use("/api/timetable-requests", timetableRequestsRouter);
 app.use("/api/timings", timingRouter);
 app.use("/api/class-sessions", classSessionsRouter);
 app.use("/api/academic-dates", academicDatesRouter);

@@ -2,10 +2,12 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.middleware.js";
 import {
   ensureEntityScope,
+  getAuthz,
   requirePermission,
   scopedFilters,
   statusFromAuthzError,
 } from "../authz/require-permission.js";
+import { queryAcademic } from "../db/pools.js";
 import {
   cloneCombinedTimetable,
   combineTimetableSections,
@@ -482,6 +484,30 @@ timetablesRouter.post("/:planId/review", requirePermission("timetable.edit"), as
 timetablesRouter.post("/:planId/publish", requirePermission("timetable.publish"), async (req: AuthedRequest, res, next) => {
   try {
     await assertPlanInScope(req, Number(req.params.planId));
+
+    const authz = getAuthz(req);
+    const isApprover =
+      authz.roleKeys.includes("principal") ||
+      authz.roleKeys.includes("vice_principal") ||
+      authz.roleKeys.includes("super_admin");
+
+    // If caller is an HOD without high-level approver role and force is not provided,
+    // verify if the plan has already been published
+    if (!isApprover && !req.body?.force) {
+      const planRows = await queryAcademic<{ id: number; status: string; version_no: number | null }[]>(
+        `SELECT id, status, version_no FROM ap_timetable_plans WHERE id = ? LIMIT 1`,
+        [Number(req.params.planId)],
+      );
+      const currentPlan = planRows[0];
+      if (currentPlan && (currentPlan.status === "published" || (currentPlan.version_no != null && currentPlan.version_no >= 1))) {
+        res.status(403).json({
+          message: "Publishing changes to an already published master timetable requires Principal approval. Please submit a Time Table Request.",
+          requiresPrincipalApproval: true,
+        });
+        return;
+      }
+    }
+
     const published = await publishTimetablePlan(Number(req.params.planId), {
       actorUserId: req.authUser?.id,
       ipAddress: req.ip,

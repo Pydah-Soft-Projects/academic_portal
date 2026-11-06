@@ -75,6 +75,18 @@ const PERMISSION_META: Record<
     displayName: "Publish Timetable",
     description: "Publish timetable plans",
   },
+  "timetable_requests.view": {
+    module: "timetable_requests",
+    action: "view",
+    displayName: "View Time Table Requests",
+    description: "View and track master timetable change requests and approvals",
+  },
+  "timetable_requests.approve": {
+    module: "timetable_requests",
+    action: "approve",
+    displayName: "Approve Time Table Requests",
+    description: "Approve or reject master timetable modification requests submitted by HODs",
+  },
   "today_timetable.view": {
     module: "today_timetable",
     action: "view",

@@ -134,6 +134,12 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Clock3,
         permissions: ["request.approve"],
       },
+      {
+        label: "Time Table Requests",
+        href: "/timetable-requests",
+        icon: CalendarCheck,
+        permissions: ["timetable_requests.view", "timetable.view", "request.approve"],
+      },
     ],
   },
   {
@@ -284,6 +290,7 @@ export const TEACHING_STAFF_NAV_HREFS = new Set([
   "/attendance-posting",
   "/internal-marks",
   "/requests",
+  "/timetable-requests",
   "/class-teacher-assignment",
   "/mentoring-risks",
   "/user-management",
@@ -358,6 +365,10 @@ export function breadcrumbsForPath(
       segments.push({ label: current.label, href: current.href });
     }
     return segments;
+  }
+
+  if (pathname.startsWith("/timetable-requests")) {
+    return [{ label: "Requests", href: "/requests" }, { label: "Time Table Requests" }];
   }
 
   const current = navItemForPath(pathname);

@@ -116,6 +116,19 @@ export const PERMISSION_PRESENTATION: Record<
     kind: "write",
     sensitive: true,
   },
+  "timetable_requests.view": {
+    key: "timetable_requests.view",
+    label: "View Time Table Requests",
+    description: "View and track master timetable change requests and approval workflows.",
+    kind: "read",
+  },
+  "timetable_requests.approve": {
+    key: "timetable_requests.approve",
+    label: "Approve Time Table Requests",
+    description: "Approve or reject master timetable modification requests submitted by HODs.",
+    kind: "write",
+    sensitive: true,
+  },
   "combined_timetable.view": {
     key: "combined_timetable.view",
     label: "View Combined Classes",
@@ -453,6 +466,17 @@ export const PERMISSION_MATRIX_MODULES: MatrixModuleDef[] = [
     iconName: "Clock3",
     sidebarUnlockPermissions: ["request.approve"],
     permissions: [asDef("request.approve"), asDef("request.workflow.manage")],
+  },
+  {
+    group: "Requests",
+    label: "Time Table Requests",
+    href: "/timetable-requests",
+    iconName: "CalendarCheck",
+    sidebarUnlockPermissions: ["timetable_requests.view", "timetable.view", "request.approve"],
+    permissions: [
+      asDef("timetable_requests.view"),
+      asDef("timetable_requests.approve"),
+    ],
   },
 
   // 4. Examinations

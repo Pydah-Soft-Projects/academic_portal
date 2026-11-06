@@ -199,7 +199,7 @@ async function loadScopeLabels(
         collegeName: row.college_name,
         courseId: row.course_id == null ? null : Number(row.course_id),
         courseName: row.course_name,
-        branchName: row.branch_name,
+        branchName: row.branch_name ?? "",
       });
     }
   }

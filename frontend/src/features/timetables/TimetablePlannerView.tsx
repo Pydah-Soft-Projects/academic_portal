@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -11,12 +13,19 @@ import {
   ArrowRight,
   ArrowUpDown,
   Building2,
+  CalendarCheck,
   Check,
+  CheckCircle2,
+  Clock3,
+  ExternalLink,
+  FileText,
   FlaskConical,
+  HelpCircle,
   Layers,
   Plus,
   Printer,
   Search,
+  Send,
   ShieldAlert,
   UserCheck,
   Users,
@@ -530,9 +539,9 @@ function AllocationEditorCard({
                 const entryType = subject ? mapEmsTypeToEntryType(subject.type) : alloc.entryType;
                 const inferredFaculty = subjectId
                   ? resolveFacultyForSubject(assignments, Number(subjectId), entryType, {
-                      dayOfWeek: dayCode,
-                      timingSlotId: slotId,
-                    })
+                    dayOfWeek: dayCode,
+                    timingSlotId: slotId,
+                  })
                   : "";
                 const matchedFacultyObj = inferredFaculty
                   ? planner.faculty.find((f) => f.hrmsEmployeeId === inferredFaculty)
@@ -1124,11 +1133,26 @@ function TimetablePlannerSkeleton() {
 }
 
 export function TimetablePlannerView({ embedded = false }: { embedded?: boolean }) {
+  const router = useRouter();
   const { filters, masters, setFilters } = useAcademicContext();
-  const { hasPermission, hasAnyPermission } = useAuth();
+  const { hasPermission, hasAnyPermission, authorization } = useAuth();
   const canEdit = hasPermission("timetable.edit");
   const canPublish = hasPermission("timetable.publish");
   const canConfigureTimings = hasAnyPermission("timetable.edit");
+
+  const isPrincipal = authorization?.roles?.some((r) => r.roleKey === "principal");
+  const isSuperAdmin = authorization?.roles?.some((r) => r.roleKey === "super_admin");
+  const isVicePrincipal = authorization?.roles?.some((r) => r.roleKey === "vice_principal");
+  const isHod = authorization?.roles?.some((r) => r.roleKey === "hod");
+  const isApprover = isPrincipal || isSuperAdmin || isVicePrincipal;
+
+  const [hodNoticeModalOpen, setHodNoticeModalOpen] = useState(false);
+  const [requestPrincipalModalOpen, setRequestPrincipalModalOpen] = useState(false);
+  const [requestReason, setRequestReason] = useState("");
+  const [requestNotes, setRequestNotes] = useState("");
+  const [submittingRequest, setSubmittingRequest] = useState(false);
+  const [requestSuccessNotice, setRequestSuccessNotice] = useState<string | null>(null);
+
   const [planner, setPlanner] = useState<PlannerResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1481,7 +1505,9 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   const hasLocalChanges =
     baselineSignature != null && currentSignature !== baselineSignature;
   const isPublished = planner?.context.status === "published";
+  const isAlreadyPublished = isPublished || (planner?.context.versionNo != null && planner.context.versionNo >= 1);
   const publishBlocked = isPublished && !hasLocalChanges;
+  const canTriggerPublish = canPublish || (isHod && canEdit);
 
   const assignmentsBySlot = useMemo(() => {
     const map = new Map<string, LocalAssignment[]>();
@@ -1675,35 +1701,35 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
         const b1: DraftAllocation = prev[0]
           ? { ...prev[0], batchLabel: "Batch 1" }
           : {
-              key: Math.random().toString(36).substring(2, 9),
-              mode: "subject",
-              subjectId: "",
-              customLabel: "",
-              hrmsEmployeeId: "",
-              facultyName: "",
-              roomLabel: "",
-              batchLabel: "Batch 1",
-              entryType: "theory",
-              facultySearch: "",
-              facultyOpen: false,
-              weeklyRotation: false,
-            };
+            key: Math.random().toString(36).substring(2, 9),
+            mode: "subject",
+            subjectId: "",
+            customLabel: "",
+            hrmsEmployeeId: "",
+            facultyName: "",
+            roomLabel: "",
+            batchLabel: "Batch 1",
+            entryType: "theory",
+            facultySearch: "",
+            facultyOpen: false,
+            weeklyRotation: false,
+          };
         const b2: DraftAllocation = prev[1]
           ? { ...prev[1], batchLabel: "Batch 2" }
           : {
-              key: Math.random().toString(36).substring(2, 9),
-              mode: "subject",
-              subjectId: "",
-              customLabel: "",
-              hrmsEmployeeId: "",
-              facultyName: "",
-              roomLabel: "",
-              batchLabel: "Batch 2",
-              entryType: "theory",
-              facultySearch: "",
-              facultyOpen: false,
-              weeklyRotation: false,
-            };
+            key: Math.random().toString(36).substring(2, 9),
+            mode: "subject",
+            subjectId: "",
+            customLabel: "",
+            hrmsEmployeeId: "",
+            facultyName: "",
+            roomLabel: "",
+            batchLabel: "Batch 2",
+            entryType: "theory",
+            facultySearch: "",
+            facultyOpen: false,
+            weeklyRotation: false,
+          };
         return [b1, b2];
       });
 
@@ -2013,7 +2039,71 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
     }
   };
 
+  const handleNoticeTodayOnly = () => {
+    setHodNoticeModalOpen(false);
+    const q = new URLSearchParams();
+    if (filters.collegeId && filters.collegeId !== "all") q.set("collegeId", String(filters.collegeId));
+    if (filters.courseId && filters.courseId !== "all") q.set("courseId", String(filters.courseId));
+    if (filters.branchId && filters.branchId !== "all") q.set("branchId", String(filters.branchId));
+    if (filters.semester && filters.semester !== "all") q.set("semester", String(filters.semester));
+    if (filters.section && filters.section !== "all") q.set("section", String(filters.section));
+    if (filters.batch && filters.batch !== "all") q.set("batch", String(filters.batch));
+    if (filters.academicYear) q.set("academicYear", String(filters.academicYear));
+    router.push(`/today-timetable?${q.toString()}`);
+  };
+
+  const handleNoticeMasterTimetable = () => {
+    setHodNoticeModalOpen(false);
+    setRequestPrincipalModalOpen(true);
+  };
+
+  const handleSubmitRequestToPrincipal = async () => {
+    if (!planner?.context.planId) return;
+    if (!requestReason.trim()) {
+      setError("Please provide a reason for the master timetable modification.");
+      return;
+    }
+    setSubmittingRequest(true);
+    setError(null);
+    try {
+      const draftResult = await saveDraft(undefined, { skipReload: true });
+      const planId = draftResult?.planId || planner.context.planId;
+
+      const res = await apiFetch("/timetable-requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          planId,
+          reason: requestReason.trim(),
+          notes: requestNotes.trim() || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Failed to submit request");
+
+      setRequestPrincipalModalOpen(false);
+      setRequestReason("");
+      setRequestNotes("");
+      setRequestSuccessNotice(
+        "Master timetable edit request submitted to the Principal successfully. You can track approval status in Time Table Requests."
+      );
+      setInfo("Request submitted to Principal for approval.");
+      await loadPlanner();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to submit timetable request");
+    } finally {
+      setSubmittingRequest(false);
+    }
+  };
+
   const publish = async () => {
+    // If master timetable is already published ("second time"):
+    // HODs must request Principal approval! Show prompt notice.
+    if (!isApprover && isAlreadyPublished) {
+      setHodNoticeModalOpen(true);
+      return;
+    }
+
     if (publishBlocked) {
       setInfo(
         `This timetable is already published (plan #${planner?.context.planId ?? "—"}, version ${planner?.context.versionNo ?? "—"}). Edit a period before publishing again.`,
@@ -2171,8 +2261,8 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
 
   const missingLabel = !filtersComplete
     ? "Select College, Course, Branch, Semester" +
-      (needsSection ? ", and Section" : "") +
-      " to open the timetable."
+    (needsSection ? ", and Section" : "") +
+    " to open the timetable."
     : null;
 
   const headerSlots = useMemo(() => {
@@ -2431,15 +2521,45 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
             >
               <Building2 className="mr-1.5 h-4 w-4 text-slate-500" /> All Colleges Overview
             </Button>
-            {canPublish ? (
+            {canTriggerPublish ? (
               <Button
-                disabled={!planner?.ready || busy || publishBlocked}
+                disabled={!planner?.ready || busy || (isApprover && publishBlocked)}
                 onClick={() => void publish()}
-                className="print:hidden"
+                className={cn(
+                  "print:hidden",
+                  !isApprover && isAlreadyPublished && "bg-amber-600 hover:bg-amber-700 text-white font-semibold"
+                )}
+                title={
+                  !isApprover && isAlreadyPublished
+                    ? "Timetable already published. Click to choose Today Edits or Master Timetable change request."
+                    : "Publish timetable"
+                }
               >
-                Publish
+                {!isApprover && isAlreadyPublished ? "Publish / Request Edit" : "Publish"}
               </Button>
             ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {requestSuccessNotice ? (
+        <div className="mb-4 rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-sm font-medium text-emerald-800 shadow-sm flex items-center justify-between print:hidden">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 flex-shrink-0" />
+            <span>{requestSuccessNotice}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link href="/timetable-requests">
+              <Button size="sm" variant="secondary" className="border-emerald-300 text-emerald-800 hover:bg-emerald-100">
+                View Requests <ExternalLink className="ml-1 h-3 w-3" />
+              </Button>
+            </Link>
+            <button
+              onClick={() => setRequestSuccessNotice(null)}
+              className="text-emerald-700 hover:text-emerald-900 font-bold ml-2"
+            >
+              ×
+            </button>
           </div>
         </div>
       ) : null}
@@ -3210,7 +3330,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                       slotId={selected.slotId}
                       fieldClass={fieldClass}
                       onChange={(patch) => updateAllocation(0, patch)}
-                      onRemove={() => {}}
+                      onRemove={() => { }}
                       onSelectLabType={() => setLabModalOpen(true)}
                       selectedPeriodSlotIds={selectedPeriodSlotIds}
                       selectedPeriodLabels={selectedPeriodLabels}
@@ -3233,7 +3353,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                     </Button>
                     <Button onClick={saveLocalAssignment}>
                       {slotAllocations.some((a) => a.entryType === "lab") &&
-                      selectedPeriodSlotIds.length > 1
+                        selectedPeriodSlotIds.length > 1
                         ? `Save Lab (${selectedPeriodLabels.join(", ")})`
                         : "Save Period"}
                     </Button>
@@ -3253,9 +3373,9 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
                   </p>
                 </div>
                 {review.facultyClashes.length > 0 ||
-                review.sectionClashes.length > 0 ||
-                review.unassignedSlots.length > 0 ||
-                review.warnings.length > 0 ? (
+                  review.sectionClashes.length > 0 ||
+                  review.unassignedSlots.length > 0 ||
+                  review.warnings.length > 0 ? (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -3426,20 +3546,20 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
         sectionInfo={
           planner
             ? {
-                collegeId: planner.context.collegeId ?? 0,
-                collegeName: planner.context.college,
-                courseId: planner.context.courseId ?? 0,
-                courseName: planner.context.course,
-                branchId: planner.context.branchId ?? 0,
-                branchName: planner.context.branch,
-                batch: planner.context.batch,
-                year: planner.context.year,
-                semester: planner.context.semester,
-                sectionName: planner.context.section,
-                studentCount: planner.context.studentCount,
-                academicYearLabel: planner.context.academicYear,
-                currentTeacher: classTeacher,
-              }
+              collegeId: planner.context.collegeId ?? 0,
+              collegeName: planner.context.college,
+              courseId: planner.context.courseId ?? 0,
+              courseName: planner.context.course,
+              branchId: planner.context.branchId ?? 0,
+              branchName: planner.context.branch,
+              batch: planner.context.batch,
+              year: planner.context.year,
+              semester: planner.context.semester,
+              sectionName: planner.context.section,
+              studentCount: planner.context.studentCount,
+              academicYearLabel: planner.context.academicYear,
+              currentTeacher: classTeacher,
+            }
             : null
         }
         onAssigned={(teacher) => {
@@ -3503,6 +3623,169 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           planId: planner?.context.planId ?? null,
         }}
       />
+
+      {/* Notice modal when HOD attempts to publish an already-published timetable (second time) */}
+      {hodNoticeModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-amber-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <div className="rounded-full bg-amber-100 p-2.5 text-amber-700 shrink-0">
+                <HelpCircle className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-navy-950">Timetable Modification Notice</h3>
+                <p className="mt-1 text-xs text-slate-600">
+                  This master timetable is already published (Version {planner?.context.versionNo ?? 1}).
+                </p>
+                <p className="mt-2 text-sm font-semibold text-amber-900">
+                  Is this for today&apos;s edits or Master Timetable publish?
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={handleNoticeTodayOnly}
+                className="group flex flex-col justify-between rounded-xl border border-sky-200 bg-sky-50/50 p-4 text-left hover:border-sky-400 hover:bg-sky-50 transition shadow-sm"
+              >
+                <div>
+                  <div className="flex items-center gap-2 text-sky-800 font-bold text-sm">
+                    <CalendarCheck className="h-4 w-4 text-sky-600" />
+                    Today Only
+                  </div>
+                  <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                    Make temporary changes or substitutions for today only without changing the permanent Master Timetable.
+                  </p>
+                </div>
+                <div className="mt-4 flex items-center text-xs font-semibold text-sky-700 group-hover:text-sky-900">
+                  Go to Today Timetable &rarr;
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleNoticeMasterTimetable}
+                className="group flex flex-col justify-between rounded-xl border border-amber-300 bg-amber-50/50 p-4 text-left hover:border-amber-500 hover:bg-amber-50 transition shadow-sm"
+              >
+                <div>
+                  <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+                    <FileText className="h-4 w-4 text-amber-600" />
+                    Master Timetable
+                  </div>
+                  <p className="mt-2 text-xs text-slate-600 leading-relaxed">
+                    Permanent master timetable changes require approval from the Principal. Submit request for review.
+                  </p>
+                </div>
+                <div className="mt-4 flex items-center text-xs font-semibold text-amber-800 group-hover:text-amber-950">
+                  Request Principal Approval &rarr;
+                </div>
+              </button>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setHodNoticeModalOpen(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Request to Principal Modal */}
+      {requestPrincipalModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-navy-950">Request Principal Approval</h3>
+                <p className="mt-1 text-xs text-slate-500">
+                  Submit a request to the Principal to publish changes to this Master Timetable.
+                </p>
+              </div>
+              <button
+                onClick={() => setRequestPrincipalModalOpen(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs space-y-1.5">
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Department / Branch:</span>
+                  <span className="font-bold text-navy-900">{selectedBranch?.name || planner?.context.branch}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Semester & Section:</span>
+                  <span className="font-bold text-navy-900">
+                    Semester {planner?.context.semester ?? "—"} {filters.section ? `(Section ${filters.section})` : ""}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Academic Year:</span>
+                  <span className="font-bold text-navy-900">{planner?.context.academicYear ?? "—"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500 font-medium">Current Version:</span>
+                  <span className="font-bold text-navy-900">Version {planner?.context.versionNo ?? 1}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Reason for Master Timetable Modification *
+                </label>
+                <textarea
+                  rows={3}
+                  value={requestReason}
+                  onChange={(e) => setRequestReason(e.target.value)}
+                  placeholder="Explain why changes are needed (e.g., Faculty reassignment, syllabus balance, room change)..."
+                  className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-navy-600 focus:outline-none focus:ring-1 focus:ring-navy-600"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">
+                  Additional Notes (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={requestNotes}
+                  onChange={(e) => setRequestNotes(e.target.value)}
+                  placeholder="Any extra context for the Principal..."
+                  className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-navy-600 focus:outline-none focus:ring-1 focus:ring-navy-600"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setRequestPrincipalModalOpen(false)}
+                disabled={submittingRequest}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                className="bg-navy-900 hover:bg-navy-800 text-white font-semibold"
+                onClick={() => void handleSubmitRequestToPrincipal()}
+                disabled={submittingRequest || !requestReason.trim()}
+              >
+                <Send className="mr-1.5 h-3.5 w-3.5" />
+                {submittingRequest ? "Submitting..." : "Submit to Principal"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

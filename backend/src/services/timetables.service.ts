@@ -41,6 +41,7 @@ export type TimetablePlannerFilters = {
   branchId?: number;
   branchIds?: number[];
   section?: string;
+  branchSections?: Record<number, string[]>;
   batch?: string;
   year?: number;
   semester?: number;
@@ -3918,7 +3919,7 @@ export async function getTimetableRoster(
   if (branchSecEntries.length > 0) {
     const branchSecClauses: string[] = [];
     const branchSecParams: unknown[] = [];
-    for (const [bidStr, secs] of branchSecEntries) {
+    for (const [bidStr, secs] of branchSecEntries as [string, string[]][]) {
       const bid = Number(bidStr);
       const ph = secs.map(() => "?").join(", ");
       branchSecClauses.push(

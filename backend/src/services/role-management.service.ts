@@ -88,7 +88,70 @@ function iso(value: string | Date | null | undefined): string | null {
   return Number.isNaN(d.getTime()) ? String(value) : d.toISOString();
 }
 
+let timetablePermissionsEnsured = false;
+export async function ensureTimetableRequestPermissions() {
+  if (timetablePermissionsEnsured) return;
+  try {
+    const meta = [
+      {
+        key: "timetable_requests.view",
+        module: "academics",
+        action: "view",
+        displayName: "View Time Table Requests",
+        description: "View and track master timetable change requests and approvals",
+      },
+      {
+        key: "timetable_requests.approve",
+        module: "academics",
+        action: "approve",
+        displayName: "Approve Time Table Requests",
+        description: "Approve or reject master timetable modification requests submitted by HODs",
+      },
+    ];
+
+    for (const m of meta) {
+      await executeAcademic(
+        `INSERT INTO ap_permissions (permission_key, module, action, display_name, description, is_active)
+         VALUES (?, ?, ?, ?, ?, 1)
+         ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), description = VALUES(description), is_active = 1`,
+        [m.key, m.module, m.action, m.displayName, m.description],
+      );
+    }
+
+    const roleGrants: Record<string, string[]> = {
+      super_admin: ["timetable_requests.view", "timetable_requests.approve"],
+      principal: ["timetable.publish", "timetable_requests.view", "timetable_requests.approve"],
+      vice_principal: ["timetable_requests.view", "timetable_requests.approve"],
+      hod: ["timetable_requests.view"],
+    };
+
+    for (const [roleKey, permKeys] of Object.entries(roleGrants)) {
+      const roles = await queryAcademic<RoleRow[]>(
+        `SELECT id FROM ap_roles WHERE role_key = ? LIMIT 1`,
+        [roleKey],
+      );
+      if (!roles[0]) continue;
+      const roleId = roles[0].id;
+      for (const pKey of permKeys) {
+        const perms = await queryAcademic<{ id: number }[]>(
+          `SELECT id FROM ap_permissions WHERE permission_key = ? LIMIT 1`,
+          [pKey],
+        );
+        if (!perms[0]) continue;
+        await executeAcademic(
+          `INSERT IGNORE INTO ap_role_permissions (role_id, permission_id) VALUES (?, ?)`,
+          [roleId, perms[0].id],
+        );
+      }
+    }
+    timetablePermissionsEnsured = true;
+  } catch {
+    // best-effort
+  }
+}
+
 export async function listPermissionsCatalog(): Promise<PermissionDto[]> {
+  await ensureTimetableRequestPermissions();
   const rows = await queryAcademic<
     (RowDataPacket & {
       id: number;
@@ -169,6 +232,7 @@ const ROLE_ASSIGNMENT_COUNTS_SQL = `
 `;
 
 export async function listManagedRoles(includeInactive = true): Promise<RoleDetailDto[]> {
+  await ensureTimetableRequestPermissions();
   // Ensure class_teacher role exists in ap_roles table
   await queryAcademic<RoleRow[]>(`SELECT id FROM ap_roles WHERE role_key = 'class_teacher' LIMIT 1`)
     .then(async (found) => {

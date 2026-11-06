@@ -138,6 +138,11 @@ requestsRouter.post("/", requirePermission("request.create"), async (req: Authed
       req.ip,
     );
 
+    if (!detail) {
+      res.status(500).json({ message: "Failed to create request draft" });
+      return;
+    }
+
     if (typeKey === SUBSTITUTION_TYPE_KEY && substitution && typeof substitution === "object") {
       const sub = substitution as Record<string, unknown>;
       await createSubstitutionDetails(
