@@ -26,6 +26,10 @@ import {
   getFacultyGroupFilter,
 } from "./portal-settings.service.js";
 import {
+  isCourseExcludedFromTimetable,
+  getExcludedCourseIds,
+} from "./timetable-course-exclusions.service.js";
+import {
   ensureStaffUserForSubjectAssignment,
   syncStaffUserRolesForTimetableChanges,
 } from "./user-management.service.js";
@@ -1216,6 +1220,44 @@ export async function getTimetablePlanner(filters: TimetablePlannerFilters = {})
     };
   }
 
+  const isExcluded = await isCourseExcludedFromTimetable(context.courseId);
+  if (isExcluded) {
+    return {
+      ready: false,
+      missingTiming: false,
+      isCourseExcluded: true,
+      message: `Course “${context.courseName}” is excluded from timetable configuration in Settings. Timetables cannot be configured for this course.`,
+      requires,
+      context: {
+        academicYear: academicYear || "—",
+        college: context.collegeName,
+        course: context.courseName,
+        courseId: context.courseId,
+        branch: context.branchName,
+        branchId: context.branchId,
+        batch: batch ?? "—",
+        year,
+        semester: semester ?? null,
+        section: sectionLabel ?? "—",
+        hasSections: context.hasSections,
+        studentCount: 0,
+        status: null,
+        timingTemplateName: null,
+        planId: null,
+        versionNo: null,
+      },
+      timing: null,
+      days: [] as string[],
+      slotsByDay: {} as Record<string, unknown>,
+      grid: {},
+      entries: [],
+      subjects: [],
+      faculty: [],
+      classTeacher: null,
+      review: null,
+    };
+  }
+
   const timing = await getActiveTimingForContext({
     collegeId: filters.collegeId,
     academicYear,
@@ -1809,15 +1851,15 @@ export async function validatePlanAssignments(
       ).catch(() => []),
       targetBranchIds.length > 0
         ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
-            `SELECT id, name FROM course_branches WHERE id IN (${targetBranchIds.map(() => "?").join(",")})`,
-            targetBranchIds,
-          ).catch(() => [])
+          `SELECT id, name FROM course_branches WHERE id IN (${targetBranchIds.map(() => "?").join(",")})`,
+          targetBranchIds,
+        ).catch(() => [])
         : Promise.resolve([]),
       targetCourseIds.length > 0
         ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
-            `SELECT id, name FROM courses WHERE id IN (${targetCourseIds.map(() => "?").join(",")})`,
-            targetCourseIds,
-          ).catch(() => [])
+          `SELECT id, name FROM courses WHERE id IN (${targetCourseIds.map(() => "?").join(",")})`,
+          targetCourseIds,
+        ).catch(() => [])
         : Promise.resolve([]),
       queryAcademic<
         (RowDataPacket & {
@@ -2057,6 +2099,10 @@ export async function saveTimetableDraft(input: {
   actorUserId?: number | null;
   ipAddress?: string | null;
 }) {
+  if (await isCourseExcludedFromTimetable(input.courseId)) {
+    throw new Error("This course is excluded from timetable configuration in Settings.");
+  }
+
   const timing = await getActiveTimingForContext({
     collegeId: input.collegeId,
     academicYear: input.academicYear,
@@ -2436,6 +2482,9 @@ export async function reviewTimetablePlan(planId: number) {
   );
   const plan = plans[0];
   if (!plan) throw new Error("Plan not found");
+  if (await isCourseExcludedFromTimetable(plan.course_id)) {
+    throw new Error("Cannot publish timetable for a course that is excluded from timetable configuration in Settings.");
+  }
   if (!["draft", "in_review"].includes(plan.status)) {
     throw new Error(`Cannot review plan in status ${plan.status}`);
   }
@@ -2470,6 +2519,9 @@ export async function publishTimetablePlan(
   );
   const plan = plans[0];
   if (!plan) throw new Error("Plan not found");
+  if (await isCourseExcludedFromTimetable(plan.course_id)) {
+    throw new Error("Cannot publish timetable for a course that is excluded from timetable configuration in Settings.");
+  }
   if (!["draft", "in_review"].includes(plan.status)) {
     throw new Error(`Cannot publish plan in status ${plan.status}`);
   }
@@ -2732,6 +2784,9 @@ export async function copyTimetablePlan(input: {
   );
   const source = sourcePlans[0];
   if (!source) throw new Error("Source plan not found");
+  if (await isCourseExcludedFromTimetable(input.target.courseId)) {
+    throw new Error("Cannot copy timetable to a course that is excluded from timetable configuration in Settings.");
+  }
 
   const targetTiming = await getActiveTimingForContext({
     collegeId: input.target.collegeId,
@@ -2803,6 +2858,9 @@ export type CombineSectionsInput = {
 };
 
 export async function combineTimetableSections(input: CombineSectionsInput) {
+  if (await isCourseExcludedFromTimetable(input.courseId)) {
+    throw new Error("Cannot combine sections for a course that is excluded from timetable configuration in Settings.");
+  }
   const mainSection = input.mainSection?.trim();
   if (!mainSection) {
     throw new Error("Main (source) section is required.");
@@ -2990,6 +3048,15 @@ export type CombinedBranchesOverviewFilters = {
 };
 
 export async function getCombinedBranchesOverview(filters: CombinedBranchesOverviewFilters) {
+  if (await isCourseExcludedFromTimetable(filters.courseId)) {
+    return {
+      branches: [],
+      timing: null,
+      isCourseExcluded: true,
+      message: "This course is excluded from timetable configuration in Settings.",
+    };
+  }
+
   // 1. Get all branches for this course
   const branchRows = await queryStudent<
     (RowDataPacket & {
@@ -3148,15 +3215,15 @@ export async function getCombinedBranchesOverview(filters: CombinedBranchesOverv
       sections: branchSections,
       plan: plan
         ? {
-            id: plan.id,
-            status: plan.status,
-            versionNo: plan.version_no,
-            timingTemplateName: plan.timing_template_name ?? null,
-            sectionName: plan.section_name ?? null,
-            notes: plan.notes ?? null,
-            assignedCount: entriesSummary.length,
-            entries: entriesSummary,
-          }
+          id: plan.id,
+          status: plan.status,
+          versionNo: plan.version_no,
+          timingTemplateName: plan.timing_template_name ?? null,
+          sectionName: plan.section_name ?? null,
+          notes: plan.notes ?? null,
+          assignedCount: entriesSummary.length,
+          entries: entriesSummary,
+        }
         : null,
     });
   }
@@ -3165,12 +3232,12 @@ export async function getCombinedBranchesOverview(filters: CombinedBranchesOverv
     branches: branchDetails,
     timing: timing
       ? {
-          id: timing.id,
-          name: timing.name,
-          academicYear: timing.academicYear,
-          semester: timing.semester,
-          slots: timing.slots,
-        }
+        id: timing.id,
+        name: timing.name,
+        academicYear: timing.academicYear,
+        semester: timing.semester,
+        slots: timing.slots,
+      }
       : null,
   };
 }
@@ -3475,8 +3542,8 @@ export async function saveCombinedTimetable(input: SaveCombinedTimetableInput) {
   const sectionSummary = branchSummaryItems.length > 0
     ? branchSummaryItems.join(" + ")
     : rawSections.length > 0
-    ? `Custom Sections (${rawSections.join(", ")})`
-    : (input.section && input.section !== "all" ? `Section ${input.section}` : "All Sections");
+      ? `Custom Sections (${rawSections.join(", ")})`
+      : (input.section && input.section !== "all" ? `Section ${input.section}` : "All Sections");
 
   return {
     success: true,
@@ -3782,24 +3849,24 @@ export async function listTimetableReportRows(filters: TimetablePlannerFilters =
     const slot = slots.find((item) => item.id === Number(row.period_slot_id)) ??
       slots.find((item) => item.slotOrder === Number(row.period_slot_id));
     return {
-    planId: Number(row.plan_id),
-    collegeId: Number(row.college_id),
-    courseId: Number(row.course_id),
-    branchId: Number(row.branch_id),
-    batch: row.batch,
-    section: row.section_name,
-    status: row.status,
-    day: row.day_of_week,
-    slotId: row.period_slot_id,
-    label: row.subject_code || row.custom_label || row.subject_name || "Unassigned",
-    subjectName: row.subject_name,
-    room: row.room_label,
-    slotLabel: slot?.label ?? row.slot_label,
-    startTime: slot?.startTime ?? row.slot_start,
-    endTime: slot?.endTime ?? row.slot_end,
-    slotType: slot?.slotType ?? row.slot_type,
-    slotOrder: slot?.slotOrder ?? row.slot_order,
-    facultyName: row.faculty_name,
+      planId: Number(row.plan_id),
+      collegeId: Number(row.college_id),
+      courseId: Number(row.course_id),
+      branchId: Number(row.branch_id),
+      batch: row.batch,
+      section: row.section_name,
+      status: row.status,
+      day: row.day_of_week,
+      slotId: row.period_slot_id,
+      label: row.subject_code || row.custom_label || row.subject_name || "Unassigned",
+      subjectName: row.subject_name,
+      room: row.room_label,
+      slotLabel: slot?.label ?? row.slot_label,
+      startTime: slot?.startTime ?? row.slot_start,
+      endTime: slot?.endTime ?? row.slot_end,
+      slotType: slot?.slotType ?? row.slot_type,
+      slotOrder: slot?.slotOrder ?? row.slot_order,
+      facultyName: row.faculty_name,
     };
   });
   const planKeys = new Map<string, typeof mapped[number]>();
@@ -4484,8 +4551,8 @@ export async function getTimetableOverview(
       planMap.get(key) ||
       (!hasSections
         ? planMap.get(
-            `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:A`
-          )
+          `${row.college_id}:${row.course_id}:${row.branch_id}:${batch}:${row.semester}:A`
+        )
         : undefined) ||
       planMap.get(altKey);
     let status: "published" | "drafted" | "pending" = "pending";
@@ -4521,11 +4588,11 @@ export async function getTimetableOverview(
 
     const existingClassIndex = !hasSections
       ? classesList.findIndex(
-          (c) =>
-            c.branchId === Number(row.branch_id) &&
-            c.batch === row.batch &&
-            c.semester === Number(row.semester)
-        )
+        (c) =>
+          c.branchId === Number(row.branch_id) &&
+          c.batch === row.batch &&
+          c.semester === Number(row.semester)
+      )
       : -1;
 
     if (existingClassIndex >= 0) {
@@ -4563,11 +4630,11 @@ export async function getTimetableOverview(
         updatedAt,
         classTeacher: teacherTally
           ? {
-              facultyStaffLinkId: teacherTally.facultyStaffLinkId,
-              facultyName: teacherTally.facultyName,
-              hrmsEmployeeId: teacherTally.hrmsEmployeeId,
-              departmentName: teacherTally.departmentName,
-            }
+            facultyStaffLinkId: teacherTally.facultyStaffLinkId,
+            facultyName: teacherTally.facultyName,
+            hrmsEmployeeId: teacherTally.hrmsEmployeeId,
+            departmentName: teacherTally.departmentName,
+          }
           : null,
       });
     }

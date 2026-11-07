@@ -126,9 +126,15 @@ export function AcademicFilterBar({
 
   const coursesForCollege = useMemo(() => {
     if (!masters) return [];
-    if (filters.collegeId === "all") return masters.courses;
-    return masters.courses.filter((course) => course.collegeId === filters.collegeId);
-  }, [masters, filters.collegeId]);
+    let list =
+      filters.collegeId === "all"
+        ? masters.courses
+        : masters.courses.filter((course) => course.collegeId === filters.collegeId);
+    if (isTimetablesPage) {
+      list = list.filter((course) => !course.isExcludedFromTimetable);
+    }
+    return list;
+  }, [masters, filters.collegeId, isTimetablesPage]);
 
   const branchesForCourse = useMemo(() => {
     if (!masters) return [];
@@ -214,6 +220,18 @@ export function AcademicFilterBar({
       setFilters({ section: "all" });
     }
   }, [showSectionFilter, filters.section, setFilters]);
+
+  // If on a timetable page and the current course is excluded, reset selection
+  useEffect(() => {
+    if (isTimetablesPage && filters.courseId !== "all" && masters) {
+      const isExcluded = masters.courses.some(
+        (c) => c.id === filters.courseId && c.isExcludedFromTimetable,
+      );
+      if (isExcluded) {
+        setFilters({ courseId: "all", branchId: "all", section: "all" });
+      }
+    }
+  }, [isTimetablesPage, filters.courseId, masters, setFilters]);
 
   const autoYearSemesterFromBatch = false;
   const showYearSemesterFilters = true;

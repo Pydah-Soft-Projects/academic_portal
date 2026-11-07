@@ -233,10 +233,14 @@ export function SemesterDatesView() {
 
   return (
     <div>
-      <PageHeader
-        title="Semester Dates"
-        description="Academic start and end dates from student_database.semesters (college / program level — same source used for student attendance windows)."
-      />
+      <div className="mb-3.5 pb-2.5 border-b border-slate-200">
+        <h2 className="text-base sm:text-lg font-bold text-navy-900 tracking-tight leading-tight">
+          Semester Dates
+        </h2>
+        <p className="text-xs text-slate-500 font-normal mt-0.5">
+          Academic start and end dates from student_database.semesters (college / program level).
+        </p>
+      </div>
 
       <div className="mb-4 rounded-lg border border-border bg-card p-4">
         <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">

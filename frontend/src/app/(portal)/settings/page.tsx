@@ -1,5 +1,5 @@
-﻿import { SettingsView } from "@/features/settings/SettingsView";
+import { redirect } from "next/navigation";
 
 export default function SettingsPage() {
-  return <SettingsView />;
+  redirect("/settings/course-exclusions");
 }

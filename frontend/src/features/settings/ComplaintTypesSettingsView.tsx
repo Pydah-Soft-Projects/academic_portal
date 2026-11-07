@@ -84,15 +84,13 @@ export function ComplaintTypesSettingsView() {
 
   return (
     <div>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <PageHeader
-          title="Mentoring Complaint Types"
-          description="Manage the dynamic list of complaint/risk types available when creating a mentoring case."
-          className="mb-0"
-        />
-        <Link href="/settings">
-          <Button variant="ghost">Back to settings</Button>
-        </Link>
+      <div className="mb-3.5 pb-2.5 border-b border-slate-200">
+        <h2 className="text-base sm:text-lg font-bold text-navy-900 tracking-tight leading-tight">
+          Mentoring Complaint Types
+        </h2>
+        <p className="text-xs text-slate-500 font-normal mt-0.5">
+          Manage the dynamic list of complaint/risk types available when creating a mentoring case.
+        </p>
       </div>
 
       <Card className="max-w-2xl">

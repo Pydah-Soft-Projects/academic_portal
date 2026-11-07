@@ -26,7 +26,9 @@ export type AcademicMasters = {
     semestersPerYear?: number;
     yearSemesterConfig?: Array<{ year: number; semesters: number }>;
     yearOptions?: number[];
+    isExcludedFromTimetable?: boolean;
   }[];
+  excludedTimetableCourseIds?: number[];
   branches: {
     id: number;
     name: string;

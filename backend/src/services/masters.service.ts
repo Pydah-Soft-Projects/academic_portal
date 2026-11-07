@@ -1,5 +1,6 @@
 import type { RowDataPacket } from "mysql2";
 import { queryStudent } from "../db/pools.js";
+import { getExcludedCourseIds } from "./timetable-course-exclusions.service.js";
 import type { AcademicScope } from "../authz/authorization.service.js";
 
 type CollegeRow = RowDataPacket & {
@@ -150,6 +151,7 @@ export async function getAcademicMasters(scope?: AcademicScope | null) {
     assignedSections,
     studentBatchRows,
     sectionBatchRows,
+    excludedCourseIds,
   ] = await Promise.all([
       queryStudent<CollegeRow[]>(
         `
@@ -214,6 +216,7 @@ export async function getAcademicMasters(scope?: AcademicScope | null) {
         ORDER BY batch DESC
         `,
       ),
+      getExcludedCourseIds(),
     ]);
 
   const assignedMap = new Map<string, number>();
@@ -353,6 +356,7 @@ export async function getAcademicMasters(scope?: AcademicScope | null) {
       semestersPerYear,
       yearSemesterConfig,
       yearOptions,
+      isExcludedFromTimetable: excludedCourseIds.has(Number(c.id)),
     };
   });
 
@@ -371,6 +375,7 @@ export async function getAcademicMasters(scope?: AcademicScope | null) {
     branches: branchPayload,
     sections,
     batches,
+    excludedTimetableCourseIds: Array.from(excludedCourseIds),
     // Global fallbacks when no course is selected
     yearOptions: [1, 2, 3, 4],
     semesterOptions: [1, 2],

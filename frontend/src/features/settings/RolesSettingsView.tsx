@@ -22,11 +22,6 @@ export function RolesSettingsView() {
                 User Management
               </Button>
             </Link>
-            <Link href="/settings">
-              <Button size="sm" variant="secondary">
-                Back to Settings
-              </Button>
-            </Link>
           </div>
         }
       />

@@ -28,6 +28,10 @@ import {
   getStaffSubjectsForScope,
 } from "../services/feedback-forms.service.js";
 import { writeAuditLog } from "../services/audit.service.js";
+import {
+  getCourseExclusionsSettings,
+  saveCourseExclusions,
+} from "../services/timetable-course-exclusions.service.js";
 
 export const settingsRouter = Router();
 
@@ -504,4 +508,56 @@ settingsRouter.delete(
     }
   },
 );
+
+settingsRouter.get(
+  "/course-exclusions",
+  requirePermission("settings.view", "timetable.view"),
+  async (_req, res, next) => {
+    try {
+      res.json(await getCourseExclusionsSettings());
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.put(
+  "/course-exclusions",
+  requirePermission("settings.edit", "timetable.edit"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const raw = req.body?.excludedCourseIds;
+      if (!Array.isArray(raw)) {
+        res.status(400).json({
+          message: "excludedCourseIds (number[]) is required",
+        });
+        return;
+      }
+      const previous = await getCourseExclusionsSettings();
+      const updated = await saveCourseExclusions({
+        excludedCourseIds: raw.map(Number).filter((n) => Number.isFinite(n) && n > 0),
+        reasons: req.body?.reasons,
+        actorUserId: req.authUser!.id,
+        ipAddress: req.ip,
+      });
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.timetable_course_exclusions_updated",
+        entityType: "ap_timetable_excluded_courses",
+        entityId: null,
+        oldValue: {
+          excludedCourseIds: previous.excludedCourseIds,
+        },
+        newValue: {
+          excludedCourseIds: updated.excludedCourseIds,
+        },
+        ipAddress: req.ip,
+      });
+      res.json(updated);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
 

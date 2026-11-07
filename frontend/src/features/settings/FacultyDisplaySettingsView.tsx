@@ -150,17 +150,14 @@ export function FacultyDisplaySettingsView() {
 
   return (
     <div>
-      <PageHeader
-        title="Faculty & Departments Display"
-        description="Choose which HRMS employee groups appear on Faculty & Departments."
-        actions={
-          <Link href="/settings">
-            <Button size="sm" variant="secondary">
-              Back to Settings
-            </Button>
-          </Link>
-        }
-      />
+      <div className="mb-3.5 pb-2.5 border-b border-slate-200">
+        <h2 className="text-base sm:text-lg font-bold text-navy-900 tracking-tight leading-tight">
+          Faculty & Departments Display
+        </h2>
+        <p className="text-xs text-slate-500 font-normal mt-0.5">
+          Choose which HRMS employee groups appear on Faculty & Departments.
+        </p>
+      </div>
 
       {error && <p className="mb-3 text-sm text-critical">{error}</p>}
       {message && <p className="mb-3 text-sm text-emerald-700">{message}</p>}

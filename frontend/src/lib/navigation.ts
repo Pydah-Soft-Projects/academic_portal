@@ -371,6 +371,29 @@ export function breadcrumbsForPath(
     return [{ label: "Requests", href: "/requests" }, { label: "Time Table Requests" }];
   }
 
+  if (pathname.startsWith("/settings")) {
+    const segments: BreadcrumbSegment[] = [{ label: "Settings", href: "/settings" }];
+    if (pathname === "/settings") return segments;
+
+    const SETTINGS_LABELS: Record<string, string> = {
+      "/settings/course-exclusions": "Timetable Course Exclusions",
+      "/settings/roles": "Roles & Permissions",
+      "/settings/semester-dates": "Semester Dates",
+      "/settings/faculty-display": "Faculty & Departments Display",
+      "/settings/attendance-calendar": "Attendance Calendar",
+      "/settings/request-workflows": "Request Workflows",
+      "/settings/workload-thresholds": "Workload Thresholds",
+      "/settings/complaint-types": "Mentoring Complaint Types",
+      "/settings/feedback-forms": "Academic Feedback Forms",
+    };
+
+    const label = SETTINGS_LABELS[pathname] || pathname.split("/").pop()?.replace(/-/g, " ");
+    if (label) {
+      segments.push({ label });
+    }
+    return segments;
+  }
+
   const current = navItemForPath(pathname);
   return [{ label: current?.label ?? "Academic Portal" }];
 }

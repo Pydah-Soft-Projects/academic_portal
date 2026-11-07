@@ -3,6 +3,7 @@ import { executeAcademic, queryAcademic, queryStudent } from "../db/pools.js";
 import type { AuthzContext } from "../authz/authorization.service.js";
 import { hasPermission } from "../authz/authorization.service.js";
 import { publishTimetablePlan } from "./timetables.service.js";
+import { isCourseExcludedFromTimetable } from "./timetable-course-exclusions.service.js";
 import { writeAuditLog } from "./audit.service.js";
 import { mysqlDateTimeToIso } from "../lib/mysql-datetime.js";
 
@@ -462,6 +463,10 @@ export async function createTimetableRequest(
   const plan = plans[0];
   if (!plan) throw new Error("Timetable plan not found");
 
+  if (await isCourseExcludedFromTimetable(plan.course_id)) {
+    throw new Error("Cannot submit timetable modification request for a course that is excluded from timetable configuration in Settings.");
+  }
+
   const requesterRoleKey = authz.roleKeys.includes("hod")
     ? "hod"
     : authz.roleKeys[0] || "staff";
@@ -557,6 +562,10 @@ export async function approveTimetableRequest(
     throw Object.assign(new Error("Timetable request not found"), { status: 404 });
   }
 
+  if (await isCourseExcludedFromTimetable(request.course_id)) {
+    throw new Error("Cannot approve timetable request for a course that is excluded from timetable configuration in Settings.");
+  }
+
   if (request.status !== "pending") {
     throw Object.assign(new Error(`Cannot approve request in status ${request.status}`), { status: 400 });
   }
@@ -634,6 +643,10 @@ export async function rejectTimetableRequest(
   const request = rows[0];
   if (!request) {
     throw Object.assign(new Error("Timetable request not found"), { status: 404 });
+  }
+
+  if (await isCourseExcludedFromTimetable(request.course_id)) {
+    throw new Error("Cannot approve timetable request for a course that is excluded from timetable configuration in Settings.");
   }
 
   if (request.status !== "pending") {

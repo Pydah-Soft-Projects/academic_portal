@@ -96,6 +96,7 @@ type SlotCell = {
 type PlannerResponse = {
   ready: boolean;
   missingTiming?: boolean;
+  isCourseExcluded?: boolean;
   message?: string;
   context: {
     academicYear: string;
@@ -2623,6 +2624,32 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
             {planner?.context.versionNo ? ` · version ${planner.context.versionNo}` : ""} is live.
             Make changes to a period before publishing again.
           </p>
+        </Card>
+      ) : null}
+
+      {planner?.isCourseExcluded ? (
+        <Card className="mb-4 border-amber-300 bg-amber-50/80 p-5 shadow-sm print:hidden">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-base font-bold text-slate-900">Course Excluded from Timetable Configuration</h3>
+              <p className="mt-1 text-sm text-slate-600">
+                {planner.message || "This course is excluded from timetable planning in Settings. Timetables are not scheduled or configured for this course."}
+              </p>
+              <div className="mt-3 flex items-center gap-3">
+                <Link
+                  href="/settings/course-exclusions"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm hover:bg-amber-50"
+                >
+                  Manage Course Exclusions in Settings &rarr;
+                </Link>
+              </div>
+            </div>
+          </div>
         </Card>
       ) : null}
 

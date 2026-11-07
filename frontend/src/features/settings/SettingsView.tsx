@@ -45,6 +45,12 @@ const sections: SettingsSection[] = [
     permissions: ["settings.view", "settings.edit"],
   },
   {
+    title: "Timetable Course Exclusions",
+    description: "Exclude specific degree courses across colleges from timetable configuration and scheduling.",
+    href: "/settings/course-exclusions",
+    permissions: ["settings.view", "settings.edit", "timetables.manage", "timetables.edit"],
+  },
+  {
     title: "Request Workflows",
     description: "Configure request types and dynamic approval hierarchies.",
     href: "/settings/request-workflows",

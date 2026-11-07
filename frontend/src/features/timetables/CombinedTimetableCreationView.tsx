@@ -320,10 +320,12 @@ export function CombinedTimetableCreationView() {
     }
   }, [masters, collegeId, currentAcademicYear, academicYear]);
 
-  // Filter courses for selected college
+  // Filter courses for selected college (excluding courses marked excluded in Settings)
   const coursesForCollege = useMemo(() => {
     if (!masters || !collegeId) return [];
-    return masters.courses.filter((c) => c.collegeId === collegeId);
+    return masters.courses.filter(
+      (c) => c.collegeId === collegeId && !c.isExcludedFromTimetable,
+    );
   }, [masters, collegeId]);
 
   // Auto-select first course when college changes
