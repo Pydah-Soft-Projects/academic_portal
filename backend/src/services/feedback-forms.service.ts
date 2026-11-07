@@ -36,9 +36,13 @@ export type MappedStaffSubject = {
   semester?: number | null;
   branchId?: number | null;
   branchName?: string | null;
+  branchCode?: string | null;
   courseId?: number | null;
   courseName?: string | null;
+  courseCode?: string | null;
   collegeId?: number | null;
+  collegeName?: string | null;
+  collegeCode?: string | null;
   academicYear?: string | null;
   batch?: string | null;
   yearOfStudy?: number | null;
@@ -1230,7 +1234,7 @@ export async function getStaffSubjectsForScope(filter: {
     "sl.display_name IS NOT NULL",
     "TRIM(sl.display_name) != ''",
     "sl.display_name != 'null'",
-    "(tp.status = 'published' OR tp.status IS NULL)",
+    "(tp.status IN ('published', 'active', 'draft', 'in_review') OR tp.status IS NULL)",
   ];
   const params: unknown[] = [];
 
@@ -1284,81 +1288,100 @@ export async function getStaffSubjectsForScope(filter: {
     params.push(...filter.sections);
   }
 
-  const rows = await queryAcademic<
-    (RowDataPacket & {
-      subjectId: number | null;
-      subjectCode: string | null;
-      subjectName: string;
-      staffLinkId: number | null;
-      facultyName: string;
-      employeeCode: string | null;
-      collegeId: number | null;
-      courseId: number | null;
-      branchId: number | null;
-      academicYear: string | null;
-      semester: number | null;
-      sectionName: string | null;
-      batch: string | null;
-    })[]
-  >(
-    `
-    SELECT
-      te.subject_id AS subjectId,
-      COALESCE(te.subject_code, '') AS subjectCode,
-      te.subject_name AS subjectName,
-      sl.id AS staffLinkId,
-      COALESCE(sl.display_name, 'Faculty') AS facultyName,
-      sl.employee_code AS employeeCode,
-      tp.college_id AS collegeId,
-      tp.course_id AS courseId,
-      tp.branch_id AS branchId,
-      tp.academic_year_label AS academicYear,
-      CASE
-        WHEN tp.year_of_study IS NOT NULL AND tp.year_of_study > 0
-          THEN (tp.year_of_study - 1) * 2 + COALESCE(tp.semester_number, 1)
-        ELSE COALESCE(tp.semester_number, 1)
-      END AS semester,
-      tp.year_of_study AS yearOfStudy,
-      tp.section_name AS sectionName,
-      tp.batch AS batch
-    FROM ap_timetable_entries te
-    INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
-    LEFT JOIN ap_staff_link sl ON sl.id = te.faculty_staff_link_id
-    WHERE ${conds.join(" AND ")}
-    GROUP BY te.subject_id, te.subject_code, te.subject_name, sl.id, sl.display_name, sl.employee_code,
-             tp.college_id, tp.course_id, tp.branch_id, tp.year_of_study, tp.semester_number, tp.section_name, tp.batch, tp.academic_year_label
-    ORDER BY tp.course_id, tp.branch_id, tp.year_of_study, tp.section_name, sl.display_name ASC, te.subject_name ASC
-    LIMIT 5000
-    `,
-    params,
-  );
+  const [colleges, courses, branches, rows] = await Promise.all([
+    queryStudent<(RowDataPacket & { id: number; name: string; code: string })[]>(
+      `SELECT id, name, code FROM colleges WHERE is_active = 1 OR is_active IS NULL`,
+    ).catch(() => []),
+    queryStudent<(RowDataPacket & { id: number; name: string; code: string; college_id: number })[]>(
+      `SELECT id, name, code, college_id FROM courses WHERE is_active = 1 OR is_active IS NULL`,
+    ).catch(() => []),
+    queryStudent<(RowDataPacket & { id: number; name: string; code: string; course_id: number })[]>(
+      `SELECT id, name, code, course_id FROM course_branches WHERE is_active = 1 OR is_active IS NULL`,
+    ).catch(() => []),
+    queryAcademic<
+      (RowDataPacket & {
+        subjectId: number | null;
+        subjectCode: string | null;
+        subjectName: string;
+        staffLinkId: number | null;
+        facultyName: string;
+        employeeCode: string | null;
+        collegeId: number | null;
+        courseId: number | null;
+        branchId: number | null;
+        academicYear: string | null;
+        semester: number | null;
+        sectionName: string | null;
+        batch: string | null;
+      })[]
+    >(
+      `
+      SELECT
+        te.subject_id AS subjectId,
+        COALESCE(te.subject_code, '') AS subjectCode,
+        te.subject_name AS subjectName,
+        sl.id AS staffLinkId,
+        COALESCE(sl.display_name, 'Faculty') AS facultyName,
+        sl.employee_code AS employeeCode,
+        tp.college_id AS collegeId,
+        tp.course_id AS courseId,
+        tp.branch_id AS branchId,
+        tp.academic_year_label AS academicYear,
+        CASE
+          WHEN tp.year_of_study IS NOT NULL AND tp.year_of_study > 0
+            THEN (tp.year_of_study - 1) * 2 + COALESCE(tp.semester_number, 1)
+          ELSE COALESCE(tp.semester_number, 1)
+        END AS semester,
+        tp.year_of_study AS yearOfStudy,
+        tp.section_name AS sectionName,
+        tp.batch AS batch
+      FROM ap_timetable_entries te
+      INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
+      LEFT JOIN ap_staff_link sl ON sl.id = te.faculty_staff_link_id
+      WHERE ${conds.join(" AND ")}
+      GROUP BY te.subject_id, te.subject_code, te.subject_name, sl.id, sl.display_name, sl.employee_code,
+               tp.college_id, tp.course_id, tp.branch_id, tp.year_of_study, tp.semester_number, tp.section_name, tp.batch, tp.academic_year_label
+      ORDER BY tp.course_id, tp.branch_id, tp.year_of_study, tp.section_name, sl.display_name ASC, te.subject_name ASC
+      LIMIT 5000
+      `,
+      params,
+    ),
+  ]);
 
-  const getStudentCount = await loadSectionHeadcountHelper();
+  const branchMap = new Map(branches.map((b) => [Number(b.id), b]));
+  const courseMap = new Map(courses.map((c) => [Number(c.id), c]));
+  const collegeMap = new Map(colleges.map((c) => [Number(c.id), c]));
 
-  const mapped = rows.map((r) => ({
-    staffLinkId: r.staffLinkId ? Number(r.staffLinkId) : null,
-    facultyName: r.facultyName || "Faculty Member",
-    employeeCode: r.employeeCode || null,
-    subjectId: r.subjectId ? Number(r.subjectId) : null,
-    subjectCode: r.subjectCode || "",
-    subjectName: r.subjectName,
-    sectionName: r.sectionName || null,
-    semester: r.semester ? Number(r.semester) : null,
-    yearOfStudy: (r as any).yearOfStudy ? Number((r as any).yearOfStudy) : null,
-    branchId: r.branchId ? Number(r.branchId) : null,
-    courseId: r.courseId ? Number(r.courseId) : null,
-    collegeId: r.collegeId ? Number(r.collegeId) : null,
-    academicYear: r.academicYear || null,
-    batch: r.batch || null,
-  }));
+  const mapped: MappedStaffSubject[] = rows.map((r) => {
+    const bInfo = r.branchId ? branchMap.get(Number(r.branchId)) : undefined;
+    const cInfo = r.courseId ? courseMap.get(Number(r.courseId)) : undefined;
+    const colInfo = r.collegeId ? collegeMap.get(Number(r.collegeId)) : undefined;
 
-  // Only return sections that have students enrolled in them (skip sections with 0 students)
-  return mapped.filter((item) => {
-    if (!item.sectionName) return true;
-    const cnt = getStudentCount(item.branchId, item.batch, item.sectionName);
-    if (cnt !== null && cnt === 0) return false;
-    return true;
+    return {
+      staffLinkId: r.staffLinkId ? Number(r.staffLinkId) : null,
+      facultyName: r.facultyName || "Faculty Member",
+      employeeCode: r.employeeCode || null,
+      subjectId: r.subjectId ? Number(r.subjectId) : null,
+      subjectCode: r.subjectCode || "",
+      subjectName: r.subjectName,
+      sectionName: r.sectionName || null,
+      semester: r.semester ? Number(r.semester) : null,
+      yearOfStudy: (r as any).yearOfStudy ? Number((r as any).yearOfStudy) : null,
+      branchId: r.branchId ? Number(r.branchId) : null,
+      branchName: bInfo?.name || null,
+      branchCode: bInfo?.code || null,
+      courseId: r.courseId ? Number(r.courseId) : null,
+      courseName: cInfo?.name || null,
+      courseCode: cInfo?.code || null,
+      collegeId: r.collegeId ? Number(r.collegeId) : null,
+      collegeName: colInfo?.name || null,
+      collegeCode: colInfo?.code || null,
+      academicYear: r.academicYear || null,
+      batch: r.batch || null,
+    };
   });
+
+  return mapped;
 }
 
 /**
@@ -1427,13 +1450,14 @@ async function loadSectionHeadcountHelper(): Promise<
     const sec = sectionName.trim().toUpperCase();
     if (branchId && batch) {
       const k1 = `${branchId}|${String(batch).trim()}|${sec}`;
-      return countByBranchBatchSec.get(k1) ?? 0;
+      if (countByBranchBatchSec.has(k1)) return countByBranchBatchSec.get(k1)!;
     }
     if (batch) {
       const k2 = `${String(batch).trim()}|${sec}`;
-      return countByBatchSec.get(k2) ?? 0;
+      if (countByBatchSec.has(k2)) return countByBatchSec.get(k2)!;
     }
-    return countBySec.get(sec) ?? null;
+    if (countBySec.has(sec)) return countBySec.get(sec)!;
+    return null;
   };
 }
 
