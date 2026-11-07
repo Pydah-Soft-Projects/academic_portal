@@ -62,10 +62,17 @@ export type MappedStaffSubject = {
   sectionName: string | null;
   semester: number | null;
   branchId: number | null;
+  branchName?: string | null;
+  branchCode?: string | null;
   courseId: number | null;
+  courseName?: string | null;
+  courseCode?: string | null;
   collegeId: number | null;
+  collegeName?: string | null;
+  collegeCode?: string | null;
   academicYear: string | null;
   batch: string | null;
+  yearOfStudy?: number | null;
 };
 
 export type TargetAudienceScope = {
@@ -1870,7 +1877,7 @@ export function FeedbackReportsView() {
   };
 
   function getStaffSubjectKey(item: MappedStaffSubject): string {
-    return `${item.staffLinkId ?? item.facultyName}__${item.subjectId ?? item.subjectCode ?? item.subjectName}__${item.sectionName ?? "all"}__${item.semester ?? "all"}__${item.batch ?? "all"}`;
+    return `${item.staffLinkId ?? item.facultyName}__${item.subjectId ?? item.subjectCode ?? item.subjectName}__${item.branchId ?? item.branchName ?? "all"}__${item.sectionName ?? "all"}__${item.semester ?? "all"}__${item.batch ?? "all"}`;
   }
 
   const fetchStaffSubjectsForModal = async (overrides?: {
@@ -1952,6 +1959,8 @@ export function FeedbackReportsView() {
         s.subjectName.toLowerCase().includes(q) ||
         (s.subjectCode && s.subjectCode.toLowerCase().includes(q)) ||
         (s.sectionName && s.sectionName.toLowerCase().includes(q)) ||
+        (s.branchName && s.branchName.toLowerCase().includes(q)) ||
+        (s.branchCode && s.branchCode.toLowerCase().includes(q)) ||
         (s.employeeCode && s.employeeCode.toLowerCase().includes(q)),
     );
   }, [modalStaffSubjects, searchStaffSubject]);
@@ -5298,6 +5307,11 @@ export function FeedbackReportsView() {
                                 {item.semester && (
                                   <span className="rounded bg-sky-50 px-1.5 py-0.5 font-semibold text-sky-700 border border-sky-200">
                                     Sem {item.semester}
+                                  </span>
+                                )}
+                                {(item.branchCode || item.branchName) && (
+                                  <span className="rounded bg-amber-50 px-1.5 py-0.5 font-semibold text-amber-700 border border-amber-200">
+                                    {item.branchCode || item.branchName}
                                   </span>
                                 )}
                                 {item.batch && (
