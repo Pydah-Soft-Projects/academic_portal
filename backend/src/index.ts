@@ -37,6 +37,7 @@ import { classTeacherRouter } from "./routes/class-teacher.route.js";
 import { principalDashboardRouter } from "./routes/principal-dashboard.route.js";
 import { hodRouter } from "./routes/hod.route.js";
 import { timetableRequestsRouter } from "./routes/timetable-requests.route.js";
+import { staffRouter } from "./routes/staff.route.js";
 import { aiRouter } from "./ai/index.js";
 
 const app = express();
@@ -49,7 +50,7 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "25mb" }));
 app.use(cookieParser());
 app.use(morgan(env.nodeEnv === "production" ? "combined" : "dev"));
 app.use(loadSession);
@@ -95,6 +96,7 @@ app.use("/api/workload", workloadRouter);
 app.use("/api/attendance", attendanceRouter);
 app.use("/api/catalog", catalogRouter);
 app.use("/api/faculty", facultyRouter);
+app.use("/api/staff", staffRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/examinations", examinationsRouter);
 app.use("/api/results", resultsRouter);

@@ -63,6 +63,12 @@ export const NAV_GROUPS: NavGroup[] = [
         permissions: ["students.view"],
       },
       {
+        label: "Staff",
+        href: "/staff",
+        icon: Users,
+        permissions: ["faculty.view", "students.view", "workload.view", "dashboard.view"],
+      },
+      {
         label: "My Subjects",
         href: "/my-subjects",
         icon: BookOpen,
@@ -285,6 +291,7 @@ export const NAV_GROUPS: NavGroup[] = [
 /** Sidebar routes shown to teaching staff without institute-wide admin permissions. */
 export const TEACHING_STAFF_NAV_HREFS = new Set([
   "/dashboard",
+  "/staff",
   "/my-subjects",
   "/my-timetable",
   "/attendance-posting",
