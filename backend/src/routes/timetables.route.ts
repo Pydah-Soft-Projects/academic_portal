@@ -508,17 +508,26 @@ timetablesRouter.post("/:planId/publish", requirePermission("timetable.publish")
       }
     }
 
+    const reasonCategory = req.body?.reasonCategory ? String(req.body.reasonCategory).trim() : null;
+    const remarks = req.body?.remarks ? String(req.body.remarks).trim() : null;
+
     const published = await publishTimetablePlan(Number(req.params.planId), {
       actorUserId: req.authUser?.id,
       ipAddress: req.ip,
       force: Boolean(req.body?.force),
+      reasonCategory,
+      remarks,
     });
     await writeAuditLog({
       actorUserId: req.authUser!.id,
       action: "timetable.published",
       entityType: "ap_timetable_plans",
       entityId: Number(req.params.planId),
-      newValue: { status: "published" },
+      newValue: {
+        status: "published",
+        reasonCategory,
+        remarks,
+      },
       ipAddress: req.ip,
     });
     res.json(published);

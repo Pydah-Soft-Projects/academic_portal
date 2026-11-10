@@ -11,11 +11,14 @@ import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowRightLeft,
   ArrowUpDown,
+  BookOpen,
   Building2,
   CalendarCheck,
   Check,
   CheckCircle2,
+  CheckSquare,
   Clock3,
   ExternalLink,
   FileText,
@@ -24,11 +27,14 @@ import {
   Layers,
   Plus,
   Printer,
+  Scale,
   Search,
   Send,
   ShieldAlert,
   UserCheck,
+  UserMinus,
   Users,
+  X,
 } from "lucide-react";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { cn } from "@/lib/cn";
@@ -171,6 +177,8 @@ type LocalAssignment = {
   studentCount?: number | null;
   weeklyRotation?: boolean | null;
   rotationPattern?: string | null;
+  reasonCategory?: string | null;
+  changeRemarks?: string | null;
 };
 
 type SectionStudent = {
@@ -218,6 +226,45 @@ const DAY_LABEL_TO_CODE: Record<string, string> = {
   Saturday: "SAT",
   Sunday: "SUN",
 };
+
+export const FACULTY_CHANGE_REASONS = [
+  {
+    key: "syllabus_completed",
+    label: "Syllabus Completed",
+    shortDesc: "Course/module syllabus finished; handing over to next faculty or revision.",
+    icon: BookOpen,
+  },
+  {
+    key: "timetable_mistake",
+    label: "Timetable Mistake / Entry Error",
+    shortDesc: "Correction of incorrect faculty assignment, clerical error, or wrong slot allocation.",
+    icon: CheckSquare,
+  },
+  {
+    key: "faculty_change",
+    label: "Faculty Reassignment / Shift",
+    shortDesc: "Deliberate administrative or departmental teacher reassignment.",
+    icon: ArrowRightLeft,
+  },
+  {
+    key: "faculty_relieved",
+    label: "Faculty Relieved / Resigned / Leave",
+    shortDesc: "Staff member relieved, resigned, on maternity leave, or long leave.",
+    icon: UserMinus,
+  },
+  {
+    key: "workload_rebalance",
+    label: "Workload Rebalance / Workload Split",
+    shortDesc: "Optimizing department workload credits or administrative distribution.",
+    icon: Scale,
+  },
+  {
+    key: "other",
+    label: "Other Operational Reason",
+    shortDesc: "Other institutional reason (mandatory to explain in detailed remarks).",
+    icon: FileText,
+  },
+];
 
 function mapEmsTypeToEntryType(type: string | null | undefined): "theory" | "lab" | "other" {
   const t = (type ?? "").trim().toLowerCase();
@@ -313,6 +360,11 @@ type DraftAllocation = {
   studentCount?: number;
   weeklyRotation?: boolean;
   rotationPattern?: string | null;
+  originalFacultyHrmsId?: string;
+  originalFacultyName?: string;
+  originalSubjectId?: string;
+  reasonCategory?: string;
+  changeRemarks?: string;
 };
 
 function AllocationEditorCard({
@@ -388,6 +440,25 @@ function AllocationEditorCard({
       planner.faculty.find((f) => f.hrmsEmployeeId === alloc.hrmsEmployeeId) ?? null
     );
   }, [alloc.hrmsEmployeeId, planner.faculty]);
+
+  const baselineItem = useMemo(() => {
+    return assignments.find((a) => {
+      const aDay = (DAY_LABEL_TO_CODE[a.dayOfWeek] ?? a.dayOfWeek).toUpperCase();
+      const matchDay = (DAY_LABEL_TO_CODE[dayCode] ?? dayCode).toUpperCase();
+      return aDay === matchDay && a.timingSlotId === slotId && (!isSplit || a.batchLabel === alloc.batchLabel);
+    });
+  }, [assignments, dayCode, slotId, isSplit, alloc.batchLabel]);
+  const baselineFacultyName = baselineItem?.facultyName;
+
+  const isFacultyShift = useMemo(() => {
+    const origId = (alloc.originalFacultyHrmsId || "").trim();
+    const curId = (alloc.hrmsEmployeeId || "").trim();
+    if (!origId || !curId || origId === curId) return false;
+    if (alloc.originalSubjectId && alloc.subjectId && alloc.originalSubjectId !== alloc.subjectId) {
+      return false;
+    }
+    return true;
+  }, [alloc.originalFacultyHrmsId, alloc.hrmsEmployeeId, alloc.originalSubjectId, alloc.subjectId]);
 
   const facultyAutoMatched = useMemo(() => {
     if (alloc.mode !== "subject" || !alloc.subjectId || !alloc.hrmsEmployeeId) {
@@ -660,6 +731,63 @@ function AllocationEditorCard({
                 <p className="mt-1 text-xs text-emerald-700">
                   Auto-filled from another period for this subject.
                 </p>
+              ) : null}
+              {isFacultyShift ? (
+                <div className="mt-2.5 rounded-lg border border-amber-200/90 bg-amber-50/70 p-3 text-xs space-y-2.5">
+                  <div className="flex items-center justify-between border-b border-amber-200/60 pb-1.5">
+                    <span className="font-bold text-amber-950 flex items-center gap-1.5">
+                      <ArrowRight className="h-3.5 w-3.5 text-amber-600" />
+                      Faculty Reassignment
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 bg-amber-100/80 px-1.5 py-0.5 rounded border border-amber-200">
+                      Justification Required
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-slate-500 font-medium">Shifting from:</span>
+                    <span className="font-semibold text-slate-700 line-through bg-white/80 px-1.5 py-0.5 rounded border border-slate-200">
+                      {alloc.originalFacultyName || alloc.originalFacultyHrmsId}
+                    </span>
+                    <span className="text-slate-400">➔</span>
+                    <span className="font-bold text-navy-950 bg-white px-1.5 py-0.5 rounded border border-navy-200 shadow-2xs">
+                      {alloc.facultyName}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-0.5">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Reason for Shift <span className="text-slate-400 font-normal">(or specify on publish)</span>
+                      </label>
+                      <select
+                        value={alloc.reasonCategory || ""}
+                        onChange={(e) => onChange({ reasonCategory: e.target.value })}
+                        className="w-full h-8 rounded-md border border-slate-300 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-navy-700 focus:ring-1 focus:ring-navy-700 shadow-2xs"
+                      >
+                        <option value="">Select reason...</option>
+                        {FACULTY_CHANGE_REASONS.map((r) => (
+                          <option key={r.key} value={r.key}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Detailed Remarks <span className="text-slate-400 font-normal">(or specify on publish)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={alloc.changeRemarks || ""}
+                        onChange={(e) => onChange({ changeRemarks: e.target.value })}
+                        placeholder="Explain why faculty is shifting..."
+                        className="w-full h-8 rounded-md border border-slate-300 bg-white px-2.5 text-xs text-slate-800 outline-none focus:border-navy-700 focus:ring-1 focus:ring-navy-700 shadow-2xs"
+                      />
+                    </div>
+                  </div>
+                </div>
               ) : null}
             </div>
             <button
@@ -1149,8 +1277,9 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
 
   const [hodNoticeModalOpen, setHodNoticeModalOpen] = useState(false);
   const [requestPrincipalModalOpen, setRequestPrincipalModalOpen] = useState(false);
-  const [requestReason, setRequestReason] = useState("");
-  const [requestNotes, setRequestNotes] = useState("");
+  const [modalActionType, setModalActionType] = useState<"request_principal" | "direct_publish">("request_principal");
+  const [facultyChangeCategory, setFacultyChangeCategory] = useState<string>("");
+  const [facultyChangeRemarks, setFacultyChangeRemarks] = useState<string>("");
   const [submittingRequest, setSubmittingRequest] = useState(false);
   const [requestSuccessNotice, setRequestSuccessNotice] = useState<string | null>(null);
 
@@ -1158,6 +1287,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [assignments, setAssignments] = useState<LocalAssignment[]>([]);
+  const [baselineAssignments, setBaselineAssignments] = useState<LocalAssignment[]>([]);
   const [selected, setSelected] = useState<{
     day: string;
     slotId: number;
@@ -1487,6 +1617,7 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
         }
       }
       setAssignments(loaded);
+      setBaselineAssignments(loaded);
       setBaselineSignature(assignmentSignature(loaded));
       setReview(null);
       setInfo(null);
@@ -1503,6 +1634,70 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
   }, [loadPlanner]);
 
   const currentSignature = useMemo(() => assignmentSignature(assignments), [assignments]);
+
+  const detectedFacultyChanges = useMemo(() => {
+    if (!baselineAssignments || baselineAssignments.length === 0) return [];
+    const changes: Array<{
+      day: string;
+      slotId: number;
+      slotLabel: string;
+      timeRange: string;
+      subjectName: string;
+      batchLabel?: string;
+      previousFaculty: string;
+      newFaculty: string;
+      previousFacultyId: string;
+      newFacultyId: string;
+      reasonCategory?: string;
+      changeRemarks?: string;
+    }> = [];
+
+    const baseMap = new Map<string, LocalAssignment>();
+    for (const b of baselineAssignments) {
+      const dayCode = (DAY_LABEL_TO_CODE[b.dayOfWeek] ?? b.dayOfWeek).toUpperCase();
+      const bKey = `${dayCode}__${b.timingSlotId}__${b.batchLabel || "all"}`;
+      baseMap.set(bKey, b);
+    }
+
+    for (const a of assignments) {
+      const dayCode = (DAY_LABEL_TO_CODE[a.dayOfWeek] ?? a.dayOfWeek).toUpperCase();
+      const bKey = `${dayCode}__${a.timingSlotId}__${a.batchLabel || "all"}`;
+      const base = baseMap.get(bKey);
+      if (base) {
+        const baseFacId = (base.hrmsEmployeeId || "").trim();
+        const curFacId = (a.hrmsEmployeeId || "").trim();
+        // Strict faculty shift condition:
+        // 1. baseFacId exists (slot had an assigned faculty in published schedule).
+        // 2. curFacId exists (new faculty selected).
+        // 3. Different faculty members.
+        // 4. Same subject (not changing class subject).
+        if (
+          baseFacId &&
+          curFacId &&
+          baseFacId !== curFacId &&
+          (base.subjectId == null || a.subjectId == null || base.subjectId === a.subjectId)
+        ) {
+          const slot = (planner?.slotsByDay?.[a.dayOfWeek] ?? []).find((s) => s.id === a.timingSlotId) ||
+                       Object.values(planner?.slotsByDay || {}).flat().find((s) => s.id === a.timingSlotId);
+          changes.push({
+            day: a.dayOfWeek,
+            slotId: a.timingSlotId,
+            slotLabel: slot ? timingSlotDisplayLabel(slot) : `Slot ${a.timingSlotId}`,
+            timeRange: slot ? `${String(slot.startTime).slice(0, 5)} - ${String(slot.endTime).slice(0, 5)}` : "",
+            subjectName: a.subjectName || a.customLabel || "Class Slot",
+            batchLabel: a.batchLabel || undefined,
+            previousFaculty: base.facultyName || baseFacId,
+            newFaculty: a.facultyName || curFacId,
+            previousFacultyId: baseFacId,
+            newFacultyId: curFacId,
+            reasonCategory: a.reasonCategory || undefined,
+            changeRemarks: a.changeRemarks || undefined,
+          });
+        }
+      }
+    }
+    return changes;
+  }, [baselineAssignments, assignments, planner?.slotsByDay]);
   const hasLocalChanges =
     baselineSignature != null && currentSignature !== baselineSignature;
   const isPublished = planner?.context.status === "published";
@@ -1658,6 +1853,11 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           customLabel: src.customLabel || "",
           hrmsEmployeeId: src.hrmsEmployeeId || "",
           facultyName: src.facultyName || "",
+          originalFacultyHrmsId: src.hrmsEmployeeId || "",
+          originalFacultyName: src.facultyName || "",
+          originalSubjectId: src.subjectId ? String(src.subjectId) : "",
+          reasonCategory: src.reasonCategory || "",
+          changeRemarks: src.changeRemarks || "",
           roomLabel: src.roomLabel || "",
           batchLabel: defaultBatch,
           entryType: src.entryType || "theory",
@@ -1680,6 +1880,11 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           customLabel: item.customLabel || "",
           hrmsEmployeeId: item.hrmsEmployeeId || "",
           facultyName: item.facultyName || "",
+          originalFacultyHrmsId: item.hrmsEmployeeId || "",
+          originalFacultyName: item.facultyName || "",
+          originalSubjectId: item.subjectId ? String(item.subjectId) : "",
+          reasonCategory: item.reasonCategory || "",
+          changeRemarks: item.changeRemarks || "",
           roomLabel: item.roomLabel || "",
           batchLabel: item.batchLabel || "",
           entryType: item.entryType || "theory",
@@ -1842,6 +2047,14 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           return;
         }
 
+        // If shifting from an existing faculty, preserve any entered reason & remarks
+        const isShift = Boolean(
+          alloc.originalFacultyHrmsId &&
+          faculty.hrmsEmployeeId &&
+          alloc.originalFacultyHrmsId.trim() !== faculty.hrmsEmployeeId.trim() &&
+          (!alloc.originalSubjectId || alloc.originalSubjectId === String(subject.id))
+        );
+
         newItems.push({
           dayOfWeek: dayCode,
           timingSlotId: selected.slotId,
@@ -1859,6 +2072,8 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
           studentCount: assignedStudentCount,
           weeklyRotation: isSplit ? weeklyRotation : false,
           rotationPattern: isSplit && weeklyRotation ? rotationPattern.join(",") : null,
+          reasonCategory: alloc.reasonCategory || null,
+          changeRemarks: alloc.changeRemarks || null,
         });
       }
     }
@@ -2055,14 +2270,29 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
 
   const handleNoticeMasterTimetable = () => {
     setHodNoticeModalOpen(false);
+    setModalActionType("request_principal");
+    const firstShift = detectedFacultyChanges[0];
+    setFacultyChangeCategory(firstShift?.reasonCategory || "");
+    setFacultyChangeRemarks(firstShift?.changeRemarks || "");
     setRequestPrincipalModalOpen(true);
   };
 
   const handleSubmitRequestToPrincipal = async () => {
     if (!planner?.context.planId) return;
-    if (!requestReason.trim()) {
-      setError("Please provide a reason for the master timetable modification.");
-      return;
+    if (detectedFacultyChanges.length > 0) {
+      if (!facultyChangeCategory) {
+        setError("Please select the mandatory reason category for shifting faculty.");
+        return;
+      }
+      if (!facultyChangeRemarks.trim()) {
+        setError("Please enter detailed remarks explaining why the faculty is being shifted.");
+        return;
+      }
+    } else {
+      if (!facultyChangeRemarks.trim()) {
+        setError("Please enter remarks explaining this master timetable modification.");
+        return;
+      }
     }
     setSubmittingRequest(true);
     setError(null);
@@ -2070,21 +2300,28 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       const draftResult = await saveDraft(undefined, { skipReload: true });
       const planId = draftResult?.planId || planner.context.planId;
 
+      const summaryText = detectedFacultyChanges.length > 0
+        ? detectedFacultyChanges
+            .map((c) => `${c.day} ${c.slotLabel}: Faculty (${c.previousFaculty} → ${c.newFaculty}) [${c.subjectName}]`)
+            .join("; ")
+        : facultyChangeRemarks.trim();
+
       const res = await apiFetch("/timetable-requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           planId,
-          reason: requestReason.trim(),
-          notes: requestNotes.trim() || undefined,
+          reasonCategory: facultyChangeCategory || (detectedFacultyChanges.length > 0 ? "faculty_change" : "other"),
+          remarks: facultyChangeRemarks.trim(),
+          proposedChangesSummary: summaryText,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || "Failed to submit request");
 
       setRequestPrincipalModalOpen(false);
-      setRequestReason("");
-      setRequestNotes("");
+      setFacultyChangeCategory("");
+      setFacultyChangeRemarks("");
       setRequestSuccessNotice(
         "Master timetable edit request submitted to the Principal successfully. You can track approval status in Time Table Requests."
       );
@@ -2094,6 +2331,62 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       setError(err instanceof Error ? err.message : "Failed to submit timetable request");
     } finally {
       setSubmittingRequest(false);
+    }
+  };
+
+  const executeDirectPublish = async (reasonCategory?: string, remarks?: string) => {
+    setBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      // Fast draft save without redundant planner reload
+      const draftResult = await saveDraft(undefined, { skipReload: true });
+      const planId = draftResult?.planId || planner?.context.planId;
+      if (!planId) throw new Error("No draft plan to publish");
+
+      // Call publish with reason category & detailed remarks
+      const response = await apiFetch(`/timetables/${planId}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reasonCategory: reasonCategory || undefined,
+          remarks: remarks || undefined,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        if (data.review) {
+          setReview(data.review as ReviewPayload);
+          setIsValidationModalOpen(true);
+        }
+        throw new Error(data.message || "Publish failed");
+      }
+      setReview(data.review as ReviewPayload);
+      setIsValidationModalOpen(false);
+      setRequestPrincipalModalOpen(false);
+      setFacultyChangeCategory("");
+      setFacultyChangeRemarks("");
+      const pubVer = data.versionNo ?? (planner?.context.versionNo ? planner.context.versionNo + 1 : 1);
+      setPublishSuccessInfo({
+        planId: Number(planId),
+        versionNo: Number(pubVer),
+        collegeName: selectedCollege?.name || planner?.context?.college,
+        courseName: selectedCourse?.name,
+        branchName: selectedBranch?.name || planner?.context?.branch,
+        year: filters.year !== "all" ? filters.year : planner?.context?.year,
+        semester: filters.semester !== "all" ? filters.semester : planner?.context?.semester,
+        section: filters.section,
+        batch: filters.batch !== "all" ? filters.batch : planner?.context?.batch,
+        academicYear: filters.academicYear || planner?.context?.academicYear,
+        slotsCount: assignments.filter((a) => a.subjectId || a.customLabel).length,
+        facultyCount: assignedFacultySummary.facultyCount,
+      });
+      setInfo(`Timetable plan #${planId} published successfully (Version ${pubVer}).`);
+      await loadPlanner();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Publish failed");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -2157,52 +2450,19 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
       }
     }
 
-    setBusy(true);
-    setError(null);
-    setInfo(null);
-    try {
-      // 2. Fast draft save without redundant planner reload
-      const draftResult = await saveDraft(undefined, { skipReload: true });
-      const planId = draftResult?.planId || planner?.context.planId;
-      if (!planId) throw new Error("No draft plan to publish");
-
-      // 3. Immediately call publish (backend validates on step 1 in ~20ms)
-      const response = await apiFetch(`/timetables/${planId}/publish`, {
-        method: "POST",
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        if (data.review) {
-          setReview(data.review as ReviewPayload);
-          setIsValidationModalOpen(true);
-        }
-        throw new Error(data.message || "Publish failed");
-      }
-      setReview(data.review as ReviewPayload);
-      setIsValidationModalOpen(false);
-      const pubVer = data.versionNo ?? (planner?.context.versionNo ? planner.context.versionNo + 1 : 1);
-      setPublishSuccessInfo({
-        planId: Number(planId),
-        versionNo: Number(pubVer),
-        collegeName: selectedCollege?.name || planner?.context?.college,
-        courseName: selectedCourse?.name,
-        branchName: selectedBranch?.name || planner?.context?.branch,
-        year: filters.year !== "all" ? filters.year : planner?.context?.year,
-        semester: filters.semester !== "all" ? filters.semester : planner?.context?.semester,
-        section: filters.section,
-        batch: filters.batch !== "all" ? filters.batch : planner?.context?.batch,
-        academicYear: filters.academicYear || planner?.context?.academicYear,
-        slotsCount: assignments.filter((a) => a.subjectId || a.customLabel).length,
-        facultyCount: assignedFacultySummary.facultyCount,
-      });
-      setInfo(`Timetable plan #${planId} published successfully (Version ${pubVer}).`);
-      // 4. Reload planner once after successful publish
-      await loadPlanner();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Publish failed");
-    } finally {
-      setBusy(false);
+    // 2. ONLY prompt modal if there are ACTUAL faculty shifts from one teacher to another!
+    // If empty slots were filled or subjects were configured (detectedFacultyChanges.length === 0):
+    // Publish directly with zero prompts!
+    if (detectedFacultyChanges.length > 0) {
+      setModalActionType("direct_publish");
+      const firstShift = detectedFacultyChanges[0];
+      setFacultyChangeCategory(firstShift?.reasonCategory || "");
+      setFacultyChangeRemarks(firstShift?.changeRemarks || "");
+      setRequestPrincipalModalOpen(true);
+      return;
     }
+
+    await executeDirectPublish();
   };
 
   const handleForcePublish = async () => {
@@ -3723,92 +3983,264 @@ export function TimetablePlannerView({ embedded = false }: { embedded?: boolean 
         </div>
       ) : null}
 
-      {/* Request to Principal Modal */}
+      {/* Master Timetable Modification Mandatory Reason & Remarks Modal */}
       {requestPrincipalModalOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-navy-950">Request Principal Approval</h3>
-                <p className="mt-1 text-xs text-slate-500">
-                  Submit a request to the Principal to publish changes to this Master Timetable.
-                </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in overflow-y-auto">
+          <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl my-8">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3.5">
+              <div className="flex items-center gap-3">
+                <div className={cn(
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border shadow-2xs",
+                  detectedFacultyChanges.length > 0
+                    ? "bg-indigo-50 border-indigo-200 text-indigo-700"
+                    : "bg-amber-50 border-amber-200 text-amber-700"
+                )}>
+                  {detectedFacultyChanges.length > 0 ? (
+                    <ArrowRightLeft className="h-5 w-5" />
+                  ) : (
+                    <FileText className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-navy-950">
+                    {modalActionType === "request_principal"
+                      ? detectedFacultyChanges.length > 0
+                        ? "Faculty Reassignment — Request Principal Approval"
+                        : "Master Timetable Modification — Request Principal Approval"
+                      : "Publish Master Timetable — Faculty Reassignment"}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {detectedFacultyChanges.length > 0
+                      ? "Audit trail justification is mandatory when reassigning faculty on the Master Timetable."
+                      : "Provide remarks explaining the proposed schedule modifications for Principal review."}
+                  </p>
+                </div>
               </div>
               <button
                 onClick={() => setRequestPrincipalModalOpen(false)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
               >
-                ×
+                <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="mt-4 space-y-4">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Department / Branch:</span>
-                  <span className="font-bold text-navy-900">{selectedBranch?.name || planner?.context.branch}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Semester & Section:</span>
-                  <span className="font-bold text-navy-900">
-                    Semester {planner?.context.semester ?? "—"} {filters.section ? `(Section ${filters.section})` : ""}
+            <div className="mt-4 space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+              {/* Context metadata strip */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 rounded-xl border border-slate-200 bg-slate-50/80 p-3 text-xs">
+                <div>
+                  <span className="block text-slate-500 font-medium">Department</span>
+                  <span className="font-bold text-navy-900 truncate block">
+                    {selectedBranch?.name || planner?.context.branch}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Academic Year:</span>
-                  <span className="font-bold text-navy-900">{planner?.context.academicYear ?? "—"}</span>
+                <div>
+                  <span className="block text-slate-500 font-medium">Semester & Sec</span>
+                  <span className="font-bold text-navy-900 truncate block">
+                    Sem {planner?.context.semester ?? "—"} {filters.section ? `(${filters.section})` : ""}
+                  </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-medium">Current Version:</span>
-                  <span className="font-bold text-navy-900">Version {planner?.context.versionNo ?? 1}</span>
+                <div>
+                  <span className="block text-slate-500 font-medium">Academic Year</span>
+                  <span className="font-bold text-navy-900 truncate block">
+                    {planner?.context.academicYear ?? "—"}
+                  </span>
+                </div>
+                <div>
+                  <span className="block text-slate-500 font-medium">Timetable Version</span>
+                  <span className="font-bold text-navy-900 truncate block">
+                    v{planner?.context.versionNo ?? 1} ➔ v{(planner?.context.versionNo ?? 1) + 1}
+                  </span>
                 </div>
               </div>
 
+              {/* Detected Faculty Changes Breakdown */}
+              {detectedFacultyChanges.length > 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                  <div className="bg-slate-50/90 px-3.5 py-2 border-b border-slate-200 text-[11px] font-semibold text-slate-600 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-indigo-600 text-white text-[10px] font-bold">
+                        {detectedFacultyChanges.length}
+                      </span>
+                      Shifted Faculty Allocation{detectedFacultyChanges.length > 1 ? "s" : ""}
+                    </span>
+                    <span className="text-slate-400 text-[10px] font-normal">From Published Baseline</span>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-44 overflow-y-auto">
+                    {detectedFacultyChanges.map((ch, idx) => (
+                      <div key={idx} className="p-2.5 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/40 transition">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-bold text-[11px] text-navy-900 border border-slate-200">
+                            {ch.day} · {ch.slotLabel}
+                          </span>
+                          <span className="font-semibold text-navy-950 truncate">
+                            {ch.subjectName}
+                          </span>
+                          {ch.batchLabel ? (
+                            <span className="text-[10px] bg-indigo-50 text-indigo-700 font-bold px-1.5 py-0.5 rounded border border-indigo-200 shrink-0">
+                              {ch.batchLabel}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs shrink-0">
+                          <span className="text-slate-400 line-through truncate max-w-[130px]" title={ch.previousFaculty}>
+                            {ch.previousFaculty}
+                          </span>
+                          <ArrowRight className="h-3 w-3 text-slate-400 shrink-0" />
+                          <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 truncate max-w-[150px]" title={ch.newFaculty}>
+                            {ch.newFaculty}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-xs text-slate-600 flex items-center gap-2.5">
+                  <FileText className="h-4 w-4 text-slate-400 shrink-0" />
+                  <span>General schedule, classroom, or subject modification request.</span>
+                </div>
+              )}
+
+              {/* Mandatory Reason Selection (ONLY when faculty is shifted) */}
+              {detectedFacultyChanges.length > 0 ? (
+                <div>
+                  <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                    Reason for Faculty Shift <span className="text-rose-600 font-black">* (Mandatory Selection)</span>
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {FACULTY_CHANGE_REASONS.map((r) => {
+                      const isSelected = facultyChangeCategory === r.key;
+                      const IconComponent = r.icon;
+                      return (
+                        <button
+                          key={r.key}
+                          type="button"
+                          onClick={() => setFacultyChangeCategory(r.key)}
+                          className={cn(
+                            "flex items-start gap-2.5 rounded-xl border p-2.5 text-left transition",
+                            isSelected
+                              ? "border-navy-800 bg-navy-50/60 shadow-xs ring-1 ring-navy-800/30"
+                              : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/70"
+                          )}
+                        >
+                          <div className={cn(
+                            "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border transition mt-0.5",
+                            isSelected
+                              ? "bg-navy-900 border-navy-900 text-white"
+                              : "bg-slate-100 border-slate-200 text-slate-600"
+                          )}>
+                            <IconComponent className="h-3.5 w-3.5" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between">
+                              <span className={cn(
+                                "text-xs font-bold leading-tight",
+                                isSelected ? "text-navy-950" : "text-slate-800"
+                              )}>
+                                {r.label}
+                              </span>
+                              <span className={cn(
+                                "h-3.5 w-3.5 rounded-full border flex items-center justify-center shrink-0 ml-1.5",
+                                isSelected
+                                  ? "border-navy-900 bg-navy-900 text-white"
+                                  : "border-slate-300 bg-white"
+                              )}>
+                                {isSelected ? <Check className="h-2 w-2" /> : null}
+                              </span>
+                            </div>
+                            <p className="text-[11px] leading-tight text-slate-500 mt-1 line-clamp-2">
+                              {r.shortDesc}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Mandatory Detailed Remarks */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Reason for Master Timetable Modification *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-slate-800">
+                    {detectedFacultyChanges.length > 0 ? "Detailed Remarks & Justification" : "Modification Remarks"} <span className="text-rose-600 font-black">* (Mandatory)</span>
+                  </label>
+                  <span className={cn(
+                    "text-[11px] font-medium",
+                    facultyChangeRemarks.trim().length >= (detectedFacultyChanges.length > 0 ? 10 : 5) ? "text-emerald-700" : "text-slate-400"
+                  )}>
+                    {facultyChangeRemarks.trim().length} characters (min {detectedFacultyChanges.length > 0 ? 10 : 5})
+                  </span>
+                </div>
                 <textarea
                   rows={3}
-                  value={requestReason}
-                  onChange={(e) => setRequestReason(e.target.value)}
-                  placeholder="Explain why changes are needed (e.g., Faculty reassignment, syllabus balance, room change)..."
-                  className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-navy-600 focus:outline-none focus:ring-1 focus:ring-navy-600"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">
-                  Additional Notes (Optional)
-                </label>
-                <textarea
-                  rows={2}
-                  value={requestNotes}
-                  onChange={(e) => setRequestNotes(e.target.value)}
-                  placeholder="Any extra context for the Principal..."
-                  className="w-full rounded-md border border-slate-300 p-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-navy-600 focus:outline-none focus:ring-1 focus:ring-navy-600"
+                  value={facultyChangeRemarks}
+                  onChange={(e) => setFacultyChangeRemarks(e.target.value)}
+                  placeholder={
+                    detectedFacultyChanges.length > 0
+                      ? "Enter detailed explanation of why this faculty shift is required (e.g. syllabus completed on 10 Nov; handing over to next faculty; workload adjustment)..."
+                      : "Describe the proposed modifications for the Principal's review (e.g. room relocation, schedule timing adjustments)..."
+                  }
+                  className={cn(
+                    "w-full rounded-xl border p-3 text-xs text-slate-800 placeholder:text-slate-400 outline-none transition",
+                    facultyChangeRemarks.trim().length >= (detectedFacultyChanges.length > 0 ? 10 : 5)
+                      ? "border-slate-300 focus:border-navy-700 focus:ring-1 focus:ring-navy-700"
+                      : "border-amber-300 bg-amber-50/20 focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                  )}
                 />
               </div>
             </div>
 
-            <div className="mt-6 flex justify-end gap-2">
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setRequestPrincipalModalOpen(false)}
-                disabled={submittingRequest}
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                className="bg-navy-900 hover:bg-navy-800 text-white font-semibold"
-                onClick={() => void handleSubmitRequestToPrincipal()}
-                disabled={submittingRequest || !requestReason.trim()}
-              >
-                <Send className="mr-1.5 h-3.5 w-3.5" />
-                {submittingRequest ? "Submitting..." : "Submit to Principal"}
-              </Button>
+            <div className="mt-5 flex flex-col sm:flex-row items-center justify-between gap-3 border-t border-slate-100 pt-3">
+              <div className="text-xs text-slate-500">
+                {detectedFacultyChanges.length > 0 && !facultyChangeCategory ? (
+                  <span className="text-rose-600 font-semibold">• Reason category selection is required</span>
+                ) : facultyChangeRemarks.trim().length < (detectedFacultyChanges.length > 0 ? 10 : 5) ? (
+                  <span className="text-amber-700 font-semibold">• Detailed remarks (min {detectedFacultyChanges.length > 0 ? 10 : 5} chars) are required</span>
+                ) : (
+                  <span className="text-emerald-700 font-semibold flex items-center gap-1">
+                    <Check className="h-3.5 w-3.5" /> Ready to {modalActionType === "request_principal" ? "submit request" : "publish"}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setRequestPrincipalModalOpen(false)}
+                  disabled={submittingRequest || busy}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-navy-900 hover:bg-navy-800 text-white font-semibold shadow-sm"
+                  onClick={() => {
+                    if (modalActionType === "request_principal") {
+                      void handleSubmitRequestToPrincipal();
+                    } else {
+                      void executeDirectPublish(facultyChangeCategory, facultyChangeRemarks.trim());
+                    }
+                  }}
+                  disabled={
+                    submittingRequest ||
+                    busy ||
+                    (detectedFacultyChanges.length > 0 && !facultyChangeCategory) ||
+                    facultyChangeRemarks.trim().length < (detectedFacultyChanges.length > 0 ? 10 : 5)
+                  }
+                >
+                  {modalActionType === "request_principal" ? (
+                    <Send className="mr-1.5 h-3.5 w-3.5" />
+                  ) : (
+                    <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  {submittingRequest || busy
+                    ? "Processing..."
+                    : modalActionType === "request_principal"
+                    ? "Submit to Principal"
+                    : "Confirm & Publish Timetable"}
+                </Button>
+              </div>
             </div>
           </div>
         </div>

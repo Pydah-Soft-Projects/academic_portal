@@ -2511,7 +2511,13 @@ export async function reviewTimetablePlan(planId: number) {
 
 export async function publishTimetablePlan(
   planId: number,
-  options?: { actorUserId?: number | null; ipAddress?: string | null; force?: boolean },
+  options?: {
+    actorUserId?: number | null;
+    ipAddress?: string | null;
+    force?: boolean;
+    reasonCategory?: string | null;
+    remarks?: string | null;
+  },
 ) {
   const plans = await queryAcademic<PlanRow[]>(
     `SELECT * FROM ap_timetable_plans WHERE id = ? LIMIT 1`,
@@ -2665,12 +2671,21 @@ export async function publishTimetablePlan(
       [planId],
     );
 
+    const versionReason = options?.reasonCategory
+      ? `[${options.reasonCategory}] ${options.remarks || "Published"}`
+      : (options?.remarks || "Published");
+
     await writeVersion(
       conn,
       planId,
       "published",
-      { review, subjectSnapshotsRefreshed: snapshotRefresh.refreshed },
-      "Published",
+      {
+        review,
+        subjectSnapshotsRefreshed: snapshotRefresh.refreshed,
+        reasonCategory: options?.reasonCategory ?? null,
+        remarks: options?.remarks ?? null,
+      },
+      versionReason,
     );
 
     // Mark superseded versions history on previous plans

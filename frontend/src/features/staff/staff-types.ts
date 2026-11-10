@@ -217,10 +217,20 @@ export type StaffSemesterAcademicHistoryItem = {
   subjectName: string;
   subjectType: string;
   periodsAllotted: number;
+  totalSemesterSlots: number;
+  semesterWeeks: number;
+  semDuration?: string | null;
+  semStartDate?: string | null;
+  semEndDate?: string | null;
   classesScheduled: number;
+  classesPresent: number;
   classesTaken: number;
   classesPending: number;
+  classesSubstituted?: number;
+  remainingSlots: number;
+  presenceVariance: number;
   completionPercent: number;
+  compliancePercent: number;
 };
 
 export type StaffStudentFeedbackHistoryItem = {

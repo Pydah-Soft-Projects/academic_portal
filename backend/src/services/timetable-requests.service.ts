@@ -27,7 +27,9 @@ export async function ensureTimetableRequestsTable() {
         version_no INT NULL,
         requester_user_id BIGINT UNSIGNED NOT NULL,
         requester_role_key VARCHAR(64) NULL,
+        reason_category VARCHAR(64) NULL,
         reason TEXT NOT NULL,
+        change_remarks TEXT NULL,
         proposed_changes_summary TEXT NULL,
         status ENUM('pending', 'approved', 'rejected', 'cancelled') NOT NULL DEFAULT 'pending',
         reviewed_by_user_id BIGINT UNSIGNED NULL,
@@ -40,6 +42,33 @@ export async function ensureTimetableRequestsTable() {
         KEY idx_tt_req_status (status)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
+
+    try {
+      const cols = await queryAcademic<(RowDataPacket & { Field: string })[]>(
+        `SHOW COLUMNS FROM ap_timetable_change_requests LIKE 'reason_category'`
+      );
+      if (cols.length === 0) {
+        await executeAcademic(
+          `ALTER TABLE ap_timetable_change_requests ADD COLUMN reason_category VARCHAR(64) NULL AFTER requester_role_key`
+        );
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const remCols = await queryAcademic<(RowDataPacket & { Field: string })[]>(
+        `SHOW COLUMNS FROM ap_timetable_change_requests LIKE 'change_remarks'`
+      );
+      if (remCols.length === 0) {
+        await executeAcademic(
+          `ALTER TABLE ap_timetable_change_requests ADD COLUMN change_remarks TEXT NULL AFTER reason`
+        );
+      }
+    } catch {
+      // ignore
+    }
+
     tableEnsured = true;
   } catch (err) {
     console.error("Failed to ensure ap_timetable_change_requests table:", err);
@@ -61,7 +90,9 @@ export type TimetableChangeRequestRow = RowDataPacket & {
   version_no: number | null;
   requester_user_id: number;
   requester_role_key: string | null;
+  reason_category: string | null;
   reason: string;
+  change_remarks: string | null;
   proposed_changes_summary: string | null;
   status: "pending" | "approved" | "rejected" | "cancelled";
   reviewed_by_user_id: number | null;
@@ -258,6 +289,15 @@ export async function computeTimetablePlanDiff(
   }
 }
 
+export const REASON_CATEGORY_LABELS: Record<string, string> = {
+  syllabus_completed: "Syllabus Completed",
+  timetable_mistake: "Timetable Mistake / Entry Error",
+  faculty_change: "Wantedly Changing Faculty / Reassignment",
+  faculty_relieved: "Faculty Relieved / Resigned / Long Leave",
+  workload_rebalance: "Workload Rebalance / Administrative Allocation",
+  other: "Other Reason",
+};
+
 export async function listTimetableRequests(
   authz: AuthzContext,
   filters: {
@@ -409,7 +449,9 @@ export async function listTimetableRequests(
         requesterUserId: Number(r.requester_user_id),
         requesterName: r.requester_name || `User #${r.requester_user_id}`,
         requesterRoleKey: r.requester_role_key || "hod",
+        reasonCategory: r.reason_category || null,
         reason: r.reason,
+        changeRemarks: r.change_remarks || null,
         proposedChangesSummary: r.proposed_changes_summary || null,
         status: r.status,
         reviewedByUserId: r.reviewed_by_user_id ? Number(r.reviewed_by_user_id) : null,
@@ -431,7 +473,9 @@ export async function createTimetableRequest(
   authz: AuthzContext,
   input: {
     planId: number;
-    reason: string;
+    reasonCategory?: string | null;
+    remarks?: string | null;
+    reason?: string;
     notes?: string | null;
     proposedChangesSummary?: string | null;
   },
@@ -440,7 +484,20 @@ export async function createTimetableRequest(
   await ensureTimetableRequestsTable();
 
   if (!input.planId) throw new Error("planId is required");
-  if (!input.reason?.trim()) throw new Error("A reason for master timetable modification is required");
+
+  const category = (input.reasonCategory || "").trim();
+  const remarks = (input.remarks || input.notes || "").trim();
+  const rawReason = (input.reason || "").trim();
+
+  if (!category && !rawReason) {
+    throw new Error("Mandatory reason category for faculty change is required.");
+  }
+  if (!remarks && !rawReason) {
+    throw new Error("Mandatory detailed remarks explaining why faculty is being changed are required.");
+  }
+
+  const categoryLabel = category ? (REASON_CATEGORY_LABELS[category] || category) : "";
+  const finalReason = rawReason || (categoryLabel ? `[${categoryLabel}] ${remarks}` : remarks);
 
   // Load the timetable plan
   const plans = await queryAcademic<(RowDataPacket & {
@@ -481,14 +538,14 @@ export async function createTimetableRequest(
               `${c.dayLabel} ${c.slotLabel}: ${c.facultyChanged ? `Faculty (${c.fromFaculty} → ${c.toFaculty})` : ""} ${c.subjectChanged ? `Subject (${c.fromSubject} → ${c.toSubject})` : ""}`.trim(),
           )
           .join("; ")
-      : input.notes || null);
+      : remarks || input.notes || null);
 
   const result = await executeAcademic(
     `INSERT INTO ap_timetable_change_requests
       (plan_id, college_id, course_id, branch_id, batch, year_of_study, semester_number,
        section_name, academic_year_label, version_no, requester_user_id, requester_role_key,
-       reason, proposed_changes_summary, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       reason_category, reason, change_remarks, proposed_changes_summary, status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
     [
       plan.id,
       plan.college_id,
@@ -502,7 +559,9 @@ export async function createTimetableRequest(
       plan.version_no,
       authz.userId,
       requesterRoleKey,
-      input.reason.trim(),
+      category || null,
+      finalReason,
+      remarks || null,
       summaryText,
     ],
   );
@@ -521,7 +580,10 @@ export async function createTimetableRequest(
       semester: plan.semester_number,
       section: plan.section_name,
       versionNo: plan.version_no,
-      reason: input.reason.trim(),
+      reasonCategory: category || null,
+      remarks: remarks || null,
+      reason: finalReason,
+      changesSummary: summaryText,
     },
     ipAddress,
   });
@@ -588,6 +650,8 @@ export async function approveTimetableRequest(
       actorUserId: authz.userId,
       ipAddress,
       force: true,
+      reasonCategory: request.reason_category || undefined,
+      remarks: request.change_remarks || request.reason || undefined,
     });
   } catch (pubErr) {
     console.error("Auto-publish on request approval notice:", pubErr);

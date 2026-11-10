@@ -63,7 +63,9 @@ export type TimetableRequestItem = {
   requesterUserId: number;
   requesterName: string;
   requesterRoleKey: string;
+  reasonCategory?: string | null;
   reason: string;
+  changeRemarks?: string | null;
   proposedChangesSummary: string | null;
   status: "pending" | "approved" | "rejected" | "cancelled";
   reviewedByUserId: number | null;
@@ -74,6 +76,42 @@ export type TimetableRequestItem = {
   updatedAt: string;
   canApprove: boolean;
   changes?: TimetableSlotChange[];
+};
+
+const REASON_CATEGORY_CONFIG: Record<
+  string,
+  { label: string; icon: string; badgeClass: string }
+> = {
+  syllabus_completed: {
+    label: "Syllabus Completed",
+    icon: "📚",
+    badgeClass: "bg-emerald-50 text-emerald-800 border-emerald-200",
+  },
+  timetable_mistake: {
+    label: "Timetable Mistake / Entry Error",
+    icon: "⚠️",
+    badgeClass: "bg-amber-50 text-amber-800 border-amber-200",
+  },
+  faculty_change: {
+    label: "Wantedly Changing Faculty / Reassignment",
+    icon: "🔄",
+    badgeClass: "bg-blue-50 text-blue-800 border-blue-200",
+  },
+  faculty_relieved: {
+    label: "Faculty Relieved / Long Leave",
+    icon: "🚪",
+    badgeClass: "bg-purple-50 text-purple-800 border-purple-200",
+  },
+  workload_rebalance: {
+    label: "Workload Rebalance",
+    icon: "⚖️",
+    badgeClass: "bg-sky-50 text-sky-800 border-sky-200",
+  },
+  other: {
+    label: "Other Reason",
+    icon: "📝",
+    badgeClass: "bg-slate-100 text-slate-800 border-slate-300",
+  },
 };
 
 export function TimetableRequestsView() {
@@ -437,12 +475,35 @@ export function TimetableRequestsView() {
                       ) : null}
                     </div>
 
-                    {/* Reason block: clean and compact */}
-                    <div className="rounded-md border border-slate-200/90 bg-slate-50/80 px-3 py-2 text-xs flex items-baseline gap-2">
-                      <span className="font-bold uppercase tracking-wider text-slate-500 text-[11px] shrink-0">
-                        Reason:
-                      </span>
-                      <span className="text-slate-800 font-medium whitespace-pre-line">{req.reason}</span>
+                    {/* Reason block: rich, structured category badge & remarks */}
+                    <div className="rounded-xl border border-slate-200/90 bg-slate-50/90 p-3 text-xs space-y-1.5 shadow-2xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold uppercase tracking-wider text-slate-500 text-[10.5px]">
+                          Change Category:
+                        </span>
+                        {req.reasonCategory && REASON_CATEGORY_CONFIG[req.reasonCategory] ? (
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-bold border shadow-2xs",
+                              REASON_CATEGORY_CONFIG[req.reasonCategory].badgeClass,
+                            )}
+                          >
+                            <span>{REASON_CATEGORY_CONFIG[req.reasonCategory].icon}</span>
+                            {REASON_CATEGORY_CONFIG[req.reasonCategory].label}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-200/80 text-slate-700 border border-slate-300">
+                            Master Timetable Modification
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-start gap-2 pt-0.5">
+                        <span className="font-bold text-slate-600 text-xs shrink-0">Remarks:</span>
+                        <span className="text-slate-900 font-medium whitespace-pre-line leading-relaxed">
+                          {req.changeRemarks || req.reason}
+                        </span>
+                      </div>
                     </div>
 
                     {/* Proposed Changes Breakdown */}
@@ -591,14 +652,30 @@ export function TimetableRequestsView() {
             ) : null}
 
             <div className="mt-4 space-y-4">
-              <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-xs space-y-1">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs space-y-1.5">
                 <div>
                   <span className="font-bold text-slate-700">Requester:</span>{" "}
                   {actionModal.request.requesterName} ({actionModal.request.requesterRoleKey.toUpperCase()})
                 </div>
+                {actionModal.request.reasonCategory && REASON_CATEGORY_CONFIG[actionModal.request.reasonCategory] ? (
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-700">Change Category:</span>
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold border shadow-2xs",
+                        REASON_CATEGORY_CONFIG[actionModal.request.reasonCategory].badgeClass,
+                      )}
+                    >
+                      <span>{REASON_CATEGORY_CONFIG[actionModal.request.reasonCategory].icon}</span>
+                      {REASON_CATEGORY_CONFIG[actionModal.request.reasonCategory].label}
+                    </span>
+                  </div>
+                ) : null}
                 <div>
-                  <span className="font-bold text-slate-700">Reason:</span>{" "}
-                  {actionModal.request.reason}
+                  <span className="font-bold text-slate-700">Remarks:</span>{" "}
+                  <span className="text-slate-800 font-medium whitespace-pre-line">
+                    {actionModal.request.changeRemarks || actionModal.request.reason}
+                  </span>
                 </div>
               </div>
 

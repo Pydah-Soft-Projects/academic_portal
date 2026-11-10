@@ -55,10 +55,24 @@ timetableRequestsRouter.post(
     try {
       const body = req.body as {
         planId: number;
-        reason: string;
+        reasonCategory?: string;
+        remarks?: string;
+        reason?: string;
         notes?: string;
         proposedChangesSummary?: string;
       };
+      if (!body.planId) {
+        res.status(400).json({ message: "planId is required" });
+        return;
+      }
+      if (!body.reasonCategory?.trim() && !body.reason?.trim()) {
+        res.status(400).json({ message: "Mandatory selection of reason for changing faculty is required." });
+        return;
+      }
+      if (!body.remarks?.trim() && !body.reason?.trim()) {
+        res.status(400).json({ message: "Mandatory detailed remarks for changing faculty are required." });
+        return;
+      }
       const created = await createTimetableRequest(getAuthz(req), body, req.ip);
       res.status(201).json(created);
     } catch (error) {

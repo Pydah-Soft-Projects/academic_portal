@@ -120,7 +120,7 @@ export async function getStaffDetailedProfile(
   }
 
   // 3. Fetch Extended Personal & Employment details from DB
-  const [personalRows, achievementRows, roleRows, careerRows, docRows, feedbackRows, semesterHistoryRows] =
+  const [personalRows, achievementRows, roleRows, careerRows, docRows, feedbackRows, semesterHistoryRows, facultySessionRows] =
     await Promise.all([
       queryAcademic<(RowDataPacket & Record<string, unknown>)[]>(
         `SELECT * FROM ap_staff_personal_details WHERE hrms_employee_id = ? LIMIT 1`,
@@ -196,30 +196,54 @@ export async function getStaffDetailedProfile(
         [staffName],
       ).catch(() => []),
 
-      // Semester-wise Academic Teaching History from timetable plans & class sessions
+      // Semester-wise Academic Teaching History from timetable plans & semester calendar dates
       staffLinkId
         ? queryAcademic<(RowDataPacket & Record<string, unknown>)[]>(
             `SELECT 
+               p.id as plan_id,
                p.academic_year_label,
                p.semester_number,
                p.batch,
-               p.section_name,
+               COALESCE(p.section_name, 'A') as section_name,
                p.course_id,
                p.branch_id,
                te.subject_code,
                te.subject_name,
                COALESCE(te.entry_type, 'theory') as subject_type,
                COUNT(DISTINCT te.id) as periods_allotted,
-               COUNT(DISTINCT cs.id) as sessions_scheduled,
-               COUNT(DISTINCT CASE WHEN ap.id IS NOT NULL THEN cs.id END) as sessions_taken,
-               COUNT(DISTINCT CASE WHEN ap.id IS NULL AND cs.id IS NOT NULL THEN cs.id END) as sessions_pending
+               MIN(s.start_date) as sem_start_date,
+               MAX(s.end_date) as sem_end_date
              FROM ap_timetable_entries te
              JOIN ap_timetable_plans p ON p.id = te.plan_id AND p.status = 'published'
-             LEFT JOIN ap_class_sessions cs ON cs.plan_id = p.id AND cs.faculty_staff_link_id = te.faculty_staff_link_id AND cs.subject_code = te.subject_code
-             LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+             LEFT JOIN student_database.academic_years ay ON ay.year_label COLLATE utf8mb4_unicode_ci = p.academic_year_label COLLATE utf8mb4_unicode_ci
+             LEFT JOIN student_database.semesters s ON 
+               (s.college_id = p.college_id OR s.college_id IS NULL)
+               AND s.course_id = p.course_id
+               AND s.batch COLLATE utf8mb4_unicode_ci = p.batch COLLATE utf8mb4_unicode_ci
+               AND s.semester_number = p.semester_number
+               AND s.academic_year_id = ay.id
              WHERE te.faculty_staff_link_id = ?
-             GROUP BY p.academic_year_label, p.semester_number, p.batch, p.section_name, p.course_id, p.branch_id, te.subject_code, te.subject_name, te.entry_type
+             GROUP BY p.id, p.academic_year_label, p.semester_number, p.batch, p.section_name, p.course_id, p.branch_id, te.subject_code, te.subject_name, te.entry_type
              ORDER BY p.academic_year_label DESC, p.semester_number DESC, te.subject_name ASC`,
+            [staffLinkId],
+          ).catch(() => [])
+        : Promise.resolve([]),
+
+      // All scheduled session occurrences for this faculty with attendance post & substitution markers
+      staffLinkId
+        ? queryAcademic<(RowDataPacket & Record<string, unknown>)[]>(
+            `SELECT 
+               cs.id,
+               cs.plan_id,
+               cs.subject_code,
+               DATE_FORMAT(cs.session_date, '%Y-%m-%d') as session_date,
+               ap.id as post_id,
+               ap.posted_by_staff_link_id,
+               sub.id as sub_id
+             FROM ap_class_sessions cs
+             LEFT JOIN ap_attendance_posts ap ON ap.class_session_id = cs.id
+             LEFT JOIN ap_class_session_substitutions sub ON sub.class_session_id = cs.id AND sub.status = 'active'
+             WHERE cs.faculty_staff_link_id = ? AND cs.status != 'cancelled'`,
             [staffLinkId],
           ).catch(() => [])
         : Promise.resolve([]),
@@ -406,13 +430,71 @@ export async function getStaffDetailedProfile(
   const computedCompletion = Math.min(100, Math.max(50, Math.round((filledFields / totalKeyFields) * 100)));
   personalDetails.profileCompletionPercent = computedCompletion;
 
-  // Format semester academic history
+  // 4. Fetch faculty's physical presence dates from HRMS MongoDB
+  const empIdentifiers = [base.staff.hrmsEmployeeId, base.staff.code].filter(Boolean);
+  const presentDatesSet = new Set<string>();
+  if (hrmsDb && empIdentifiers.length > 0) {
+    const hrmsDailies = await hrmsDb
+      .collection("attendancedailies")
+      .find({
+        $or: [
+          { employeeNumber: { $in: empIdentifiers } },
+          { emp_no: { $in: empIdentifiers } },
+        ],
+      })
+      .project({ date: 1, status: 1, shifts: 1 })
+      .toArray()
+      .catch(() => []);
+
+    for (const d of hrmsDailies) {
+      const dStr = typeof d.date === "string" ? d.date.split("T")[0] : (d.date instanceof Date ? formatISTDateLocal(d.date) : "");
+      const st = String(d.status || "").toUpperCase();
+      if (st === "PRESENT" || st === "P" || d.shifts?.[0]?.inTime) {
+        if (dStr) presentDatesSet.add(dStr);
+      }
+    }
+  }
+
+  // Index faculty sessions by plan_id + subject_code
+  const sessionsByCourse = new Map<string, any[]>();
+  for (const s of (facultySessionRows || [])) {
+    const key = `${s.plan_id}_${s.subject_code}`;
+    if (!sessionsByCourse.has(key)) sessionsByCourse.set(key, []);
+    sessionsByCourse.get(key)!.push(s);
+  }
+
+  // Format semester academic history with accurate semester duration target, faculty presence & differences
   const semesterAcademicHistory = semesterHistoryRows.map((r) => {
-    const scheduled = Number(r.sessions_scheduled || 0);
-    const taken = Number(r.sessions_taken || 0);
-    const pending = Number(r.sessions_pending || 0);
-    const allotted = Number(r.periods_allotted || 0);
-    const completionPercent = scheduled > 0 ? Math.min(100, Math.round((taken / scheduled) * 100)) : 0;
+    const key = `${r.plan_id}_${r.subject_code}`;
+    const courseSessions = sessionsByCourse.get(key) || [];
+    const scheduled = courseSessions.length;
+    const taken = courseSessions.filter((s) => s.post_id != null).length;
+    const pending = courseSessions.filter((s) => s.post_id == null).length;
+    const present = courseSessions.filter((s) => presentDatesSet.has(String(s.session_date))).length;
+    const substituted = courseSessions.filter((s) => s.sub_id != null || (s.posted_by_staff_link_id && s.posted_by_staff_link_id !== staffLinkId)).length;
+
+    const start = r.sem_start_date ? new Date(r.sem_start_date) : null;
+    const end = r.sem_end_date ? new Date(r.sem_end_date) : null;
+    let weeks = 16;
+    if (start && end && !isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      const diffDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / (1000 * 3600 * 24)));
+      weeks = Math.max(10, Math.min(24, Math.round(diffDays / 7)));
+    }
+
+    const periodsAllotted = Number(r.periods_allotted || 0);
+    const totalSemesterSlots = periodsAllotted * weeks;
+    const remainingSlots = Math.max(0, totalSemesterSlots - taken);
+    const presenceVariance = Math.max(0, present - taken);
+    const completionPercent = totalSemesterSlots > 0
+      ? Math.min(100, Math.round((taken / totalSemesterSlots) * 100))
+      : (scheduled > 0 ? Math.round((taken / scheduled) * 100) : 0);
+    const compliancePercent = scheduled > 0
+      ? Math.min(100, Math.round((taken / scheduled) * 100))
+      : 100;
+
+    const semDuration = start && end
+      ? `${formatISTDateLocal(start)} to ${formatISTDateLocal(end)} (${weeks} wks)`
+      : `${weeks} Wks Target`;
 
     return {
       academicYear: String(r.academic_year_label || "2026-2027"),
@@ -422,11 +504,21 @@ export async function getStaffDetailedProfile(
       subjectCode: String(r.subject_code || "—"),
       subjectName: String(r.subject_name || "Subject"),
       subjectType: String(r.subject_type || "theory"),
-      periodsAllotted: allotted,
+      periodsAllotted,
+      totalSemesterSlots,
+      semesterWeeks: weeks,
+      semDuration,
+      semStartDate: start ? formatISTDateLocal(start) : null,
+      semEndDate: end ? formatISTDateLocal(end) : null,
       classesScheduled: scheduled,
+      classesPresent: present,
       classesTaken: taken,
       classesPending: pending,
+      classesSubstituted: substituted,
+      remainingSlots,
+      presenceVariance,
       completionPercent,
+      compliancePercent,
     };
   });
 
