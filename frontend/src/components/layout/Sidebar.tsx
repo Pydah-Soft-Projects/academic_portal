@@ -22,6 +22,7 @@ import {
   Users,
   CheckCircle2,
   Briefcase,
+  Award,
 } from "lucide-react";
 import { NAV_GROUPS, filterNavGroups, navLabelForItem, type NavGroup } from "@/lib/navigation";
 import { cn } from "@/lib/cn";
@@ -1001,6 +1002,29 @@ function SelfProfileModal(props: {
                   </div>
                 </div>
               ) : null}
+
+              {/* SECTION: Faculty Achievements & Research */}
+              <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Award className="h-4 w-4 text-amber-700" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-amber-950">
+                      Research &amp; Scholarly Achievements
+                    </h4>
+                  </div>
+                  <Link
+                    href="/achievements"
+                    onClick={props.onClose}
+                    className="inline-flex items-center gap-1 rounded-md bg-amber-600 hover:bg-amber-700 px-2.5 py-1 text-xs font-semibold text-white shadow-2xs transition"
+                  >
+                    <span>Open Portfolio</span>
+                    <ChevronRight className="h-3 w-3" />
+                  </Link>
+                </div>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  Document your research papers, conference presentations, patents, FDPs, and professional certifications. Submitted achievements are reviewed by your HOD and verified on your institutional staff profile.
+                </p>
+              </div>
 
               {/* SECTION: Account Information & Settings */}
               <div className="space-y-3 pt-1">

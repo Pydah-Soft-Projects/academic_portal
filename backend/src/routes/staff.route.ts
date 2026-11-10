@@ -11,6 +11,7 @@ import {
   getStaffDetailedProfile,
   getStaffMonthlyCalendar,
   updateStaffPersonalDetails,
+  getStaffAchievements,
   createStaffAchievement,
   reviewStaffAchievement,
   deleteStaffAchievement,
@@ -75,11 +76,14 @@ staffRouter.get(
 // GET /api/staff/:id - Full details for a single staff member
 staffRouter.get(
   "/:id",
-  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view"),
+  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view", "my_timetable.view"),
   async (req: AuthedRequest, res, next) => {
     try {
       const collegeNames = await scopedCollegeNames(req);
-      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      let id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (id === "me" || !id) {
+        id = req.authUser?.hrmsEmployeeId || req.authUser?.username || String(req.authUser?.id);
+      }
       const detail = await getStaffDetailedProfile(id, {
         date: str(req.query.date),
         collegeNames,
@@ -105,11 +109,14 @@ staffRouter.get(
 // GET /api/staff/:id/calendar - Monthly attendance & teaching drilldown
 staffRouter.get(
   "/:id/calendar",
-  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view"),
+  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view", "my_timetable.view"),
   async (req: AuthedRequest, res, next) => {
     try {
       const collegeNames = await scopedCollegeNames(req);
-      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      let id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (id === "me" || !id) {
+        id = req.authUser?.hrmsEmployeeId || req.authUser?.username || String(req.authUser?.id);
+      }
       const month = str(req.query.month);
       const data = await getStaffMonthlyCalendar(id, month, collegeNames);
       if (!data) {
@@ -131,12 +138,33 @@ staffRouter.get(
 // PUT /api/staff/:id/personal-details - Update personal and employment details
 staffRouter.put(
   "/:id/personal-details",
-  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view"),
+  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view", "my_timetable.view"),
   async (req: AuthedRequest, res, next) => {
     try {
-      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      let id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (id === "me" || !id) {
+        id = req.authUser?.hrmsEmployeeId || req.authUser?.username || String(req.authUser?.id);
+      }
       await updateStaffPersonalDetails(id, req.body, req.authUser?.id);
       res.json({ success: true, message: "Personal details updated successfully" });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+// GET /api/staff/:id/achievements - Fetch staff achievements and approvals
+staffRouter.get(
+  "/:id/achievements",
+  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view", "my_timetable.view"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      let id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (id === "me" || !id) {
+        id = req.authUser?.hrmsEmployeeId || req.authUser?.username || String(req.authUser?.id);
+      }
+      const data = await getStaffAchievements(id);
+      res.json(data);
     } catch (error) {
       next(error);
     }
@@ -146,10 +174,13 @@ staffRouter.put(
 // POST /api/staff/:id/achievements - Add a certification or achievement
 staffRouter.post(
   "/:id/achievements",
-  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view"),
+  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view", "my_timetable.view"),
   async (req: AuthedRequest, res, next) => {
     try {
-      const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      let id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+      if (id === "me" || !id) {
+        id = req.authUser?.hrmsEmployeeId || req.authUser?.username || String(req.authUser?.id);
+      }
       const achievementId = await createStaffAchievement(
         id,
         req.body,
@@ -190,7 +221,7 @@ staffRouter.post(
 // DELETE /api/staff/:id/achievements/:achievementId - Delete achievement
 staffRouter.delete(
   "/:id/achievements/:achievementId",
-  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view"),
+  requirePermission("faculty.view", "students.view", "workload.view", "dashboard.view", "my_timetable.view"),
   async (req: AuthedRequest, res, next) => {
     try {
       const achId = Number(req.params.achievementId);

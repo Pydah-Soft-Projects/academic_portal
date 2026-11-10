@@ -54,6 +54,9 @@ function requiredPermissionsForPath(pathname: string): string[] | null {
   if (pathname.startsWith("/staff")) {
     return ["faculty.view", "students.view", "workload.view", "dashboard.view"];
   }
+  if (pathname.startsWith("/achievements")) {
+    return ["dashboard.view", "faculty.view", "my_timetable.view", "workload.view"];
+  }
   if (pathname.startsWith("/class-teacher-assignment")) {
     return ["timetable.view", "mentoring.view", "students.view"];
   }

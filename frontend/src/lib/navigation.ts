@@ -1,5 +1,6 @@
 import {
   AlertTriangle,
+  Award,
   Bell,
   BookOpen,
   CalendarCheck,
@@ -67,6 +68,12 @@ export const NAV_GROUPS: NavGroup[] = [
         href: "/staff",
         icon: Users,
         permissions: ["faculty.view", "students.view", "workload.view", "dashboard.view"],
+      },
+      {
+        label: "My Achievements",
+        href: "/achievements",
+        icon: Award,
+        permissions: ["dashboard.view", "faculty.view", "my_timetable.view", "workload.view"],
       },
       {
         label: "My Subjects",

@@ -667,12 +667,117 @@ export async function updateStaffPersonalDetails(
   await executeAcademic(sql, [...insertVals, ...vals]);
 }
 
+export async function getStaffAchievements(identifier: string) {
+  let canonicalHrmsId = identifier.trim();
+  const base = await getStaffMemberDetail({ identifier: canonicalHrmsId }).catch(() => null);
+  if (base?.staff?.hrmsEmployeeId) {
+    canonicalHrmsId = base.staff.hrmsEmployeeId;
+  }
+
+  const achievementRows = await queryAcademic<(RowDataPacket & Record<string, unknown>)[]>(
+    `SELECT a.*, 
+       CONCAT('[', 
+         COALESCE(
+           GROUP_CONCAT(
+             JSON_OBJECT(
+               'id', d.id, 
+               'fileName', d.file_name, 
+               'fileUrl', d.file_url, 
+               'fileSize', d.file_size, 
+               'fileType', d.file_type
+             )
+           ), ''
+         ), 
+       ']') AS documents_json
+     FROM ap_staff_achievements a
+     LEFT JOIN ap_staff_achievement_documents d ON d.achievement_id = a.id
+     WHERE a.hrms_employee_id = ? AND a.deleted_at IS NULL
+     GROUP BY a.id
+     ORDER BY a.publication_date DESC, a.created_at DESC`,
+    [canonicalHrmsId],
+  ).catch(() => []);
+
+  const achievements = achievementRows.map((row) => {
+    let docs = [];
+    try {
+      docs = typeof row.documents_json === "string" ? JSON.parse(row.documents_json) : [];
+      docs = docs.filter((d: any) => d && d.id);
+    } catch {
+      docs = [];
+    }
+    return {
+      id: Number(row.id),
+      category: String(row.category || "Professional Certifications"),
+      title: String(row.title || ""),
+      description: row.description ? String(row.description) : null,
+      publicationName: row.publication_name ? String(row.publication_name) : null,
+      issuingOrganization: row.issuing_organization ? String(row.issuing_organization) : null,
+      publicationDate: row.publication_date ? String(row.publication_date).split("T")[0] : null,
+      certificateNumberOrDoi: row.certificate_number_or_doi ? String(row.certificate_number_or_doi) : null,
+      academicYear: row.academic_year ? String(row.academic_year) : null,
+      semester: row.semester ? String(row.semester) : null,
+      achievementUrl: row.achievement_url ? String(row.achievement_url) : null,
+      status: String(row.status || "draft"),
+      hodRemarks: row.hod_remarks ? String(row.hod_remarks) : null,
+      principalRemarks: row.principal_remarks ? String(row.principal_remarks) : null,
+      rejectionRemarks: row.rejection_remarks ? String(row.rejection_remarks) : null,
+      createdAt: String(row.created_at || ""),
+      documents: docs,
+    };
+  });
+
+  const achievementIds = achievements.map((a) => a.id);
+  let approvalHistory: any[] = [];
+  if (achievementIds.length > 0) {
+    const approvalRows = await queryAcademic<(RowDataPacket & Record<string, unknown>)[]>(
+      `SELECT h.*, a.title as achievement_title, a.category as achievement_category
+       FROM ap_staff_achievement_approvals h
+       JOIN ap_staff_achievements a ON a.id = h.achievement_id
+       WHERE h.achievement_id IN (${achievementIds.join(",")})
+       ORDER BY h.created_at DESC`,
+    ).catch(() => []);
+
+    approvalHistory = approvalRows.map((r) => ({
+      id: Number(r.id),
+      achievementId: Number(r.achievement_id),
+      achievementTitle: String(r.achievement_title || ""),
+      achievementCategory: String(r.achievement_category || ""),
+      actorName: String(r.actor_name || "System Admin"),
+      actorRole: String(r.actor_role || "staff"),
+      action: String(r.action || ""),
+      remarks: r.remarks ? String(r.remarks) : null,
+      createdAt: String(r.created_at || ""),
+    }));
+  }
+
+  return {
+    staff: base?.staff ?? {
+      hrmsEmployeeId: canonicalHrmsId,
+      staffLinkId: null,
+      name: base?.staff?.name || "Staff Member",
+      code: canonicalHrmsId,
+      department: base?.staff?.department || "—",
+      designation: base?.staff?.designation || "Faculty",
+      college: base?.staff?.college || "—",
+      profilePhoto: base?.staff?.profilePhoto ?? null,
+    },
+    achievements,
+    approvalHistory,
+  };
+}
+
 export async function createStaffAchievement(
-  hrmsEmployeeId: string,
+  identifier: string,
   input: StaffAchievementInput,
   actorUserId?: number,
   actorName?: string,
 ) {
+  let canonicalHrmsId = identifier.trim();
+  const base = await getStaffMemberDetail({ identifier: canonicalHrmsId }).catch(() => null);
+  if (base?.staff?.hrmsEmployeeId) {
+    canonicalHrmsId = base.staff.hrmsEmployeeId;
+  }
+
   const status = input.status || "submitted";
   const initialStatus = status === "draft" ? "draft" : "pending_hod_approval";
 
@@ -681,7 +786,7 @@ export async function createStaffAchievement(
      (hrms_employee_id, category, title, description, publication_name, issuing_organization, publication_date, certificate_number_or_doi, academic_year, semester, achievement_url, status, created_by)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      hrmsEmployeeId,
+      canonicalHrmsId,
       input.category,
       input.title,
       input.description || null,
