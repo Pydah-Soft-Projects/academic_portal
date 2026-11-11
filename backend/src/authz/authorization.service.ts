@@ -1,5 +1,5 @@
 import type { RowDataPacket } from "mysql2";
-import { queryAcademic } from "../db/pools.js";
+import { queryAcademic, queryStudent } from "../db/pools.js";
 import type { Permission, RoleKey } from "./permissions.js";
 import { GLOBAL_SCOPE_ROLES, isKnownRoleKey } from "./permissions.js";
 
@@ -85,9 +85,11 @@ export function buildScopeFromAssignments(assignments: RoleAssignment[]): Academ
   let isGlobal = false;
   const collegeIds: number[] = [];
   const branchIds: number[] = [];
-  let hasBranchRestriction = false;
+  const collegesWithUnrestrictedBranches = new Set<number>();
+  let hasSpecificBranchRestriction = false;
 
   for (const assignment of assignments) {
+    if (assignment.isActive === false) continue;
     const collegeId = assignment.collegeId;
     const branchId = assignment.branchId;
     const globalCapable =
@@ -95,15 +97,21 @@ export function buildScopeFromAssignments(assignments: RoleAssignment[]): Academ
       (isKnownRoleKey(assignment.roleKey) &&
         GLOBAL_SCOPE_ROLES.includes(assignment.roleKey as RoleKey));
 
-    if (collegeId == null && branchId == null && globalCapable && assignment.isActive !== false) {
+    if (collegeId == null && branchId == null && globalCapable) {
       isGlobal = true;
       continue;
     }
 
-    if (collegeId != null) collegeIds.push(collegeId);
+    if (collegeId != null) {
+      collegeIds.push(collegeId);
+      if (branchId == null) {
+        // Unrestricted branch access in this college (all courses and branches)
+        collegesWithUnrestrictedBranches.add(collegeId);
+      }
+    }
     if (branchId != null) {
       branchIds.push(branchId);
-      hasBranchRestriction = true;
+      hasSpecificBranchRestriction = true;
     }
   }
 
@@ -111,10 +119,35 @@ export function buildScopeFromAssignments(assignments: RoleAssignment[]): Academ
     return { isGlobal: true, collegeIds: null, branchIds: null };
   }
 
+  const uniqueColleges = uniqueNumbers(collegeIds);
+
+  // If every assigned college has an unrestricted (all branches / all courses) assignment,
+  // then the user has NO branch restriction in any of their assigned colleges!
+  const allCollegesUnrestricted =
+    uniqueColleges.length > 0 &&
+    uniqueColleges.every((cid) => collegesWithUnrestrictedBranches.has(cid));
+
+  if (allCollegesUnrestricted) {
+    return {
+      isGlobal: false,
+      collegeIds: uniqueColleges,
+      branchIds: null, // null means all branches in allowed colleges
+    };
+  }
+
+  // If there are no specific branch restrictions at all:
+  if (!hasSpecificBranchRestriction && collegesWithUnrestrictedBranches.size === 0) {
+    return {
+      isGlobal: false,
+      collegeIds: uniqueColleges,
+      branchIds: null,
+    };
+  }
+
   return {
     isGlobal: false,
-    collegeIds: uniqueNumbers(collegeIds),
-    branchIds: hasBranchRestriction ? uniqueNumbers(branchIds) : null,
+    collegeIds: uniqueColleges,
+    branchIds: uniqueNumbers(branchIds),
   };
 }
 
@@ -270,6 +303,29 @@ export async function loadAuthzContext(userId: number): Promise<AuthzContext> {
   const scope = buildScopeFromAssignments(roles);
 
   if (!scope.isGlobal) {
+    // If some colleges have all-branches access and scope.branchIds is not null (partial restriction across colleges),
+    // expand all branch IDs for the unrestricted colleges into scope.branchIds:
+    const collegesWithUnrestrictedBranches = new Set<number>();
+    for (const r of roles) {
+      if (r.isActive !== false && r.collegeId != null && r.branchId == null) {
+        collegesWithUnrestrictedBranches.add(r.collegeId);
+      }
+    }
+
+    if (collegesWithUnrestrictedBranches.size > 0 && scope.branchIds !== null) {
+      const placeholders = [...collegesWithUnrestrictedBranches].map(() => "?").join(",");
+      const collegeBranchRows = await queryStudent<{ id: number }[]>(
+        `SELECT b.id
+         FROM course_branches b
+         JOIN courses c ON c.id = b.course_id
+         WHERE c.college_id IN (${placeholders})
+           AND (b.is_active = 1 OR b.is_active IS NULL)`,
+        [...collegesWithUnrestrictedBranches],
+      );
+      const expandedBranchIds = collegeBranchRows.map((r) => Number(r.id));
+      scope.branchIds = uniqueNumbers([...scope.branchIds, ...expandedBranchIds]);
+    }
+
     const teachingRows = await queryAcademic<{ college_id: number | null; branch_id: number | null }[]>(
       `SELECT DISTINCT college_id, branch_id
        FROM (
