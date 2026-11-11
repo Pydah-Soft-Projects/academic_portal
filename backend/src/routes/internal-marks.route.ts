@@ -45,18 +45,25 @@ internalMarksRouter.get(
       const branchId = num(req.query.branchId);
       const subjectId = num(req.query.subjectId);
       const facultyId = num(req.query.facultyId);
+      const year = num(req.query.year);
+      const semester = num(req.query.semester);
+      const regParam = req.query.regulationId;
+      const regulationId = regParam === "all" ? "all" : regParam === "auto" ? "auto" : num(regParam);
 
       scopedFilters(req, { collegeId, branchId });
 
-      const data = await getSubjectFacultyHierarchy({
+      const result = await getSubjectFacultyHierarchy({
         collegeId,
         courseId,
         branchId,
         subjectId,
         facultyId,
+        year,
+        semester,
+        regulationId,
       });
 
-      res.json({ data });
+      res.json(result);
     } catch (error) {
       const status = statusFromAuthzError(error);
       if (status === 401 || status === 403) {

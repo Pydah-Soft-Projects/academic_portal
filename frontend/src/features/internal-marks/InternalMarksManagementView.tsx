@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -28,6 +28,10 @@ type HierarchyItem = {
   credits: number;
   semester: number | null;
   year: number | null;
+  regulationId?: number | null;
+  regulationCode?: string | null;
+  regulationName?: string | null;
+  batch?: string | null;
   assignedFaculty: Array<{
     staffLinkId: number;
     displayName: string;
@@ -89,13 +93,28 @@ export function InternalMarksManagementView() {
   // Masters & Filters
   const [masters, setMasters] = useState<{
     colleges: Array<{ id: number; name: string }>;
-    courses: Array<{ id: number; name: string; collegeId: number }>;
+    courses: Array<{
+      id: number;
+      name: string;
+      collegeId: number;
+      totalYears?: number;
+      semestersPerYear?: number;
+      yearOptions?: number[];
+      yearSemesterConfig?: Array<{ year: number; semesters: number }>;
+    }>;
     branches: Array<{ id: number; name: string; courseId: number }>;
+    yearOptions?: number[];
+    semesterOptions?: number[];
   }>({ colleges: [], courses: [], branches: [] });
 
   const [filterCollegeId, setFilterCollegeId] = useState<string>("all");
   const [filterCourseId, setFilterCourseId] = useState<string>("all");
   const [filterBranchId, setFilterBranchId] = useState<string>("all");
+  const [filterYear, setFilterYear] = useState<string>("all");
+  const [filterSemester, setFilterSemester] = useState<string>("all");
+  const [filterRegulationId, setFilterRegulationId] = useState<string>("auto");
+  const [activeRegulation, setActiveRegulation] = useState<{ id: number; code: string; name: string } | null>(null);
+  const [availableRegulations, setAvailableRegulations] = useState<Array<{ id: number; code: string; name: string }>>([]);
   const [searchQuery, setSearchQuery] = useState("");
 
   // Quick Action Level selection for the filter bar
@@ -139,6 +158,8 @@ export function InternalMarksManagementView() {
             colleges: body.colleges || [],
             courses: body.courses || [],
             branches: body.branches || [],
+            yearOptions: body.yearOptions || [1, 2, 3, 4],
+            semesterOptions: body.semesterOptions || [1, 2],
           });
         }
       } catch (err) {
@@ -160,11 +181,16 @@ export function InternalMarksManagementView() {
         if (filterCollegeId !== "all") query.set("collegeId", filterCollegeId);
         if (filterCourseId !== "all") query.set("courseId", filterCourseId);
         if (filterBranchId !== "all") query.set("branchId", filterBranchId);
+        if (filterYear !== "all") query.set("year", filterYear);
+        if (filterSemester !== "all") query.set("semester", filterSemester);
+        if (filterRegulationId !== "auto") query.set("regulationId", filterRegulationId);
 
         const res = await apiFetch(`/internal-marks/subjects-hierarchy?${query.toString()}`);
         if (!res.ok) throw new Error("Failed to load subject hierarchy");
         const body = await res.json();
         setHierarchy(body.data || []);
+        if (body.activeRegulation !== undefined) setActiveRegulation(body.activeRegulation);
+        if (body.regulations?.length) setAvailableRegulations(body.regulations);
       } else if (activeTab === "rules") {
         const res = await apiFetch("/internal-marks/access-rules");
         if (!res.ok) throw new Error("Failed to load access rules");
@@ -192,7 +218,7 @@ export function InternalMarksManagementView() {
 
   useEffect(() => {
     void fetchData(true);
-  }, [activeTab, filterCollegeId, filterCourseId, filterBranchId]);
+  }, [activeTab, filterCollegeId, filterCourseId, filterBranchId, filterYear, filterSemester, filterRegulationId]);
 
   // Direct Quick Save from Selection Bar
   async function handleQuickSaveAccess(isEnabled: boolean) {
@@ -204,8 +230,14 @@ export function InternalMarksManagementView() {
     let crId: number | null = filterCourseId !== "all" ? Number(filterCourseId) : null;
     let bId: number | null = filterBranchId !== "all" ? Number(filterBranchId) : null;
 
-    // Fall back to applying access for all currently displayed hierarchy items if specific filter wasn't explicitly selected
-    if ((quickLevel === "branch" && !bId) || (quickLevel === "course" && !crId) || (!cId && masters.colleges.length > 1)) {
+    // Fall back to applying access for all currently displayed hierarchy items if specific filter wasn't explicitly selected or if year/semester is filtered
+    if (
+      (quickLevel === "branch" && !bId) ||
+      (quickLevel === "course" && !crId) ||
+      (!cId && masters.colleges.length > 1) ||
+      filterYear !== "all" ||
+      filterSemester !== "all"
+    ) {
       if (filteredHierarchy.length > 0) {
         setSavingRule(true);
         try {
@@ -287,6 +319,11 @@ export function InternalMarksManagementView() {
 
   // Selected rows for bulk access configuration
   const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+
+  // Clear selections when filters change
+  useEffect(() => {
+    setSelectedRowIds(new Set());
+  }, [filterCollegeId, filterCourseId, filterBranchId, filterYear, filterSemester, filterRegulationId]);
 
   function getItemKey(item: HierarchyItem) {
     return `${item.collegeId}-${item.courseId}-${item.branchId}-${item.subjectId}`;
@@ -643,18 +680,40 @@ export function InternalMarksManagementView() {
     }
   }
 
-  // Filter hierarchy in memory by search query
-  const filteredHierarchy = hierarchy.filter((item) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      item.subjectName.toLowerCase().includes(q) ||
-      item.subjectCode.toLowerCase().includes(q) ||
-      item.branchName.toLowerCase().includes(q) ||
-      item.courseName.toLowerCase().includes(q) ||
-      item.assignedFaculty.some((f) => f.displayName.toLowerCase().includes(q))
-    );
-  });
+  // Deduplicate and filter hierarchy in memory by year, semester, and search query
+  const filteredHierarchy = useMemo(() => {
+    const seen = new Set<string>();
+    return hierarchy.filter((item) => {
+      const key = `${item.collegeId}-${item.courseId}-${item.branchId}-${item.subjectId}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+
+      if (filterYear !== "all" && item.year !== Number(filterYear)) {
+        return false;
+      }
+      if (filterSemester !== "all" && item.semester !== Number(filterSemester)) {
+        return false;
+      }
+      if (
+        filterRegulationId !== "auto" &&
+        filterRegulationId !== "all" &&
+        item.regulationId != null &&
+        item.regulationId !== Number(filterRegulationId)
+      ) {
+        return false;
+      }
+      if (!searchQuery) return true;
+      const q = searchQuery.toLowerCase();
+      return (
+        item.subjectName.toLowerCase().includes(q) ||
+        item.subjectCode.toLowerCase().includes(q) ||
+        item.branchName.toLowerCase().includes(q) ||
+        item.courseName.toLowerCase().includes(q) ||
+        (item.regulationCode && item.regulationCode.toLowerCase().includes(q)) ||
+        item.assignedFaculty.some((f) => f.displayName.toLowerCase().includes(q))
+      );
+    });
+  }, [hierarchy, filterYear, filterSemester, filterRegulationId, searchQuery]);
 
   const availableCourses = masters.courses.filter(
     (c) => filterCollegeId === "all" || Number(c.collegeId) === Number(filterCollegeId)
@@ -663,6 +722,58 @@ export function InternalMarksManagementView() {
   const availableBranches = masters.branches.filter(
     (b) => filterCourseId === "all" || Number(b.courseId) === Number(filterCourseId)
   );
+
+  const selectedCourse = useMemo(() => {
+    return masters.courses.find((c) => filterCourseId !== "all" && String(c.id) === String(filterCourseId));
+  }, [masters.courses, filterCourseId]);
+
+  // Year options based on selected course, hierarchy, or masters
+  const availableYears = useMemo(() => {
+    if (selectedCourse?.yearOptions?.length) {
+      return selectedCourse.yearOptions;
+    }
+    if (selectedCourse?.totalYears) {
+      return Array.from({ length: selectedCourse.totalYears }, (_, i) => i + 1);
+    }
+    const yearsFromHierarchy = Array.from(
+      new Set(
+        hierarchy
+          .map((h) => h.year)
+          .filter((y): y is number => typeof y === "number" && y > 0)
+      )
+    ).sort((a, b) => a - b);
+    if (yearsFromHierarchy.length > 0) {
+      return yearsFromHierarchy;
+    }
+    return masters.yearOptions ?? [1, 2, 3, 4];
+  }, [selectedCourse, hierarchy, masters.yearOptions]);
+
+  // Semester options based on course config, hierarchy, or masters
+  const availableSemesters = useMemo(() => {
+    if (filterYear !== "all" && selectedCourse?.yearSemesterConfig?.length) {
+      const match = selectedCourse.yearSemesterConfig.find(
+        (item) => item.year === Number(filterYear)
+      );
+      if (match) {
+        return Array.from({ length: match.semesters }, (_, i) => i + 1);
+      }
+    }
+    if (selectedCourse?.semestersPerYear) {
+      return Array.from({ length: selectedCourse.semestersPerYear }, (_, i) => i + 1);
+    }
+    const semsFromHierarchy = Array.from(
+      new Set(
+        hierarchy
+          .filter((h) => filterYear === "all" || h.year === Number(filterYear))
+          .map((h) => h.semester)
+          .filter((s): s is number => typeof s === "number" && s > 0)
+      )
+    ).sort((a, b) => a - b);
+    if (semsFromHierarchy.length > 0) {
+      return semsFromHierarchy;
+    }
+    return masters.semesterOptions ?? [1, 2];
+  }, [filterYear, selectedCourse, hierarchy, masters.semesterOptions]);
 
   // Modal specific options with robust numeric comparison
   const modalCourses = masters.courses.filter(
@@ -760,7 +871,7 @@ export function InternalMarksManagementView() {
           <Card className="p-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2.5">
               {/* Dropdown Filters & Search */}
-              <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap sm:flex-nowrap">
+              <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
                 <div className="w-full sm:w-44 shrink-0">
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
                     College
@@ -772,6 +883,8 @@ export function InternalMarksManagementView() {
                       setFilterCollegeId(e.target.value);
                       setFilterCourseId("all");
                       setFilterBranchId("all");
+                      setFilterYear("all");
+                      setFilterSemester("all");
                     }}
                   >
                     <option value="all">All Colleges</option>
@@ -783,7 +896,7 @@ export function InternalMarksManagementView() {
                   </select>
                 </div>
 
-                <div className="w-full sm:w-36 shrink-0">
+                <div className="w-full sm:w-32 shrink-0">
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
                     Course
                   </label>
@@ -793,6 +906,8 @@ export function InternalMarksManagementView() {
                     onChange={(e) => {
                       setFilterCourseId(e.target.value);
                       setFilterBranchId("all");
+                      setFilterYear("all");
+                      setFilterSemester("all");
                     }}
                   >
                     <option value="all">All Courses</option>
@@ -804,14 +919,18 @@ export function InternalMarksManagementView() {
                   </select>
                 </div>
 
-                <div className="w-full sm:w-36 shrink-0">
+                <div className="w-full sm:w-32 shrink-0">
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
                     Branch
                   </label>
                   <select
                     className="w-full rounded-md border border-border bg-white h-8 px-2 text-xs outline-none focus:border-brand-600"
                     value={filterBranchId}
-                    onChange={(e) => setFilterBranchId(e.target.value)}
+                    onChange={(e) => {
+                      setFilterBranchId(e.target.value);
+                      setFilterYear("all");
+                      setFilterSemester("all");
+                    }}
                   >
                     <option value="all">All Branches</option>
                     {availableBranches.map((b) => (
@@ -822,7 +941,67 @@ export function InternalMarksManagementView() {
                   </select>
                 </div>
 
-                <div className="w-full sm:flex-1 sm:min-w-[140px] sm:max-w-[200px]">
+                <div className="w-full sm:w-28 shrink-0">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
+                    Year
+                  </label>
+                  <select
+                    className="w-full rounded-md border border-border bg-white h-8 px-2 text-xs outline-none focus:border-brand-600"
+                    value={filterYear}
+                    onChange={(e) => {
+                      setFilterYear(e.target.value);
+                      setFilterSemester("all");
+                    }}
+                  >
+                    <option value="all">All Years</option>
+                    {availableYears.map((y) => (
+                      <option key={y} value={y}>
+                        Year {y}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="w-full sm:w-28 shrink-0">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
+                    Sem
+                  </label>
+                  <select
+                    className="w-full rounded-md border border-border bg-white h-8 px-2 text-xs outline-none focus:border-brand-600"
+                    value={filterSemester}
+                    onChange={(e) => setFilterSemester(e.target.value)}
+                  >
+                    <option value="all">All Semesters</option>
+                    {availableSemesters.map((s) => (
+                      <option key={s} value={s}>
+                        Sem {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="w-full sm:w-32 shrink-0">
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
+                    Regulation
+                  </label>
+                  <select
+                    className="w-full rounded-md border border-border bg-white h-8 px-2 text-xs outline-none focus:border-brand-600 font-medium"
+                    value={filterRegulationId}
+                    onChange={(e) => setFilterRegulationId(e.target.value)}
+                  >
+                    <option value="auto">
+                      {activeRegulation ? `Auto (${activeRegulation.code})` : "Auto (Students)"}
+                    </option>
+                    <option value="all">All Regulations</option>
+                    {availableRegulations.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.code} {activeRegulation?.id === r.id ? "• Active" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="w-full sm:flex-1 sm:min-w-[130px] sm:max-w-[200px]">
                   <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
                     Search
                   </label>
@@ -834,6 +1013,30 @@ export function InternalMarksManagementView() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                   />
                 </div>
+
+                {(filterCollegeId !== "all" ||
+                  filterCourseId !== "all" ||
+                  filterBranchId !== "all" ||
+                  filterYear !== "all" ||
+                  filterSemester !== "all" ||
+                  filterRegulationId !== "auto" ||
+                  searchQuery) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterCollegeId("all");
+                      setFilterCourseId("all");
+                      setFilterBranchId("all");
+                      setFilterYear("all");
+                      setFilterSemester("all");
+                      setFilterRegulationId("auto");
+                      setSearchQuery("");
+                    }}
+                    className="text-[11px] text-slate-500 hover:text-brand-600 underline whitespace-nowrap self-end pb-1.5"
+                  >
+                    Reset
+                  </button>
+                )}
               </div>
 
               {/* Action Controls */}
@@ -972,12 +1175,36 @@ export function InternalMarksManagementView() {
                             <div className="text-xs text-slate-500">
                               {item.courseName} • {item.branchName}
                             </div>
+                            {(item.year != null || item.semester != null || item.regulationCode) && (
+                              <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                {item.year != null ? (
+                                  <span className="inline-flex items-center rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 border border-slate-200">
+                                    Year {item.year}
+                                  </span>
+                                ) : null}
+                                {item.semester != null ? (
+                                  <span className="inline-flex items-center rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700 border border-brand-200">
+                                    Sem {item.semester}
+                                  </span>
+                                ) : null}
+                                {item.regulationCode ? (
+                                  <span className="inline-flex items-center rounded bg-purple-50 px-1.5 py-0.5 text-[10px] font-bold text-purple-700 border border-purple-200">
+                                    {item.regulationCode}
+                                  </span>
+                                ) : null}
+                              </div>
+                            )}
                           </td>
 
                           <td className="px-4 py-3 align-top">
                             <div className="font-medium text-slate-900">{item.subjectName}</div>
-                            <div className="text-xs font-mono text-slate-500">
-                              {item.subjectCode} ({item.subjectType || "Theory"})
+                            <div className="text-xs font-mono text-slate-500 flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <span>{item.subjectCode} ({item.subjectType || "Theory"})</span>
+                              {item.regulationCode && (
+                                <span className="inline-flex items-center rounded bg-purple-100 text-purple-800 font-sans px-1.5 py-0.2 text-[10px] font-bold">
+                                  {item.regulationCode}
+                                </span>
+                              )}
                             </div>
                           </td>
 

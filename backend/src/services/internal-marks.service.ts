@@ -38,6 +38,10 @@ export type HierarchySubjectItem = {
   credits: number;
   semester: number | null;
   year: number | null;
+  regulationId?: number | null;
+  regulationCode?: string | null;
+  regulationName?: string | null;
+  batch?: string | null;
   assignedFaculty: Array<{
     staffLinkId: number;
     displayName: string;
@@ -409,11 +413,18 @@ export async function getSubjectFacultyHierarchy(filters: {
   branchId?: number;
   subjectId?: number;
   facultyId?: number;
-}): Promise<HierarchySubjectItem[]> {
+  year?: number;
+  semester?: number;
+  regulationId?: number | "all" | "auto";
+}): Promise<{
+  data: HierarchySubjectItem[];
+  activeRegulation: { id: number; code: string; name: string } | null;
+  regulations: Array<{ id: number; code: string; name: string }>;
+}> {
   await ensureInternalMarksSchema();
 
-  // 1. Fetch colleges, courses, branches from student pool
-  const [colleges, courses, branches] = await Promise.all([
+  // 1. Fetch colleges, courses, branches from student pool, and regulations from EMS pool
+  const [colleges, courses, branches, regulations] = await Promise.all([
     queryStudent<(RowDataPacket & { id: number; name: string; code: string | null })[]>(
       `SELECT id, name, code FROM colleges WHERE is_active = 1 OR is_active IS NULL`
     ),
@@ -423,11 +434,60 @@ export async function getSubjectFacultyHierarchy(filters: {
     queryStudent<(RowDataPacket & { id: number; name: string; code: string | null; course_id: number })[]>(
       `SELECT id, name, code, course_id FROM course_branches WHERE is_active = 1 OR is_active IS NULL`
     ),
+    queryExam<(RowDataPacket & { id: number; code: string; name: string })[]>(
+      `SELECT id, code, name FROM regulations ORDER BY code`
+    ),
   ]);
 
   const collegeMap = new Map(colleges.map((c) => [c.id, c]));
   const courseMap = new Map(courses.map((c) => [c.id, c]));
   const branchMap = new Map(branches.map((b) => [b.id, b]));
+
+  // Auto-detect dominant regulation for regular enrolled students in this branch and year
+  let activeRegulation: { id: number; code: string; name: string } | null = null;
+  let detectedRegulationId: number | null = null;
+
+  if (filters.branchId && filters.year) {
+    try {
+      const studentBatchRows = await queryStudent<(RowDataPacket & { batch: string })[]>(
+        `
+        SELECT TRIM(s.batch) AS batch, COUNT(*) AS cnt
+        FROM students s
+        WHERE s.branch_id = ?
+          AND s.current_year = ?
+          AND TRIM(COALESCE(s.batch, '')) <> ''
+          AND (TRIM(COALESCE(s.student_status, '')) = 'Regular' OR s.student_status IS NULL)
+        GROUP BY TRIM(s.batch)
+        ORDER BY cnt DESC
+        LIMIT 1
+        `,
+        [filters.branchId, filters.year]
+      );
+      const studentBatch = studentBatchRows[0]?.batch;
+      if (studentBatch) {
+        const regRows = await queryExam<(RowDataPacket & { regulationId: number })[]>(
+          `
+          SELECT sme.regulationId, COUNT(*) AS cnt
+          FROM subject_mapping_entries sme
+          WHERE sme.branchId = ? AND sme.batch = ? AND sme.regulationId IS NOT NULL
+          GROUP BY sme.regulationId
+          ORDER BY cnt DESC
+          LIMIT 1
+          `,
+          [filters.branchId, studentBatch]
+        );
+        if (regRows[0]?.regulationId) {
+          detectedRegulationId = Number(regRows[0].regulationId);
+          const rObj = regulations.find((r) => Number(r.id) === detectedRegulationId);
+          if (rObj) {
+            activeRegulation = { id: Number(rObj.id), code: rObj.code, name: rObj.name };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Could not auto-detect student regulation:", err);
+    }
+  }
 
   // 2. Fetch subject curriculum mappings from exam pool
   const whereExam: string[] = ["1=1"];
@@ -449,6 +509,30 @@ export async function getSubjectFacultyHierarchy(filters: {
     whereExam.push("s.id = ?");
     paramsExam.push(filters.subjectId);
   }
+  if (filters.year) {
+    whereExam.push("sme.yearOfStudy = ?");
+    paramsExam.push(filters.year);
+  }
+  if (filters.semester) {
+    whereExam.push("sme.semester = ?");
+    paramsExam.push(filters.semester);
+  }
+
+  // Determine effective regulation filter
+  let effectiveRegulationId: number | null = null;
+  if (typeof filters.regulationId === "number" && Number.isFinite(filters.regulationId)) {
+    effectiveRegulationId = filters.regulationId;
+  } else if (filters.regulationId === "all") {
+    effectiveRegulationId = null; // show all regulations
+  } else if (detectedRegulationId) {
+    // Default to the students' active regulation
+    effectiveRegulationId = detectedRegulationId;
+  }
+
+  if (effectiveRegulationId != null) {
+    whereExam.push("sme.regulationId = ?");
+    paramsExam.push(effectiveRegulationId);
+  }
 
   const examSubjects = await queryExam<
     (RowDataPacket & {
@@ -465,27 +549,44 @@ export async function getSubjectFacultyHierarchy(filters: {
       credits: number | null;
       yearOfStudy: number | null;
       semester: number | null;
+      regulationId: number | null;
+      regulationCode: string | null;
+      regulationName: string | null;
+      batch: string | null;
     })[]
   >(
     `
     SELECT
       sme.collegeId,
-      sme.collegeName,
+      MAX(sme.collegeName) AS collegeName,
       sme.courseId,
-      sme.courseName,
+      MAX(sme.courseName) AS courseName,
       sme.branchId,
-      sme.branchName,
+      MAX(sme.branchName) AS branchName,
       s.id AS subjectId,
       s.code,
       s.name,
       s.type,
-      s.credits,
-      sme.yearOfStudy,
-      sme.semester
+      MAX(s.credits) AS credits,
+      MAX(sme.yearOfStudy) AS yearOfStudy,
+      MAX(sme.semester) AS semester,
+      MAX(sme.regulationId) AS regulationId,
+      MAX(r.code) AS regulationCode,
+      MAX(r.name) AS regulationName,
+      MAX(sme.batch) AS batch
     FROM subject_mapping_entries sme
     INNER JOIN subjects s ON s.id = sme.subjectId
+    LEFT JOIN regulations r ON r.id = sme.regulationId
     WHERE ${whereExam.join(" AND ")}
-    ORDER BY sme.collegeName, sme.courseName, sme.branchName, s.code
+    GROUP BY
+      sme.collegeId,
+      sme.courseId,
+      sme.branchId,
+      s.id,
+      s.code,
+      s.name,
+      s.type
+    ORDER BY collegeName, courseName, branchName, yearOfStudy, semester, s.code
     `,
     paramsExam
   );
@@ -609,9 +710,13 @@ export async function getSubjectFacultyHierarchy(filters: {
     return { isEnabled: false, accessLevel: "none" as const, ruleId: null };
   };
 
+  const seenSubjectKeys = new Set<string>();
   const results: HierarchySubjectItem[] = [];
 
   for (const item of examSubjects) {
+    const itemKey = `${item.collegeId}-${item.courseId}-${item.branchId}-${item.subjectId}`;
+    if (seenSubjectKeys.has(itemKey)) continue;
+    seenSubjectKeys.add(itemKey);
     const cObj = collegeMap.get(item.collegeId);
     const crObj = courseMap.get(item.courseId);
     const bObj = branchMap.get(item.branchId);
@@ -699,13 +804,21 @@ export async function getSubjectFacultyHierarchy(filters: {
       credits: Number(item.credits ?? 0),
       semester: item.semester,
       year: item.yearOfStudy,
+      regulationId: item.regulationId != null ? Number(item.regulationId) : null,
+      regulationCode: item.regulationCode || null,
+      regulationName: item.regulationName || null,
+      batch: item.batch || null,
       assignedFaculty: assignedMapped,
       groupAccessStatus: groupStatus,
       groupAccessLevel: groupLevel,
     });
   }
 
-  return results;
+  return {
+    data: results,
+    activeRegulation,
+    regulations: regulations.map((r) => ({ id: Number(r.id), code: r.code, name: r.name })),
+  };
 }
 
 /** Access Rules Management */
