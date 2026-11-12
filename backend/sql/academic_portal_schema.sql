@@ -351,6 +351,31 @@ CREATE TABLE IF NOT EXISTS ap_audit_logs (
   KEY idx_audit_actor (actor_user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS ap_subject_attendance_register (
+  id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
+  college_id INT NOT NULL,
+  course_id INT NOT NULL,
+  branch_id INT NOT NULL,
+  academic_year VARCHAR(32) NOT NULL DEFAULT '2025-2026',
+  year_of_study INT NOT NULL DEFAULT 1,
+  semester INT NOT NULL DEFAULT 1,
+  section_name VARCHAR(50) NOT NULL DEFAULT '',
+  batch VARCHAR(50) NOT NULL DEFAULT '',
+  month_label VARCHAR(50) NOT NULL DEFAULT 'Cumulative',
+  student_db_id INT NOT NULL,
+  admission_number VARCHAR(100) NOT NULL,
+  pin_no VARCHAR(100) NULL,
+  student_name VARCHAR(255) NULL,
+  subject_id INT NOT NULL,
+  classes_held INT NOT NULL DEFAULT 0,
+  classes_present INT NOT NULL DEFAULT 0,
+  updated_by_user_id BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_sub_att_entry (college_id, course_id, branch_id, academic_year, semester, section_name, month_label, student_db_id, subject_id),
+  KEY idx_sub_att_lookup (college_id, course_id, branch_id, academic_year, semester, section_name, month_label)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 INSERT INTO ap_roles (role_key, label, description) VALUES
   ('super_admin', 'Super Admin', 'Full portal administration and integrations'),
   ('principal', 'Principal', 'Institution oversight and approvals'),

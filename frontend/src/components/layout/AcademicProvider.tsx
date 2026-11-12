@@ -504,3 +504,5 @@ export function useAcademicContext(customPageKey?: string): AcademicContextValue
     ],
   );
 }
+
+export const useAcademic = useAcademicContext;

@@ -38,6 +38,7 @@ import { principalDashboardRouter } from "./routes/principal-dashboard.route.js"
 import { hodRouter } from "./routes/hod.route.js";
 import { timetableRequestsRouter } from "./routes/timetable-requests.route.js";
 import { staffRouter } from "./routes/staff.route.js";
+import { subjectAttendanceRouter } from "./routes/subject-attendance.route.js";
 import { aiRouter } from "./ai/index.js";
 
 const app = express();
@@ -104,6 +105,7 @@ app.use("/api/users", usersRouter);
 app.use("/api/roles", rolesRouter);
 app.use("/api/permissions", permissionsRouter);
 app.use("/api/internal-marks", internalMarksRouter);
+app.use("/api/subject-attendance", subjectAttendanceRouter);
 app.use("/api/class-teacher", classTeacherRouter);
 app.use("/api/principal-dashboard", principalDashboardRouter);
 app.use("/api/hod", hodRouter);

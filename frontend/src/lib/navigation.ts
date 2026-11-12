@@ -17,13 +17,13 @@ import {
   Briefcase,
   LineChart,
   Layers3,
-  ShieldAlert,
   UserCog,
   Clock3,
   ArrowLeftRight,
   GitMerge,
   UserCheck,
   MessageSquare,
+  FileSpreadsheet,
 } from "lucide-react";
 
 export type NavItem = {
@@ -128,6 +128,12 @@ export const NAV_GROUPS: NavGroup[] = [
         href: "/attendance-analytics",
         icon: LineChart,
         permissions: ["attendance_analytics.view", "attendance.view"],
+      },
+      {
+        label: "Subject Attendance Register",
+        href: "/subject-attendance",
+        icon: FileSpreadsheet,
+        permissions: ["attendance.view", "attendance.post", "students.view", "dashboard.view"],
       },
     ],
   },
@@ -302,6 +308,7 @@ export const TEACHING_STAFF_NAV_HREFS = new Set([
   "/my-subjects",
   "/my-timetable",
   "/attendance-posting",
+  "/subject-attendance",
   "/internal-marks",
   "/requests",
   "/timetable-requests",
