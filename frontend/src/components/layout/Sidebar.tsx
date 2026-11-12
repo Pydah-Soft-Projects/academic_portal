@@ -6,9 +6,9 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   LogOut,
-  PanelLeftClose,
   UserRound,
   X,
   Shield,
@@ -63,6 +63,23 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
 
   useEffect(() => {
     setMounted(true);
+    const fontId = "campo-plus-jakarta-font";
+    let created = false;
+    let link = document.getElementById(fontId) as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement("link");
+      link.id = fontId;
+      link.rel = "stylesheet";
+      link.href =
+        "https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap";
+      document.head.appendChild(link);
+      created = true;
+    }
+    return () => {
+      if (created && link?.parentNode) {
+        link.parentNode.removeChild(link);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -200,76 +217,95 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
       {/* Mobile overlay */}
       <div
         className={cn(
-          "fixed inset-0 z-40 bg-slate-900/30 transition-opacity lg:hidden",
-          open ? "opacity-100" : "pointer-events-none opacity-0",
+          "fixed inset-0 z-[45] backdrop-blur-[1px] transition-opacity lg:hidden",
+          open ? "opacity-60" : "pointer-events-none opacity-0",
         )}
+        style={{ backgroundColor: "var(--sidebar)" }}
         onClick={onClose}
         aria-hidden={!open}
       />
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex h-dvh max-h-dvh flex-col overflow-x-hidden border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width,transform] duration-200 lg:static lg:h-full lg:max-h-none lg:translate-x-0",
-          collapsed ? "w-[72px]" : "w-[240px]",
-          open ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
+          "fixed top-0 left-0 bottom-0 z-40 flex h-dvh flex-col border-r transition-all duration-200",
+          collapsed ? "w-20" : "w-64",
+          open ? "translate-x-0 max-lg:z-50" : "-translate-x-full lg:translate-x-0",
         )}
+        style={{
+          backgroundColor: "var(--sidebar)",
+          color: "var(--sidebar-text)",
+          borderColor: "var(--border)",
+          fontFamily: "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+        }}
       >
-        <div
-          className={cn(
-            "flex shrink-0 items-center border-b border-sidebar-border px-3 py-3",
-            collapsed ? "justify-center px-2" : "gap-2",
-          )}
+        {/* Floating circular collapse button */}
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="hidden lg:flex items-center justify-center absolute -right-3 top-[106px] z-50 w-6 h-6 rounded-full shadow-md border transition-transform hover:scale-105 cursor-pointer focus:outline-hidden"
+          style={{
+            backgroundColor: "var(--surface)",
+            borderColor: "var(--border)",
+            color: "var(--text-primary)",
+          }}
         >
           {collapsed ? (
-            <button
-              type="button"
-              onClick={onToggleCollapsed}
-              className="group flex h-9 w-9 items-center justify-center rounded-lg transition hover:bg-sidebar-hover focus:outline-hidden"
-              title="Expand sidebar"
-              aria-label="Expand sidebar"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src="/campo-logos/icon-192.png"
-                alt="Campo Academic Portal"
-                className="h-8 w-8 rounded-lg object-contain transition-transform group-hover:scale-105"
-              />
-            </button>
+            <ChevronRight size={14} className="stroke-[2.5]" />
           ) : (
-            <>
-              <Link href="/dashboard" className="flex min-w-0 flex-1 flex-col justify-center">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src="/campo-logos/campo_logo_transparent_hq.png"
-                  alt="Campo Academic Portal"
-                  className="h-8 w-auto max-w-[148px] self-start object-contain object-left"
-                />
-                <span className="mt-0.5 truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-muted">
-                  Academic Portal
-                </span>
-              </Link>
-              <button
-                type="button"
-                className="rounded-md p-1.5 text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text lg:hidden"
-                onClick={onClose}
-                aria-label="Close navigation"
-              >
-                <X className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                className="hidden rounded-md p-1.5 text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text lg:inline-flex"
-                onClick={onToggleCollapsed}
-                aria-label="Collapse sidebar"
-                title="Collapse sidebar"
-              >
-                <PanelLeftClose className="h-4 w-4" />
-              </button>
-            </>
+            <ChevronLeft size={14} className="stroke-[2.5]" />
           )}
+        </button>
+
+        {/* Centered Top Header */}
+        <div
+          className={cn(
+            "relative flex shrink-0 flex-col items-center justify-center text-center pt-6 pb-4 border-b px-3",
+            collapsed && "min-h-[91px] px-2",
+          )}
+          style={{ borderColor: "var(--border)" }}
+        >
+          <Link
+            href="/dashboard"
+            onClick={onClose}
+            className="flex flex-col items-center justify-center focus:outline-hidden"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={
+                collapsed
+                  ? "/campo-logos/icon-192.png"
+                  : "/campo-logos/campo_logo_transparent_hq.png"
+              }
+              alt="Campo Academic Portal"
+              style={collapsed ? undefined : { maxWidth: "120px" }}
+              className={cn(
+                "mx-auto object-contain transition-all duration-200",
+                collapsed ? "h-8 w-8 rounded-lg" : "h-7",
+              )}
+            />
+            {!collapsed ? (
+              <span
+                className="mt-1.5 text-xs font-medium tracking-wide"
+                style={{ color: "var(--sidebar-muted)" }}
+              >
+                Academic Portal
+              </span>
+            ) : null}
+          </Link>
+
+          <button
+            type="button"
+            className="absolute right-3 top-3 rounded-md p-1.5 text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text lg:hidden"
+            onClick={onClose}
+            aria-label="Close navigation"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
 
-        <nav className="sidebar-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-2 py-3">
+        <nav className="sidebar-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4">
           {groups.map((group) => {
             const GroupIcon = group.icon;
             const isGroupActive = group.items.some((item) => isItemActive(item.href));
@@ -279,6 +315,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
             if (collapsed) {
               if (hasMultiple) {
                 const isFlyoutOpen = flyoutMenu?.group.title === group.title;
+                const buttonActive = isGroupActive || isFlyoutOpen;
                 return (
                   <div key={group.title} className="mb-2">
                     <button
@@ -306,11 +343,19 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                       onMouseEnter={(e) => showTooltip(group.title, e)}
                       onMouseLeave={hideTooltip}
                       className={cn(
-                        "mx-auto flex h-10 w-10 items-center justify-center rounded-lg transition-all",
-                        isGroupActive || isFlyoutOpen
-                          ? "bg-sidebar-active text-white shadow-sm"
+                        "mx-auto flex h-10 w-10 items-center justify-center rounded-xl transition-all cursor-pointer",
+                        buttonActive
+                          ? "text-sidebar-text shadow-sm"
                           : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                       )}
+                      style={
+                        buttonActive
+                          ? {
+                              backgroundColor: "var(--primary)",
+                              color: "var(--sidebar-text)",
+                            }
+                          : undefined
+                      }
                       title={group.title}
                       aria-label={group.title}
                     >
@@ -339,11 +384,19 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                     onMouseEnter={(e) => showTooltip(label, e)}
                     onMouseLeave={hideTooltip}
                     className={cn(
-                      "mx-auto flex h-10 w-10 items-center justify-center rounded-lg transition-all",
+                      "mx-auto flex h-10 w-10 items-center justify-center rounded-xl transition-all",
                       active
-                        ? "bg-sidebar-active text-white shadow-sm"
+                        ? "text-sidebar-text shadow-sm"
                         : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                     )}
+                    style={
+                      active
+                        ? {
+                            backgroundColor: "var(--primary)",
+                            color: "var(--sidebar-text)",
+                          }
+                        : undefined
+                    }
                     title={label}
                     aria-label={label}
                   >
@@ -354,41 +407,42 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
             }
 
             return (
-              <div key={group.title} className="mb-2">
+              <div key={group.title} className="mb-3">
                 {hasMultiple ? (
                   <>
                     <button
                       type="button"
                       onClick={() => toggleGroup(group.title)}
                       className={cn(
-                        "flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all",
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-medium transition-colors cursor-pointer hover:bg-sidebar-hover",
                         isGroupActive
-                          ? "bg-sidebar-hover/80 text-sidebar-text"
-                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
+                          ? "text-sidebar-text"
+                          : "text-sidebar-muted hover:text-sidebar-text",
                       )}
                     >
-                      <div className="flex min-w-0 items-center gap-2">
-                        <GroupIcon
-                          className={cn(
-                            "h-3.5 w-3.5 shrink-0",
-                            isGroupActive ? "text-accent" : "text-sidebar-muted",
-                          )}
-                        />
-                        <span className="truncate text-[11px] font-semibold uppercase tracking-wider text-sidebar-text/90">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <GroupIcon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em]">
                           {group.title}
                         </span>
                       </div>
                       <div className="flex shrink-0 items-center">
                         {isGroupExpanded ? (
-                          <ChevronDown className="h-3.5 w-3.5 text-sidebar-muted" />
+                          <ChevronDown className="h-3.5 w-3.5" />
                         ) : (
-                          <ChevronRight className="h-3.5 w-3.5 text-sidebar-muted" />
+                          <ChevronRight className="h-3.5 w-3.5" />
                         )}
                       </div>
                     </button>
 
                     {isGroupExpanded ? (
-                      <ul className="ml-3.5 mt-1 space-y-0.5 border-l border-sidebar-border/80 pl-2.5">
+                      <ul
+                        className="ml-3.5 mt-1 space-y-1 border-l pl-2.5"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--border) 35%, transparent)",
+                        }}
+                      >
                         {group.items.map((item) => {
                           const active = isItemActive(item.href);
                           const ItemIcon = item.icon;
@@ -399,20 +453,25 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                                 href={item.href}
                                 onClick={onClose}
                                 className={cn(
-                                  "group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] transition-colors",
                                   active
-                                    ? "bg-sidebar-active text-white font-semibold shadow-2xs"
-                                    : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
+                                    ? "font-semibold shadow-sm"
+                                    : "font-medium text-sidebar-text/90 hover:bg-sidebar-hover hover:text-sidebar-text",
                                 )}
+                                style={
+                                  active
+                                    ? {
+                                        backgroundColor: "var(--primary)",
+                                        color: "var(--sidebar-text)",
+                                      }
+                                    : undefined
+                                }
                               >
-                                {active ? (
-                                  <span className="absolute -left-2.5 top-1/2 -mt-2 h-4 w-1 rounded-r-md bg-accent" />
-                                ) : null}
                                 <ItemIcon
                                   className={cn(
-                                    "h-3.5 w-3.5 shrink-0",
+                                    "h-4 w-4 shrink-0",
                                     active
-                                      ? "text-white"
+                                      ? "text-sidebar-text"
                                       : "text-sidebar-muted group-hover:text-sidebar-text",
                                   )}
                                 />
@@ -425,41 +484,54 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                     ) : null}
                   </>
                 ) : (
-                  // Single-item group rendered as top-level link
-                  <ul className="space-y-0.5">
-                    {group.items.map((item) => {
-                      const active = isItemActive(item.href);
-                      const ItemIcon = item.icon;
-                      const label = navLabelForItem(item, { superAdminUser });
-                      return (
-                        <li key={item.href}>
-                          <Link
-                            href={item.href}
-                            onClick={onClose}
-                            className={cn(
-                              "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
-                              active
-                                ? "bg-sidebar-active text-white font-semibold shadow-2xs"
-                                : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
-                            )}
-                          >
-                            {active ? (
-                              <span className="absolute -left-2 top-1/2 -mt-2 h-4 w-1 rounded-r-md bg-accent" />
-                            ) : null}
-                            <ItemIcon
+                  // Single-item group rendered as uppercase section heading + pill link
+                  <div>
+                    <p
+                      className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]"
+                      style={{ color: "var(--sidebar-muted)" }}
+                    >
+                      {group.title}
+                    </p>
+                    <ul className="space-y-1">
+                      {group.items.map((item) => {
+                        const active = isItemActive(item.href);
+                        const ItemIcon = item.icon;
+                        const label = navLabelForItem(item, { superAdminUser });
+                        return (
+                          <li key={item.href}>
+                            <Link
+                              href={item.href}
+                              onClick={onClose}
                               className={cn(
-                                "h-4 w-4 shrink-0",
+                                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] transition-colors",
                                 active
-                                  ? "text-white"
-                                  : "text-sidebar-muted group-hover:text-sidebar-text",
+                                  ? "font-semibold shadow-sm"
+                                  : "font-medium text-sidebar-text/90 hover:bg-sidebar-hover hover:text-sidebar-text",
                               )}
-                            />
-                            <span className="truncate font-medium">{label}</span>
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                              style={
+                                active
+                                  ? {
+                                      backgroundColor: "var(--primary)",
+                                      color: "var(--sidebar-text)",
+                                    }
+                                  : undefined
+                              }
+                            >
+                              <ItemIcon
+                                className={cn(
+                                  "h-4 w-4 shrink-0",
+                                  active
+                                    ? "text-sidebar-text"
+                                    : "text-sidebar-muted group-hover:text-sidebar-text",
+                                )}
+                              />
+                              <span className="truncate">{label}</span>
+                            </Link>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 )}
               </div>
             );
@@ -468,12 +540,12 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
 
         <div
           className={cn(
-            "shrink-0 border-t border-sidebar-border px-2 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))]",
-            collapsed && "px-1.5",
+            "shrink-0 px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]",
+            collapsed && "px-2",
           )}
         >
           {collapsed ? (
-            <div className="flex flex-col items-center gap-1">
+            <div className="flex flex-col items-center gap-2">
               <button
                 type="button"
                 disabled={!canOpenProfile}
@@ -484,7 +556,15 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                 }}
                 onMouseEnter={(e) => showTooltip(user?.name || "Profile", e)}
                 onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text disabled:cursor-default disabled:hover:bg-transparent"
+                className="flex h-9 w-9 items-center justify-center rounded-full overflow-hidden text-sm font-bold transition hover:opacity-90 disabled:cursor-default"
+                style={
+                  user?.profilePhoto
+                    ? undefined
+                    : {
+                        backgroundColor: "var(--primary-light)",
+                        color: "var(--primary)",
+                      }
+                }
                 title={user?.name || "Profile"}
                 aria-label="Profile"
               >
@@ -492,8 +572,10 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   <img
                     src={user.profilePhoto}
                     alt={user?.name || "Profile"}
-                    className="h-7 w-7 rounded-full object-cover border border-white/20"
+                    className="h-full w-full object-cover"
                   />
+                ) : user?.name ? (
+                  user.name.trim().charAt(0).toUpperCase()
                 ) : (
                   <UserRound className="h-4 w-4" />
                 )}
@@ -503,7 +585,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                 onClick={() => setLogoutModalOpen(true)}
                 onMouseEnter={(e) => showTooltip("Sign out", e)}
                 onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -511,7 +593,15 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5">
+            <div
+              className="flex items-center gap-2 rounded-xl border px-2.5 py-2 shadow-sm"
+              style={{
+                backgroundColor:
+                  "color-mix(in srgb, var(--primary-light) 10%, var(--sidebar))",
+                borderColor:
+                  "color-mix(in srgb, var(--border) 25%, transparent)",
+              }}
+            >
               <button
                 type="button"
                 disabled={!canOpenProfile}
@@ -520,25 +610,43 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   setProfileOpen(true);
                   onClose();
                 }}
-                className="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition hover:bg-sidebar-hover disabled:cursor-default disabled:hover:bg-transparent"
+                className="flex min-w-0 flex-1 items-center gap-2.5 text-left transition hover:opacity-90 disabled:cursor-default"
                 title={canOpenProfile ? "View / edit your profile" : undefined}
               >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-sidebar-active text-white overflow-hidden border border-white/10">
+                <span
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold overflow-hidden"
+                  style={
+                    user?.profilePhoto
+                      ? undefined
+                      : {
+                          backgroundColor: "var(--primary-light)",
+                          color: "var(--primary)",
+                        }
+                  }
+                >
                   {user?.profilePhoto ? (
                     <img
                       src={user.profilePhoto}
                       alt={user?.name || "Profile"}
                       className="h-full w-full object-cover"
                     />
+                  ) : user?.name ? (
+                    user.name.trim().charAt(0).toUpperCase()
                   ) : (
                     <UserRound className="h-4 w-4" />
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium text-sidebar-text">
+                  <span
+                    className="block truncate text-xs font-bold uppercase tracking-wide"
+                    style={{ color: "var(--sidebar-text)" }}
+                  >
                     {user?.name || "Signed in"}
                   </span>
-                  <span className="block truncate text-[11px] text-sidebar-muted">
+                  <span
+                    className="block truncate text-[11px] font-medium mt-0.5"
+                    style={{ color: "var(--sidebar-muted)" }}
+                  >
                     {roleLabel || user?.email || user?.username || "HRMS account"}
                   </span>
                 </span>
@@ -546,7 +654,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               <button
                 type="button"
                 onClick={() => setLogoutModalOpen(true)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -579,8 +687,16 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               {/* Tooltip on hover */}
               {hoveredItem && !flyoutMenu ? (
                 <div
-                  className="pointer-events-none fixed z-[9999] rounded-md border border-slate-700/80 bg-slate-900/95 px-2.5 py-1 text-xs font-medium text-white shadow-xl backdrop-blur-xs whitespace-nowrap animate-in fade-in zoom-in-95 duration-100"
-                  style={{ top: hoveredItem.top, left: hoveredItem.left }}
+                  className="pointer-events-none fixed z-[9999] rounded-md border px-2.5 py-1 text-xs font-medium shadow-xl whitespace-nowrap animate-in fade-in zoom-in-95 duration-100"
+                  style={{
+                    top: hoveredItem.top,
+                    left: hoveredItem.left,
+                    backgroundColor: "var(--sidebar)",
+                    borderColor: "var(--border)",
+                    color: "var(--sidebar-text)",
+                    fontFamily:
+                      "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+                  }}
                 >
                   {hoveredItem.title}
                 </div>
@@ -590,13 +706,24 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               {flyoutMenu ? (
                 <div
                   id="sidebar-flyout-menu"
-                  className="fixed z-[9999] w-60 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border border-sidebar-border bg-sidebar p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-150"
-                  style={{ top: flyoutMenu.top, left: flyoutMenu.left }}
+                  className="fixed z-[9999] w-60 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+                  style={{
+                    top: flyoutMenu.top,
+                    left: flyoutMenu.left,
+                    backgroundColor: "var(--sidebar)",
+                    borderColor: "var(--border)",
+                    color: "var(--sidebar-text)",
+                    fontFamily:
+                      "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+                  }}
                 >
-                  <div className="mb-1.5 flex items-center justify-between border-b border-sidebar-border/60 px-2.5 py-1.5">
+                  <div
+                    className="mb-1.5 flex items-center justify-between border-b px-2.5 py-1.5"
+                    style={{ borderColor: "var(--border)" }}
+                  >
                     <p
-                      className="text-[11px] font-semibold uppercase tracking-wider"
-                      style={{ color: "color-mix(in srgb, var(--secondary) 70%, var(--sidebar-text))" }}
+                      className="text-[11px] font-semibold uppercase tracking-[0.08em]"
+                      style={{ color: "var(--sidebar-muted)" }}
                     >
                       {flyoutMenu.group.title}
                     </p>
@@ -609,7 +736,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                       <X className="h-3 w-3" />
                     </button>
                   </div>
-                  <ul className="space-y-0.5">
+                  <ul className="space-y-1">
                     {flyoutMenu.group.items.map((item) => {
                       const active = isItemActive(item.href);
                       const ItemIcon = item.icon;
@@ -623,19 +750,29 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                               onClose();
                             }}
                             className={cn(
-                              "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                              "group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-xs transition-colors",
                               active
-                                ? "bg-sidebar-active font-semibold text-white shadow-2xs"
-                                : "text-sidebar-text hover:bg-sidebar-hover",
+                                ? "font-semibold shadow-sm"
+                                : "font-medium text-sidebar-text/90 hover:bg-sidebar-hover hover:text-sidebar-text",
                             )}
+                            style={
+                              active
+                                ? {
+                                    backgroundColor: "var(--primary)",
+                                    color: "var(--sidebar-text)",
+                                  }
+                                : undefined
+                            }
                           >
                             <ItemIcon
                               className={cn(
-                                "h-3.5 w-3.5 shrink-0",
-                                active ? "text-white" : "text-sidebar-muted",
+                                "h-4 w-4 shrink-0",
+                                active
+                                  ? "text-sidebar-text"
+                                  : "text-sidebar-muted group-hover:text-sidebar-text",
                               )}
                             />
-                            <span className="truncate font-medium">{label}</span>
+                            <span className="truncate">{label}</span>
                           </Link>
                         </li>
                       );

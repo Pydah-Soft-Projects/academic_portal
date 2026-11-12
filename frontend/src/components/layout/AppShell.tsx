@@ -168,7 +168,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <AcademicProvider>
       <div className="flex h-dvh max-h-dvh overflow-hidden bg-background print:h-auto print:max-h-none print:overflow-visible print:bg-white">
-        <div className="print:hidden h-full">
+        <div className="print:hidden">
           <Sidebar
             open={mobileOpen}
             collapsed={collapsed}
@@ -176,7 +176,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             onToggleCollapsed={toggleCollapsed}
           />
         </div>
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col print:block print:min-h-full">
+        <div
+          className={`flex min-h-0 min-w-0 flex-1 flex-col transition-[padding] duration-200 print:block print:min-h-full print:pl-0 ${
+            collapsed ? "lg:pl-20" : "lg:pl-64"
+          }`}
+        >
           <div className="print:hidden">
             <TopHeader onMenuClick={() => setMobileOpen(true)} />
           </div>
