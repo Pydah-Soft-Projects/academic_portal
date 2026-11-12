@@ -249,9 +249,9 @@ export function ClassTeacherDashboard({
   const feeDonutData = useMemo(() => {
     if (!activeData?.feeStatus) return [];
     return [
-      { name: "Paid", value: activeData.feeStatus.paid, color: "#10b981" },
-      { name: "Partial", value: activeData.feeStatus.partial, color: "#94a3b8" },
-      { name: "Pending", value: activeData.feeStatus.pending, color: "#ef4444" },
+      { name: "Paid", value: activeData.feeStatus.paid, color: "var(--success)" },
+      { name: "Partial", value: activeData.feeStatus.partial, color: "var(--secondary)" },
+      { name: "Pending", value: activeData.feeStatus.pending, color: "var(--danger)" },
     ];
   }, [activeData]);
 
@@ -284,7 +284,7 @@ export function ClassTeacherDashboard({
   if ((loading || authLoading) && !data) {
     return (
       <div className="py-24 flex flex-col items-center justify-center space-y-3">
-        <div className="h-8 w-8 rounded-full border-3 border-blue-600 border-t-transparent animate-spin" />
+        <div className="h-8 w-8 rounded-full border-3 border-primary border-t-transparent animate-spin" />
         <p className="text-xs font-semibold text-slate-500">Loading Class Teacher Dashboard...</p>
       </div>
     );
@@ -304,7 +304,7 @@ export function ClassTeacherDashboard({
   }
 
   return (
-    <div className="space-y-4 pb-12 font-sans bg-slate-50/50 min-h-screen">
+    <div className="space-y-4 pb-12 font-sans bg-background min-h-screen">
       {/* 1. HEADER SECTION */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs">
         <div>
@@ -392,12 +392,12 @@ export function ClassTeacherDashboard({
         {/* KPI 3: Internal I Failed */}
         <div className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-2xs">
           <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
+            <div className="p-1.5 rounded-lg bg-primary-light text-primary">
               <FileText className="h-4 w-4" />
             </div>
             <span className="text-xs font-medium text-slate-600">Internal I Failed</span>
           </div>
-          <div className="mt-2 text-2xl font-black text-blue-600 tracking-tight">
+          <div className="mt-2 text-2xl font-black text-primary tracking-tight">
             {activeData.kpis.internal1FailedCount != null ? activeData.kpis.internal1FailedCount : "—"}
           </div>
           <div className="mt-1 text-[10px] text-slate-500 font-medium">
@@ -462,14 +462,14 @@ export function ClassTeacherDashboard({
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
 
             <div className="flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-blue-600" />
+              <TrendingUp className="h-4 w-4 text-primary" />
               <h2 className="text-xs font-bold text-slate-800">
                 Attendance Trend ({activeData.meta.sectionName})
               </h2>
             </div>
             <Link
               href="/attendance-analytics"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View Details &gt;
             </Link>
@@ -481,32 +481,38 @@ export function ClassTeacherDashboard({
                 <AreaChart data={activeData.attendanceTrend} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
                   <defs>
                     <linearGradient id="attTrendGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0.0} />
+                      <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--primary)" stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#64748b" }} tickLine={false} axisLine={false} />
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                  <XAxis dataKey="month" tick={{ fontSize: 10, fill: "var(--text-secondary)" }} tickLine={false} axisLine={false} />
                   <YAxis
                     domain={[0, 100]}
                     ticks={[20, 40, 60, 80, 100]}
                     tickFormatter={(v) => `${v}%`}
-                    tick={{ fontSize: 10, fill: "#64748b" }}
+                    tick={{ fontSize: 10, fill: "var(--text-secondary)" }}
                     tickLine={false}
                     axisLine={false}
                   />
                   <Tooltip
                     formatter={(val: any) => [`${val}%`, "Attendance"]}
-                    contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px", fontSize: "11px", color: "#fff" }}
+                    contentStyle={{
+                      backgroundColor: "var(--surface)",
+                      borderColor: "var(--border)",
+                      borderRadius: "8px",
+                      fontSize: "11px",
+                      color: "var(--text-primary)",
+                    }}
                   />
                   <Area
                     type="monotone"
                     dataKey="value"
-                    stroke="#3b82f6"
+                    stroke="var(--primary)"
                     strokeWidth={2.5}
                     fillOpacity={1}
                     fill="url(#attTrendGrad)"
-                    dot={{ r: 4, fill: "#2563eb", stroke: "#fff", strokeWidth: 2 }}
+                    dot={{ r: 4, fill: "var(--secondary)", stroke: "var(--surface)", strokeWidth: 2 }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -531,7 +537,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/mentoring-risks"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View All &gt;
             </Link>
@@ -579,7 +585,7 @@ export function ClassTeacherDashboard({
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
 
             <div className="flex items-center gap-2">
-              <Calendar className="h-4 w-4 text-blue-600" />
+              <Calendar className="h-4 w-4 text-primary" />
               <div>
                 <h2 className="text-xs font-bold text-slate-800">Today&apos;s Timetable</h2>
                 <p className="text-[10px] text-slate-400 font-medium">{activeData.meta.dateFormatted}</p>
@@ -587,7 +593,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/today-timetable"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View Full &gt;
             </Link>
@@ -646,7 +652,7 @@ export function ClassTeacherDashboard({
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
 
             <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-blue-600" />
+              <Users className="h-4 w-4 text-primary" />
               <div>
                 <h2 className="text-xs font-bold text-slate-800">Students Below 65% Attendance</h2>
                 <p className="text-[10px] text-slate-400 font-medium">As of {activeData.meta.dateFormatted}</p>
@@ -654,7 +660,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/mentoring-risks?risk=High"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View All &gt;
             </Link>
@@ -708,12 +714,12 @@ export function ClassTeacherDashboard({
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
   
             <div className="flex items-center gap-2">
-                <TrendingUp className="h-4 w-4 text-blue-600" />
+                <TrendingUp className="h-4 w-4 text-primary" />
                 <h2 className="text-xs font-bold text-slate-800">Internal Exam Performance</h2>
               </div>
               <Link
                 href="/internal-marks"
-                className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+                className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
               >
                 View Details &gt;
               </Link>
@@ -737,14 +743,20 @@ export function ClassTeacherDashboard({
                 <div className="h-36 w-full mt-2">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={internalBarData} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#64748b" }} tickLine={false} axisLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: "#64748b" }} tickLine={false} axisLine={false} />
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
+                      <XAxis dataKey="name" tick={{ fontSize: 10, fill: "var(--text-secondary)" }} tickLine={false} axisLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: "var(--text-secondary)" }} tickLine={false} axisLine={false} />
                       <Tooltip
-                        contentStyle={{ backgroundColor: "#1e293b", borderColor: "#334155", borderRadius: "8px", fontSize: "11px", color: "#fff" }}
+                        contentStyle={{
+                          backgroundColor: "var(--surface)",
+                          borderColor: "var(--border)",
+                          borderRadius: "8px",
+                          fontSize: "11px",
+                          color: "var(--text-primary)",
+                        }}
                       />
-                      <Bar dataKey="Passed" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={30} />
-                      <Bar dataKey="Failed" fill="#ef4444" radius={[4, 4, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Passed" fill="var(--primary)" radius={[4, 4, 0, 0]} maxBarSize={30} />
+                      <Bar dataKey="Failed" fill="var(--danger)" radius={[4, 4, 0, 0]} maxBarSize={30} />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -771,7 +783,7 @@ export function ClassTeacherDashboard({
               </div>
               <Link
                 href="/mentoring-risks?risk=Critical"
-                className="text-[11px] font-semibold text-blue-600 hover:underline"
+                className="text-[11px] font-semibold text-primary hover:underline"
               >
                 View Students &gt;
               </Link>
@@ -792,7 +804,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/mentoring-risks"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View All &gt;
             </Link>
@@ -878,7 +890,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/students"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View All &gt;
             </Link>
@@ -959,7 +971,7 @@ export function ClassTeacherDashboard({
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
 
             <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-blue-600" />
+              <Users className="h-4 w-4 text-primary" />
               <div>
                 <h2 className="text-xs font-bold text-slate-800">Continuous Absentees (3+ days)</h2>
                 <p className="text-[10px] text-slate-400 font-medium">Tracking up to {activeData.meta.dateFormatted}</p>
@@ -967,7 +979,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/attendance-analytics"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View All &gt;
             </Link>
@@ -1022,7 +1034,7 @@ export function ClassTeacherDashboard({
             </div>
             <Link
               href="/calendar"
-              className="text-[11px] font-semibold text-blue-600 hover:underline flex items-center gap-0.5"
+              className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
             >
               View All &gt;
             </Link>
@@ -1141,7 +1153,7 @@ export function ClassTeacherDashboard({
                     alert("Intervention logged successfully.");
                     setCallModalStudent(null);
                   }}
-                  className="px-3.5 py-2 rounded-lg bg-blue-600 text-white text-xs font-semibold hover:bg-blue-500 shadow-xs"
+                  className="px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-hover shadow-xs"
                 >
                   Save Intervention
                 </button>

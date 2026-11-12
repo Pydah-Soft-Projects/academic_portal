@@ -23,7 +23,7 @@ export function getPortalBranding(): PortalBranding {
     collegeLogo:
       process.env.NEXT_PUBLIC_COLLEGE_LOGO?.trim() || "/branding/college-logo.svg",
     collegeName:
-      process.env.NEXT_PUBLIC_COLLEGE_NAME?.trim() || "Pydah Group of Institutions",
+      process.env.NEXT_PUBLIC_COLLEGE_NAME?.trim() || "Campo Group of Institutions",
     portalName: process.env.NEXT_PUBLIC_PORTAL_NAME?.trim() || "ACADEMIC PORTAL",
     appIcon:
       process.env.NEXT_PUBLIC_APP_ICON?.trim() ||

@@ -1,6 +1,6 @@
 export function PrincipalDashboardSkeleton() {
   return (
-    <div className="space-y-4 sm:space-y-5 pb-12 font-sans bg-[#f8fafc] -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6 min-h-screen animate-pulse">
+    <div className="space-y-4 sm:space-y-5 pb-12 font-sans bg-background -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6 min-h-screen animate-pulse">
       {/* 1. TOP METRIC CARDS ROW (6 CARDS) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
         {[1, 2, 3, 4, 5, 6].map((i) => (

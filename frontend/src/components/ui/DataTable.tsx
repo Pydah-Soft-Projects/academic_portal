@@ -26,14 +26,14 @@ export function DataTable<T>({
 }: Props<T>) {
   if (rows.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border bg-card px-4 py-10 text-center text-sm text-slate-500">
+      <div className="rounded-lg border border-dashed border-border bg-surface px-4 py-10 text-center text-sm text-text-sub">
         {emptyMessage}
       </div>
     );
   }
 
   const tableClasses = cn(
-    "overflow-x-auto rounded-lg border border-border bg-card",
+    "overflow-x-auto rounded-lg border border-border bg-surface",
     mobileRender && "hidden md:block"
   );
 
@@ -45,8 +45,8 @@ export function DataTable<T>({
             <div
               key={rowKey(row)}
               className={cn(
-                "rounded-lg border border-border bg-card p-4 shadow-sm",
-                onRowClick && "cursor-pointer hover:bg-slate-50 transition-colors"
+                "rounded-lg border border-border bg-surface p-4 shadow-sm",
+                onRowClick && "cursor-pointer hover:bg-primary-light/40 transition-colors"
               )}
               onClick={onRowClick ? () => onRowClick(row) : undefined}
               onKeyDown={
@@ -69,7 +69,7 @@ export function DataTable<T>({
       )}
       <div className={tableClasses}>
         <table className="min-w-full text-left text-sm">
-          <thead className="border-b border-border bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <thead className="border-b border-border bg-background text-xs uppercase tracking-wide text-text-sub">
             <tr>
               {columns.map((column) => (
                 <th key={column.key} className={cn("px-3 py-2.5 font-medium", column.className)}>
@@ -83,7 +83,7 @@ export function DataTable<T>({
               <tr
                 key={rowKey(row)}
                 className={cn(
-                  "border-b border-border last:border-0 hover:bg-slate-50",
+                  "border-b border-border last:border-0 hover:bg-primary-light/40 text-text-main",
                   onRowClick && "cursor-pointer transition-colors"
                 )}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}

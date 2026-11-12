@@ -1552,7 +1552,7 @@ export function StaffProfileModal({
                     <div className="flex items-center gap-2.5">
                       <Sparkles className="h-4 w-4 text-emerald-600 shrink-0" />
                       <div>
-                        <span className="font-bold">Live Synchronized Record from Pydah HRMS Master</span>
+                        <span className="font-bold">Live Synchronized Record from Campo HRMS Master</span>
                         <p className="text-[11px] text-emerald-700 mt-0.5">
                           Personal, demographic, and appointment records are dynamically read from the centralized HRMS database. No duplicate data entry required.
                         </p>
@@ -2302,7 +2302,7 @@ export function StaffProfileModal({
 
                       <div className="relative">
                         <span className="absolute -left-6 top-1 h-3 w-3 rounded-full bg-emerald-600 ring-4 ring-white" />
-                        <div className="font-bold text-slate-900">Date of Joining Pydah Educational Group</div>
+                        <div className="font-bold text-slate-900">Date of Joining Campo Educational Group</div>
                         <p className="text-slate-500 text-[11px]">{personal?.dateOfJoining || staff.dateOfJoining || "Initial Appointment"}</p>
                       </div>
                     </div>

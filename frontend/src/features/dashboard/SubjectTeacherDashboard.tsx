@@ -338,7 +338,7 @@ export function SubjectTeacherDashboard({
 
         {/* Card 2: Total Students */}
         <div className="rounded-xl sm:rounded-2xl border border-slate-200/90 bg-white p-2.5 sm:p-3.5 shadow-xs flex items-center gap-2 sm:gap-3 transition-transform hover:-translate-y-0.5">
-          <div className="flex h-8 w-8 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-lg sm:rounded-xl bg-blue-50 text-blue-600">
+          <div className="flex h-8 w-8 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-lg sm:rounded-xl bg-primary-light text-primary">
             <Users className="h-4 w-4 sm:h-5 sm:w-5" />
           </div>
           <div className="min-w-0">
@@ -428,14 +428,14 @@ export function SubjectTeacherDashboard({
           <div>
             <div className="flex items-center justify-between pb-2 sm:pb-3 border-b border-slate-100">
               <h2 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5 sm:gap-2">
-                <CalendarDays className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-600" />
+                <CalendarDays className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary" />
                 {data?.dateInfo?.isToday
                   ? "Today's Classes"
                   : `Classes for ${activeDate}${data?.dateInfo?.dayName ? ` (${data.dateInfo.dayName})` : ""}`}
               </h2>
               <Link
                 href="/my-timetable"
-                className="text-[10.5px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[10.5px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View Full Timetable &gt;
               </Link>
@@ -496,7 +496,7 @@ export function SubjectTeacherDashboard({
           <div>
             <div className="flex flex-wrap items-center justify-between pb-2 sm:pb-3 border-b border-slate-100 gap-1.5">
               <div className="flex items-center gap-1.5 sm:gap-2">
-                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-600" />
+                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary" />
                 <h2 className="text-xs sm:text-sm font-bold text-slate-900">
                   Subject-wise Attendance
                 </h2>
@@ -509,7 +509,7 @@ export function SubjectTeacherDashboard({
                     className={cn(
                       "px-2 py-0.5 rounded-md transition-all cursor-pointer",
                       subjectAttendanceMode === "date"
-                        ? "bg-white text-blue-700 shadow-2xs font-bold"
+                        ? "bg-white text-primary shadow-2xs font-bold"
                         : "text-slate-600 hover:text-slate-900"
                     )}
                     title={`Attendance on ${activeDate}`}
@@ -522,7 +522,7 @@ export function SubjectTeacherDashboard({
                     className={cn(
                       "px-2 py-0.5 rounded-md transition-all cursor-pointer",
                       subjectAttendanceMode === "cumulative"
-                        ? "bg-white text-blue-700 shadow-2xs font-bold"
+                        ? "bg-white text-primary shadow-2xs font-bold"
                         : "text-slate-600 hover:text-slate-900"
                     )}
                     title={`Cumulative attendance as of ${activeDate}`}
@@ -532,7 +532,7 @@ export function SubjectTeacherDashboard({
                 </div>
                 <Link
                   href="/attendance-posting"
-                  className="text-[10.5px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 transition-colors"
+                  className="text-[10.5px] sm:text-xs font-semibold text-primary hover:text-primary-hover transition-colors"
                 >
                   View Details &gt;
                 </Link>
@@ -608,12 +608,12 @@ export function SubjectTeacherDashboard({
           <div>
             <div className="flex items-center justify-between pb-2 sm:pb-3 border-b border-slate-100">
               <h2 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5 sm:gap-2">
-                <TrendingUp className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-600" />
+                <TrendingUp className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary" />
                 Teaching Progress
               </h2>
               <Link
                 href="/my-timetable"
-                className="text-[10.5px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[10.5px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View Details &gt;
               </Link>
@@ -687,7 +687,7 @@ export function SubjectTeacherDashboard({
           <div>
             <div className="flex items-center justify-between pb-2.5 sm:pb-3 border-b border-slate-100">
               <h2 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5 sm:gap-2">
-                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-600" />
+                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary" />
                 Students Attendance (My Subjects)
                 <span className="text-[10px] text-slate-400 font-medium">
                   ({subjectAttendanceMode === "date" ? "On Date" : "Cumulative"})
@@ -695,7 +695,7 @@ export function SubjectTeacherDashboard({
               </h2>
               <Link
                 href="/attendance-posting"
-                className="text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[11px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View All &gt;
               </Link>
@@ -757,12 +757,12 @@ export function SubjectTeacherDashboard({
           <div>
             <div className="flex items-center justify-between pb-2.5 sm:pb-3 border-b border-slate-100">
               <h2 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5 sm:gap-2">
-                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-600" />
+                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary" />
                 Internal Exam Performance (My Subjects)
               </h2>
               <Link
                 href="/internal-marks"
-                className="text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[11px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View Details &gt;
               </Link>
@@ -821,7 +821,7 @@ export function SubjectTeacherDashboard({
               </h2>
               <Link
                 href="/students"
-                className="text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[11px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View All &gt;
               </Link>
@@ -1009,12 +1009,12 @@ export function SubjectTeacherDashboard({
           <div>
             <div className="flex items-center justify-between pb-2.5 sm:pb-3 border-b border-slate-100">
               <h2 className="text-xs sm:text-sm font-bold text-slate-900 flex items-center gap-1.5 sm:gap-2">
-                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-blue-600" />
+                <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-primary" />
                 My Subject Students Overview
               </h2>
               <Link
                 href="/students"
-                className="text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[11px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View All &gt;
               </Link>
@@ -1077,7 +1077,7 @@ export function SubjectTeacherDashboard({
               </h2>
               <Link
                 href="/examinations"
-                className="text-[11px] sm:text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 transition-colors"
+                className="text-[11px] sm:text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 transition-colors"
               >
                 View All &gt;
               </Link>
@@ -1178,7 +1178,7 @@ export function SubjectTeacherDashboard({
               </button>
               <Link
                 href={`/students?search=${encodeURIComponent(selectedStudent.rollNo)}`}
-                className="px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 shadow-2xs"
+                className="px-3 py-1 sm:px-3.5 sm:py-1.5 rounded-lg text-[11px] sm:text-xs font-bold text-white bg-primary hover:bg-primary-hover shadow-2xs"
               >
                 View Full Student Profile
               </Link>

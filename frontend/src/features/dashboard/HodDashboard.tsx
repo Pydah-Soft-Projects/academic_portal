@@ -350,7 +350,7 @@ export function HodDashboard({
           {/* Top Header - Visible directly on the page */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-0 sm:pb-3 sm:border-b sm:border-slate-100">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-linear-to-tr from-blue-700 to-indigo-600 flex items-center justify-center text-white shadow-xs shrink-0">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-primary flex items-center justify-center text-white shadow-xs shrink-0">
                 <Users className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
               </div>
               <div>
@@ -360,7 +360,7 @@ export function HodDashboard({
                 <p className="text-[11px] font-medium text-slate-500 flex items-center gap-1.5">
                   <span>{displayDept}{yearScopeLabel ? ` • ${yearScopeLabel}` : ""} • Today&apos;s Attendance ({displayDate})</span>
                   {isStatsLoading && (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-blue-600 font-bold animate-pulse">
+                    <span className="inline-flex items-center gap-1 text-[10px] text-primary font-bold animate-pulse">
                       <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Updating...
                     </span>
                   )}
@@ -393,12 +393,12 @@ export function HodDashboard({
           {/* Middle 4-Column Primary Metrics - Premium, Clean Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
             {/* 1. Overall Attendance */}
-            <div className="relative overflow-hidden bg-white hover:bg-blue-50/20 border border-slate-200/90 hover:border-blue-300 rounded-2xl p-2.5 sm:p-3 transition-all shadow-xs flex flex-col justify-between group">
+            <div className="relative overflow-hidden bg-white hover:bg-primary-light/30 border border-slate-200/90 hover:border-primary/40 rounded-2xl p-2.5 sm:p-3 transition-all shadow-xs flex flex-col justify-between group">
               <div className="flex items-center justify-between gap-1 mb-1">
                 <span className="text-[10px] sm:text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                   Today&apos;s Attendance
                 </span>
-                <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                <div className="w-6 h-6 rounded-lg bg-primary-light text-primary flex items-center justify-center shrink-0">
                   <CalendarCheck className="w-3.5 h-3.5" />
                 </div>
               </div>
@@ -415,7 +415,7 @@ export function HodDashboard({
                     <span className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
                       {attendance.percentage}
                     </span>
-                    <span className="text-xs font-bold text-blue-600">%</span>
+                    <span className="text-xs font-bold text-primary">%</span>
                   </div>
                 )}
               </div>
@@ -597,9 +597,9 @@ export function HodDashboard({
                     isAttendancePending
                       ? "bg-slate-300"
                       : attendance.percentage >= 75
-                        ? "bg-linear-to-r from-blue-600 via-indigo-600 to-emerald-500"
+                        ? "bg-linear-to-r from-primary via-secondary to-success"
                         : attendance.percentage >= 65
-                          ? "bg-linear-to-r from-blue-500 to-indigo-500"
+                          ? "bg-linear-to-r from-primary to-secondary"
                           : "bg-linear-to-r from-rose-500 to-amber-500"
                   }`}
                   style={{ width: isAttendancePending ? "0%" : `${Math.min(100, Math.max(5, attendance.percentage))}%` }}
@@ -848,14 +848,14 @@ export function HodDashboard({
         {/* Header */}
         <div className="flex items-center justify-between mb-3.5">
           <div className="flex items-center gap-1.5">
-            <h2 className="text-base font-black text-blue-950 tracking-tight">
+            <h2 className="text-base font-black text-text-main tracking-tight">
               Students at Risk ({displayDept})
             </h2>
             <Info className="w-4 h-4 text-blue-500 cursor-pointer" />
           </div>
           <button
             onClick={() => setActiveModal("students-risk")}
-            className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline transition cursor-pointer"
+            className="text-xs font-bold text-primary hover:text-primary-hover hover:underline transition cursor-pointer"
           >
             View Details
           </button>
@@ -951,13 +951,13 @@ export function HodDashboard({
                 <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center font-bold">
                   <BookOpen className="w-4 h-4" />
                 </div>
-                <h2 className="text-base font-black text-blue-950 tracking-tight">
+                <h2 className="text-base font-black text-text-main tracking-tight">
                   Subjects Behind Schedule
                 </h2>
               </div>
               <button
                 onClick={() => setActiveModal("subjects-behind")}
-                className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline transition cursor-pointer"
+                className="text-xs font-bold text-primary hover:text-primary-hover hover:underline transition cursor-pointer"
               >
                 View All
               </button>
@@ -1041,16 +1041,16 @@ export function HodDashboard({
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center font-bold">
+                <div className="w-8 h-8 rounded-lg bg-primary-light text-primary flex items-center justify-center font-bold">
                   <IndianRupee className="w-4 h-4" />
                 </div>
-                <h2 className="text-base font-black text-blue-950 tracking-tight">
+                <h2 className="text-base font-black text-text-main tracking-tight">
                   Fee Due Age Wise
                 </h2>
               </div>
               <button
                 onClick={() => setActiveModal("fee-due")}
-                className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline transition cursor-pointer"
+                className="text-xs font-bold text-primary hover:text-primary-hover hover:underline transition cursor-pointer"
               >
                 View Details
               </button>
@@ -1172,12 +1172,12 @@ export function HodDashboard({
         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm sm:text-base font-black text-blue-950 tracking-tight">
+              <h2 className="text-sm sm:text-base font-black text-text-main tracking-tight">
                 Faculty Attendance &amp; Leave Status
               </h2>
               <button
                 onClick={() => setActiveModal("faculty-status")}
-                className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline transition cursor-pointer"
+                className="text-xs font-bold text-primary hover:text-primary-hover hover:underline transition cursor-pointer"
               >
                 View Details
               </button>
@@ -1292,12 +1292,12 @@ export function HodDashboard({
         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm sm:text-base font-black text-blue-950 tracking-tight">
+              <h2 className="text-sm sm:text-base font-black text-text-main tracking-tight">
                 Examination Status
               </h2>
               <button
                 onClick={() => setActiveModal("exam-status")}
-                className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline transition cursor-pointer"
+                className="text-xs font-bold text-primary hover:text-primary-hover hover:underline transition cursor-pointer"
               >
                 View All
               </button>
@@ -1310,7 +1310,7 @@ export function HodDashboard({
                   className="flex items-center justify-between text-xs py-1 px-1.5 rounded-lg hover:bg-slate-50 transition"
                 >
                   <div className="flex items-center gap-2 text-slate-800 font-semibold truncate pr-2">
-                    <ClipboardList className="w-4 h-4 shrink-0 text-blue-600" />
+                    <ClipboardList className="w-4 h-4 shrink-0 text-primary" />
                     <span className="truncate">{item.label}</span>
                   </div>
                   {isStatsLoading ? (
@@ -1319,7 +1319,7 @@ export function HodDashboard({
                     <span
                       className={`font-black text-xs px-2 py-0.5 rounded-md ${
                         item.count > 0
-                          ? "bg-blue-50 text-blue-700 font-bold"
+                          ? "bg-primary-light text-primary font-bold"
                           : "text-slate-400 font-semibold"
                       }`}
                     >
@@ -1336,12 +1336,12 @@ export function HodDashboard({
         <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm sm:text-base font-black text-blue-950 tracking-tight">
+              <h2 className="text-sm sm:text-base font-black text-text-main tracking-tight">
                 Placements &amp; Training
               </h2>
               <button
                 onClick={() => setActiveModal("placements")}
-                className="text-xs font-bold text-blue-600 hover:text-blue-800 hover:underline transition cursor-pointer"
+                className="text-xs font-bold text-primary hover:text-primary-hover hover:underline transition cursor-pointer"
               >
                 View Details
               </button>

@@ -516,8 +516,8 @@ export function UserManagementView() {
               type="button"
               className={`border-b-2 px-3 py-2 text-sm font-medium ${
                 tab === "create"
-                  ? "border-navy-800 text-navy-900"
-                  : "border-transparent text-slate-500 hover:text-navy-800"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-text-sub hover:text-primary"
               }`}
               onClick={() => setTab("create")}
             >
@@ -528,8 +528,8 @@ export function UserManagementView() {
             type="button"
             className={`border-b-2 px-3 py-2 text-sm font-medium ${
               tab === "users"
-                ? "border-navy-800 text-navy-900"
-                : "border-transparent text-slate-500 hover:text-navy-800"
+                ? "border-primary text-primary"
+                : "border-transparent text-text-sub hover:text-primary"
             }`}
             onClick={() => setTab("users")}
           >
@@ -540,8 +540,8 @@ export function UserManagementView() {
               type="button"
               className={`border-b-2 px-3 py-2 text-sm font-medium ${
                 tab === "roles"
-                  ? "border-navy-800 text-navy-900"
-                  : "border-transparent text-slate-500 hover:text-navy-800"
+                  ? "border-primary text-primary"
+                  : "border-transparent text-text-sub hover:text-primary"
               }`}
               onClick={() => setTab("roles")}
             >

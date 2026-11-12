@@ -729,7 +729,7 @@ function StaffQuestionBreakdownCards({ item }: { item: SubmissionProgressItem })
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
                 <div
-                  className="h-full rounded-full bg-blue-600 transition-all duration-500"
+                  className="h-full rounded-full bg-primary transition-all duration-500"
                   style={{ width: `${u.percentage}%` }}
                 />
               </div>
@@ -4010,7 +4010,7 @@ export function FeedbackReportsView() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-xs border-collapse">
                           <thead>
-                            <tr className="bg-blue-600 text-white font-bold tracking-wide text-[11px] border-b border-blue-700">
+                            <tr className="bg-primary text-white font-bold tracking-wide text-[11px] border-b border-primary-hover">
                               <th className="py-2.5 px-4 min-w-[170px]">SUBJECT</th>
                               <th className="py-2.5 px-4 min-w-[150px]">STAFF</th>
                               <th className="py-2.5 px-3 text-center min-w-[70px]">COUNT</th>
@@ -4133,7 +4133,7 @@ export function FeedbackReportsView() {
                       <div className="overflow-x-auto">
                         <table className="w-full text-left text-xs border-collapse">
                           <thead>
-                            <tr className="bg-blue-600 text-white font-bold tracking-wide text-[11px] border-b border-blue-700">
+                            <tr className="bg-primary text-white font-bold tracking-wide text-[11px] border-b border-primary-hover">
                               <th className="py-2.5 px-4 min-w-[160px]">SUBJECT</th>
                               <th className="py-2.5 px-3 min-w-[100px]">COURSE</th>
                               <th className="py-2.5 px-4 min-w-[160px]">BRANCH & SECTION</th>

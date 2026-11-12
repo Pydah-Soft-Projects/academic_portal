@@ -9,7 +9,7 @@ export function FilterBar({ children, className }: Props) {
   return (
     <div
       className={cn(
-        "mb-4 flex flex-col gap-3 rounded-lg border border-border bg-card p-3 sm:flex-row sm:flex-wrap sm:items-end",
+        "mb-4 flex flex-col gap-3 rounded-lg border border-border bg-surface p-3 sm:flex-row sm:flex-wrap sm:items-end",
         className,
       )}
     >
@@ -25,7 +25,7 @@ type FieldProps = {
 
 export function FilterField({ label, children }: FieldProps) {
   return (
-    <label className="flex w-full flex-col gap-1 text-xs font-medium text-slate-500 sm:w-auto sm:min-w-[140px] flex-1">
+    <label className="flex w-full flex-col gap-1 text-xs font-medium text-text-sub sm:w-auto sm:min-w-[140px] flex-1">
       {label}
       {children}
     </label>
@@ -51,7 +51,7 @@ export function SelectFilter({
   return (
     <select
       defaultValue={selected}
-      className="h-11 sm:h-9 w-full rounded-md border border-border bg-white px-2 text-sm text-foreground outline-none focus:border-brand-600 focus:ring-1 focus:ring-brand-600"
+      className="h-11 sm:h-9 w-full rounded-md border border-border-strong bg-surface px-2 text-sm text-text-main outline-none focus:border-primary focus:ring-1 focus:ring-primary"
     >
       {unique.map((option, index) => (
         <option key={`${option}__${index}`} value={option}>
@@ -71,7 +71,7 @@ export function SearchInput({
     <input
       type="search"
       placeholder={placeholder}
-      className="h-11 sm:h-9 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-brand-600 focus:ring-1 focus:ring-brand-600 sm:min-w-[220px]"
+      className="h-11 sm:h-9 w-full rounded-md border border-border-strong bg-surface px-3 text-sm text-text-main outline-none focus:border-primary focus:ring-1 focus:ring-primary sm:min-w-[220px]"
     />
   );
 }

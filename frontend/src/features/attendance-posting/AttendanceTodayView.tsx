@@ -539,8 +539,8 @@ export function AttendanceTodayView() {
                   className={cn(
                     "px-3.5 py-1 text-xs font-bold rounded-lg transition-all border",
                     isSelected
-                      ? "bg-indigo-600 text-white border-indigo-600 shadow-xs ring-2 ring-indigo-200"
-                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-300",
+                      ? "bg-primary text-white border-primary shadow-xs ring-2 ring-primary/25"
+                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-primary-light hover:text-primary hover:border-primary/40",
                   )}
                 >
                   {pill.label} {cohortCount > 0 ? `(${cohortCount})` : ""}

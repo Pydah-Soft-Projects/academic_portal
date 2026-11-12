@@ -231,7 +231,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src="/branding/icon-mark.png"
-                alt="Pydah Academic Portal"
+                alt="Campo Academic Portal"
                 className="h-7 w-7 rounded-md object-contain transition-transform group-hover:scale-105"
               />
             </button>
@@ -241,21 +241,24 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src="/branding/icon-mark.png"
-                  alt="Pydah Academic Portal"
+                  alt="Campo Academic Portal"
                   className="h-8 w-8 shrink-0 rounded-md object-contain"
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[11px] font-medium uppercase tracking-[0.12em] text-brand-500">
-                    Pydah Group
+                  <p
+                    className="truncate text-[11px] font-medium uppercase tracking-[0.12em]"
+                    style={{ color: "color-mix(in srgb, var(--secondary) 70%, var(--sidebar-text))" }}
+                  >
+                    Campo Group
                   </p>
-                  <h1 className="truncate text-sm font-semibold text-white">
+                  <h1 className="truncate text-sm font-semibold text-sidebar-text">
                     Academic Portal
                   </h1>
                 </div>
               </Link>
               <button
                 type="button"
-                className="rounded-md p-1.5 text-slate-300 hover:bg-sidebar-hover lg:hidden"
+                className="rounded-md p-1.5 text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text lg:hidden"
                 onClick={onClose}
                 aria-label="Close navigation"
               >
@@ -263,7 +266,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               </button>
               <button
                 type="button"
-                className="hidden rounded-md p-1.5 text-slate-300 hover:bg-sidebar-hover lg:inline-flex"
+                className="hidden rounded-md p-1.5 text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text lg:inline-flex"
                 onClick={onToggleCollapsed}
                 aria-label="Collapse sidebar"
                 title="Collapse sidebar"
@@ -314,7 +317,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                         "mx-auto flex h-10 w-10 items-center justify-center rounded-lg transition-all",
                         isGroupActive || isFlyoutOpen
                           ? "bg-sidebar-active text-white shadow-sm"
-                          : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                       )}
                       title={group.title}
                       aria-label={group.title}
@@ -347,7 +350,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                       "mx-auto flex h-10 w-10 items-center justify-center rounded-lg transition-all",
                       active
                         ? "bg-sidebar-active text-white shadow-sm"
-                        : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+                        : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                     )}
                     title={label}
                     aria-label={label}
@@ -368,26 +371,26 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                       className={cn(
                         "flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all",
                         isGroupActive
-                          ? "bg-sidebar-hover/80 text-white"
-                          : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+                          ? "bg-sidebar-hover/80 text-sidebar-text"
+                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                       )}
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <GroupIcon
                           className={cn(
                             "h-3.5 w-3.5 shrink-0",
-                            isGroupActive ? "text-brand-400" : "text-slate-400",
+                            isGroupActive ? "text-accent" : "text-sidebar-muted",
                           )}
                         />
-                        <span className="truncate text-[11px] font-semibold uppercase tracking-wider text-slate-200">
+                        <span className="truncate text-[11px] font-semibold uppercase tracking-wider text-sidebar-text/90">
                           {group.title}
                         </span>
                       </div>
                       <div className="flex shrink-0 items-center">
                         {isGroupExpanded ? (
-                          <ChevronDown className="h-3.5 w-3.5 text-slate-300" />
+                          <ChevronDown className="h-3.5 w-3.5 text-sidebar-muted" />
                         ) : (
-                          <ChevronRight className="h-3.5 w-3.5 text-slate-300" />
+                          <ChevronRight className="h-3.5 w-3.5 text-sidebar-muted" />
                         )}
                       </div>
                     </button>
@@ -407,18 +410,18 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                                   "group relative flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
                                   active
                                     ? "bg-sidebar-active text-white font-semibold shadow-2xs"
-                                    : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+                                    : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                                 )}
                               >
                                 {active ? (
-                                  <span className="absolute -left-2.5 top-1/2 -mt-2 h-4 w-1 rounded-r-md bg-brand-400" />
+                                  <span className="absolute -left-2.5 top-1/2 -mt-2 h-4 w-1 rounded-r-md bg-accent" />
                                 ) : null}
                                 <ItemIcon
                                   className={cn(
                                     "h-3.5 w-3.5 shrink-0",
                                     active
-                                      ? "text-brand-400"
-                                      : "text-slate-400 group-hover:text-white",
+                                      ? "text-white"
+                                      : "text-sidebar-muted group-hover:text-sidebar-text",
                                   )}
                                 />
                                 <span className="truncate">{label}</span>
@@ -445,18 +448,18 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                               "group relative flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors",
                               active
                                 ? "bg-sidebar-active text-white font-semibold shadow-2xs"
-                                : "text-slate-300 hover:bg-sidebar-hover hover:text-white",
+                                : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
                             )}
                           >
                             {active ? (
-                              <span className="absolute -left-2 top-1/2 -mt-2 h-4 w-1 rounded-r-md bg-brand-400" />
+                              <span className="absolute -left-2 top-1/2 -mt-2 h-4 w-1 rounded-r-md bg-accent" />
                             ) : null}
                             <ItemIcon
                               className={cn(
                                 "h-4 w-4 shrink-0",
                                 active
-                                  ? "text-brand-400"
-                                  : "text-slate-400 group-hover:text-white",
+                                  ? "text-white"
+                                  : "text-sidebar-muted group-hover:text-sidebar-text",
                               )}
                             />
                             <span className="truncate font-medium">{label}</span>
@@ -489,7 +492,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                 }}
                 onMouseEnter={(e) => showTooltip(user?.name || "Profile", e)}
                 onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white disabled:cursor-default disabled:hover:bg-transparent"
+                className="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text disabled:cursor-default disabled:hover:bg-transparent"
                 title={user?.name || "Profile"}
                 aria-label="Profile"
               >
@@ -508,7 +511,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                 onClick={() => setLogoutModalOpen(true)}
                 onMouseEnter={(e) => showTooltip("Sign out", e)}
                 onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white cursor-pointer"
+                className="flex h-9 w-9 items-center justify-center rounded-md text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -540,10 +543,10 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium text-white">
+                  <span className="block truncate text-[13px] font-medium text-sidebar-text">
                     {user?.name || "Signed in"}
                   </span>
-                  <span className="block truncate text-[11px] text-slate-300">
+                  <span className="block truncate text-[11px] text-sidebar-muted">
                     {roleLabel || user?.email || user?.username || "HRMS account"}
                   </span>
                 </span>
@@ -551,7 +554,7 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
               <button
                 type="button"
                 onClick={() => setLogoutModalOpen(true)}
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-300 transition hover:bg-sidebar-hover hover:text-white cursor-pointer"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
                 title="Sign out"
                 aria-label="Sign out"
               >
@@ -599,13 +602,16 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   style={{ top: flyoutMenu.top, left: flyoutMenu.left }}
                 >
                   <div className="mb-1.5 flex items-center justify-between border-b border-sidebar-border/60 px-2.5 py-1.5">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-400">
+                    <p
+                      className="text-[11px] font-semibold uppercase tracking-wider"
+                      style={{ color: "color-mix(in srgb, var(--secondary) 70%, var(--sidebar-text))" }}
+                    >
                       {flyoutMenu.group.title}
                     </p>
                     <button
                       type="button"
                       onClick={() => setFlyoutMenu(null)}
-                      className="rounded p-0.5 text-slate-400 hover:text-white hover:bg-sidebar-hover transition"
+                      className="rounded p-0.5 text-sidebar-muted hover:text-sidebar-text hover:bg-sidebar-hover transition"
                       aria-label="Close menu"
                     >
                       <X className="h-3 w-3" />
@@ -628,16 +634,16 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                               "flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
                               active
                                 ? "bg-sidebar-active font-semibold text-white shadow-2xs"
-                                : "text-white hover:bg-sidebar-hover",
+                                : "text-sidebar-text hover:bg-sidebar-hover",
                             )}
                           >
                             <ItemIcon
                               className={cn(
                                 "h-3.5 w-3.5 shrink-0",
-                                active ? "text-brand-400" : "text-white/90",
+                                active ? "text-white" : "text-sidebar-muted",
                               )}
                             />
-                            <span className="truncate text-white font-medium">{label}</span>
+                            <span className="truncate font-medium">{label}</span>
                           </Link>
                         </li>
                       );
@@ -919,7 +925,7 @@ function SelfProfileModal(props: {
                         <span>College Scope</span>
                       </div>
                       <p className="text-xs font-bold text-navy-950">
-                        {primaryRole?.collegeName || "Pydah College of Engineering"}
+                        {primaryRole?.collegeName || "Campo College of Engineering"}
                       </p>
                     </div>
 

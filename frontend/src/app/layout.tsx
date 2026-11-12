@@ -10,9 +10,9 @@ const sourceSans = Source_Sans_3({
 });
 
 export const metadata: Metadata = {
-  applicationName: "Pydah Academic Portal",
-  title: "Pydah Academic Portal",
-  description: "Pydah Group Academic Portal",
+  applicationName: "Campo Academic Portal",
+  title: "Campo Academic Portal",
+  description: "Campo Group Academic Portal",
   icons: {
     icon: [
       { url: "/branding/favicon-16.png", sizes: "16x16", type: "image/png" },
@@ -34,9 +34,9 @@ export const metadata: Metadata = {
     statusBarStyle: "default",
   },
   openGraph: {
-    title: "Pydah Academic Portal",
-    description: "Pydah Group Academic Portal",
-    siteName: "Pydah Academic Portal",
+    title: "Campo Academic Portal",
+    description: "Campo Group Academic Portal",
+    siteName: "Campo Academic Portal",
   },
 };
 

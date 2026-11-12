@@ -20,12 +20,12 @@ export function Modal({ title, children, onClose, wide, headerActions }: Props) 
         onClick={onClose}
       />
       <div
-        className={`relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-xl border border-border bg-white shadow-xl ${
+        className={`relative flex max-h-[90vh] w-full flex-col overflow-hidden rounded-xl border border-border bg-surface text-text-main shadow-xl ${
           wide ? "max-w-3xl" : "max-w-2xl"
         }`}
       >
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-white px-5 py-3">
-          <h3 className="font-semibold text-navy-900">{title}</h3>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border bg-surface px-5 py-3">
+          <h3 className="font-semibold text-primary">{title}</h3>
           <div className="flex flex-wrap items-center justify-end gap-2">
             {headerActions}
             <Button variant="ghost" size="sm" onClick={onClose}>

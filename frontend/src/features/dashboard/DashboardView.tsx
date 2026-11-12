@@ -945,13 +945,21 @@ export function DashboardView() {
                   <div className="h-48">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={attendance.bands} layout="vertical" margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                        <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border)" />
                         <XAxis type="number" hide />
-                        <YAxis dataKey="label" type="category" width={80} tick={{ fontSize: 12 }} />
-                        <Tooltip cursor={{ fill: 'transparent' }} contentStyle={{ borderRadius: '6px' }} />
+                        <YAxis dataKey="label" type="category" width={80} tick={{ fontSize: 12, fill: "var(--text-secondary)" }} />
+                        <Tooltip
+                          cursor={{ fill: "transparent" }}
+                          contentStyle={{
+                            borderRadius: "6px",
+                            backgroundColor: "var(--surface)",
+                            borderColor: "var(--border)",
+                            color: "var(--text-primary)",
+                          }}
+                        />
                         <Bar 
                           dataKey="total" 
-                          fill="#0FAF83" 
+                          fill="var(--primary)" 
                           radius={[0, 4, 4, 0]}
                           barSize={24}
                         />

@@ -17,7 +17,7 @@ export function DataErrorState({
         description="Ensure the backend API is running and database credentials are valid."
       />
       <Card>
-        <p className="text-sm text-critical">{message}</p>
+        <p className="text-sm text-danger">{message}</p>
       </Card>
     </div>
   );

@@ -547,7 +547,7 @@ export function PrincipalDashboard({
               .catch((e) => setError(e?.message || "Network error"))
               .finally(() => setLoading(false));
           }}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 transition-colors cursor-pointer"
+          className="px-4 py-2 bg-primary text-white rounded-lg text-xs font-semibold hover:bg-primary-hover transition-colors cursor-pointer"
         >
           Try Again
         </button>
@@ -558,7 +558,7 @@ export function PrincipalDashboard({
   if (!current) return null;
 
   return (
-    <div className="space-y-4 sm:space-y-5 pb-6 font-sans bg-[#f8fafc] -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6">
+    <div className="space-y-4 sm:space-y-5 pb-6 font-sans bg-background -mx-4 sm:-mx-6 -mt-6 p-4 sm:p-6">
       {/* 2. TOP METRIC CARDS ROW (6 CARDS) */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3">
         
@@ -773,7 +773,7 @@ export function PrincipalDashboard({
                       onClick={() => setOverviewYearFilter(tab.value as any)}
                       className={`px-2 py-0.5 rounded-md transition-all cursor-pointer text-[11px] ${
                         overviewYearFilter === tab.value
-                          ? "bg-white text-blue-700 shadow-xs font-bold"
+                          ? "bg-white text-primary shadow-xs font-bold"
                           : "text-slate-600 hover:text-slate-900"
                       }`}
                     >
@@ -785,7 +785,7 @@ export function PrincipalDashboard({
                 <button
                   type="button"
                   onClick={() => setActiveModal("dept_overview")}
-                  className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer ml-1"
+                  className="text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 cursor-pointer ml-1"
                 >
                   View All &gt;
                 </button>
@@ -1078,7 +1078,7 @@ export function PrincipalDashboard({
               <button
                 type="button"
                 onClick={() => setActiveModal("priorities")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                className="text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 cursor-pointer"
               >
                 View All &gt;
               </button>
@@ -1162,7 +1162,7 @@ export function PrincipalDashboard({
               <button
                 type="button"
                 onClick={() => setActiveModal("section_att")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                className="text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 cursor-pointer"
               >
                 View All &gt;
               </button>
@@ -1175,19 +1175,19 @@ export function PrincipalDashboard({
                   data={(current.slotAttendance || current.sectionAttendance) as any[]}
                   margin={{ top: 20, right: 10, left: -20, bottom: 5 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                   <XAxis
                     dataKey={(current.slotAttendance && current.slotAttendance.length > 0) ? "slot" : "department"}
                     tickLine={false}
-                    axisLine={{ stroke: "#e2e8f0" }}
-                    tick={{ fill: "#64748b", fontSize: 11 }}
+                    axisLine={{ stroke: "var(--border)" }}
+                    tick={{ fill: "var(--text-secondary)", fontSize: 11 }}
                     tickFormatter={(val) => `${val}`}
                   />
                   <YAxis
                     domain={[0, 100]}
                     tickLine={false}
                     axisLine={false}
-                    tick={{ fill: "#94a3b8", fontSize: 10 }}
+                    tick={{ fill: "var(--text-muted)", fontSize: 10 }}
                     ticks={[0, 25, 50, 75, 100]}
                   />
                   <Tooltip
@@ -1200,7 +1200,13 @@ export function PrincipalDashboard({
                         : "";
                       return [`${value}%${sub}`, "Attendance"];
                     }}
-                    contentStyle={{ borderRadius: "8px", fontSize: "12px", border: "1px solid #e2e8f0" }}
+                    contentStyle={{
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      backgroundColor: "var(--surface)",
+                      borderColor: "var(--border)",
+                      color: "var(--text-primary)",
+                    }}
                   />
                   <Bar
                     dataKey="attendance"
@@ -1214,12 +1220,12 @@ export function PrincipalDashboard({
                     <LabelList
                       dataKey="label"
                       position="top"
-                      style={{ fill: "#1e293b", fontSize: 12, fontWeight: 700 }}
+                      style={{ fill: "var(--text-primary)", fontSize: 12, fontWeight: 700 }}
                     />
                     {(current.slotAttendance || current.sectionAttendance).map((entry, index) => (
                       <Cell
                         key={`cell-${index}`}
-                        fill={entry.fill}
+                        fill={entry.fill || "var(--primary)"}
                         cursor="pointer"
                         className="hover:opacity-80 transition-opacity"
                         onClick={() => setSelectedSlotData(entry)}
@@ -1368,7 +1374,7 @@ export function PrincipalDashboard({
               <button
                 type="button"
                 onClick={() => setActiveModal("faculty_adjustment")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                className="text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 cursor-pointer"
               >
                 View All &gt;
               </button>
@@ -1490,7 +1496,7 @@ export function PrincipalDashboard({
               <button
                 type="button"
                 onClick={() => setActiveModal("fee_dues")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                className="text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 cursor-pointer"
               >
                 View All &gt;
               </button>
@@ -1588,7 +1594,7 @@ export function PrincipalDashboard({
               <button
                 type="button"
                 onClick={() => setActiveModal("approvals_deadlines")}
-                className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-0.5 cursor-pointer"
+                className="text-xs font-semibold text-primary hover:text-primary-hover flex items-center gap-0.5 cursor-pointer"
               >
                 View All &gt;
               </button>
@@ -1601,7 +1607,7 @@ export function PrincipalDashboard({
                 onClick={() => setApprovalTab("deadlines")}
                 className={`pb-2 transition-colors cursor-pointer ${
                   approvalTab === "deadlines"
-                    ? "text-blue-600 border-b-2 border-blue-600"
+                    ? "text-primary border-b-2 border-primary"
                     : "text-slate-400 hover:text-slate-600"
                 }`}
               >
@@ -1612,7 +1618,7 @@ export function PrincipalDashboard({
                 onClick={() => setApprovalTab("approvals")}
                 className={`pb-2 transition-colors cursor-pointer ${
                   approvalTab === "approvals"
-                    ? "text-blue-600 border-b-2 border-blue-600"
+                    ? "text-primary border-b-2 border-primary"
                     : "text-slate-400 hover:text-slate-600"
                 }`}
               >
@@ -1623,7 +1629,7 @@ export function PrincipalDashboard({
                 onClick={() => setApprovalTab("leaves_ods")}
                 className={`pb-2 transition-colors cursor-pointer ${
                   approvalTab === "leaves_ods"
-                    ? "text-blue-600 border-b-2 border-blue-600"
+                    ? "text-primary border-b-2 border-primary"
                     : "text-slate-400 hover:text-slate-600"
                 }`}
               >
@@ -2467,7 +2473,7 @@ export function PrincipalDashboard({
                       onClick={() => setFacultyModalTab("employees")}
                       className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
                         facultyModalTab === "employees"
-                          ? "bg-blue-600 text-white shadow-xs"
+                          ? "bg-primary text-white shadow-xs"
                           : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
                     >
@@ -2478,7 +2484,7 @@ export function PrincipalDashboard({
                       onClick={() => setFacultyModalTab("leaves")}
                       className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
                         facultyModalTab === "leaves"
-                          ? "bg-blue-600 text-white shadow-xs"
+                          ? "bg-primary text-white shadow-xs"
                           : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
                     >
@@ -2489,7 +2495,7 @@ export function PrincipalDashboard({
                       onClick={() => setFacultyModalTab("ods")}
                       className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
                         facultyModalTab === "ods"
-                          ? "bg-blue-600 text-white shadow-xs"
+                          ? "bg-primary text-white shadow-xs"
                           : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
                     >
@@ -2500,7 +2506,7 @@ export function PrincipalDashboard({
                       onClick={() => setFacultyModalTab("permissions")}
                       className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
                         facultyModalTab === "permissions"
-                          ? "bg-blue-600 text-white shadow-xs"
+                          ? "bg-primary text-white shadow-xs"
                           : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
                     >
@@ -2511,7 +2517,7 @@ export function PrincipalDashboard({
                       onClick={() => setFacultyModalTab("adjustments")}
                       className={`px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
                         facultyModalTab === "adjustments"
-                          ? "bg-blue-600 text-white shadow-xs"
+                          ? "bg-primary text-white shadow-xs"
                           : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
                     >

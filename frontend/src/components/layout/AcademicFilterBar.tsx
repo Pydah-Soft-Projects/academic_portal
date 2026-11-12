@@ -12,10 +12,10 @@ import { SectionMultiSelectFilter } from "@/features/timetables/SectionMultiSele
 import { CheckCircle2 } from "lucide-react";
 
 const selectClassName =
-  "h-11 sm:h-9 w-full sm:w-auto sm:min-w-[140px] rounded-md border border-border bg-white px-2 text-sm text-foreground outline-none focus:border-navy-800";
+  "h-11 sm:h-9 w-full sm:w-auto sm:min-w-[140px] rounded-md border border-border-strong bg-surface px-2 text-sm text-text-main outline-none focus:border-primary";
 
 const searchClassName =
-  "h-11 sm:h-9 w-full sm:min-w-[220px] rounded-md border border-border bg-white px-3 text-sm text-foreground outline-none focus:border-navy-800";
+  "h-11 sm:h-9 w-full sm:min-w-[220px] rounded-md border border-border-strong bg-surface px-3 text-sm text-text-main outline-none focus:border-primary";
 
 type Props = {
   title?: string;

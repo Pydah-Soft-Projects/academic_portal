@@ -50,12 +50,12 @@ export function TopHeader({ onMenuClick }: Props) {
     "AY 2024-25";
 
   return (
-    <header className="sticky top-0 z-20 shrink-0 border-b border-border/80 bg-white/95 backdrop-blur-md shadow-2xs">
+    <header className="sticky top-0 z-20 shrink-0 border-b border-navbar-border bg-navbar/95 backdrop-blur-md shadow-2xs">
       <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 px-3 py-2 sm:px-6 sm:py-2.5">
         <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
           <button
             type="button"
-            className="rounded-lg bg-slate-100 p-1.5 sm:p-2 text-slate-700 hover:bg-slate-200 lg:hidden active:scale-95 transition-transform"
+            className="rounded-lg bg-background p-1.5 sm:p-2 text-text-main hover:bg-primary-light lg:hidden active:scale-95 transition-transform"
             onClick={onMenuClick}
             aria-label="Open navigation"
           >
@@ -64,32 +64,32 @@ export function TopHeader({ onMenuClick }: Props) {
 
           {/* Mobile Title View with increased text size */}
           <div className="flex sm:hidden items-center gap-1.5 min-w-0">
-            <span className="truncate text-sm sm:text-base font-bold text-navy-900 tracking-tight">
+            <span className="truncate text-sm sm:text-base font-bold text-primary tracking-tight">
               {currentTitle}
             </span>
             {teachingStaffOnly && (
-              <span className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-700 border border-brand-200">
+              <span className="shrink-0 rounded-full bg-primary-light px-2 py-0.5 text-[10px] font-bold text-primary border border-primary/25">
                 Staff
               </span>
             )}
           </div>
 
           {/* Desktop Breadcrumbs View with increased text size */}
-          <div className="hidden sm:flex items-center gap-1.5 truncate text-[14.5px] lg:text-[15.5px] font-medium text-slate-600">
-            <Link href="/dashboard" className="hover:text-navy-900 transition-colors">
+          <div className="hidden sm:flex items-center gap-1.5 truncate text-[14.5px] lg:text-[15.5px] font-medium text-text-sub">
+            <Link href="/dashboard" className="hover:text-primary transition-colors">
               Academic Portal
             </Link>
             {breadcrumbs.map((segment, index) => {
               const isLast = index === breadcrumbs.length - 1;
               return (
                 <span key={`${segment.label}-${index}`} className="flex items-center gap-1.5 truncate">
-                  <span className="text-slate-300 font-normal select-none">/</span>
+                  <span className="text-text-muted font-normal select-none">/</span>
                   {segment.href && !isLast ? (
-                    <Link href={segment.href} className="hover:text-navy-900 transition-colors">
+                    <Link href={segment.href} className="hover:text-primary transition-colors">
                       {segment.label}
                     </Link>
                   ) : (
-                    <span className={cn("truncate", isLast ? "font-bold text-navy-900" : "font-medium text-slate-700")}>
+                    <span className={cn("truncate", isLast ? "font-bold text-primary" : "font-medium text-text-main")}>
                       {segment.label}
                     </span>
                   )}
@@ -101,7 +101,7 @@ export function TopHeader({ onMenuClick }: Props) {
 
         {/* Date, Academic Year, and Semester Controls in Top Header */}
         {showDateAndScopeControls && (
-          <div className="order-last sm:order-none w-full sm:w-auto flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-1 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+          <div className="order-last sm:order-none w-full sm:w-auto flex items-center justify-between sm:justify-start gap-1 sm:gap-2 pt-1 sm:pt-0 border-t sm:border-t-0 border-border">
             {/* College Dropdown (Displayed only if Principal has access to 2 or more colleges) */}
             {hasMultipleColleges && (
               <div className="relative">
@@ -115,7 +115,7 @@ export function TopHeader({ onMenuClick }: Props) {
                       section: "all",
                     });
                   }}
-                  className="appearance-none h-7 sm:h-8 rounded-lg border border-slate-200 bg-slate-50 pl-2 pr-6 text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer max-w-[130px] sm:max-w-[180px] truncate"
+                  className="appearance-none h-7 sm:h-8 rounded-lg border border-border-strong bg-background pl-2 pr-6 text-[10.5px] sm:text-xs font-semibold text-text-main outline-none hover:bg-primary-light/60 transition-colors cursor-pointer max-w-[130px] sm:max-w-[180px] truncate"
                   title="Select College"
                 >
                   <option value="all">All Colleges</option>
@@ -125,7 +125,7 @@ export function TopHeader({ onMenuClick }: Props) {
                     </option>
                   ))}
                 </select>
-                <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-slate-400 pointer-events-none" />
+                <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-text-muted pointer-events-none" />
               </div>
             )}
 
@@ -141,7 +141,7 @@ export function TopHeader({ onMenuClick }: Props) {
                       section: "all",
                     });
                   }}
-                  className="appearance-none h-7 sm:h-8 rounded-lg border border-slate-200 bg-slate-50 pl-2 pr-6 text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer max-w-[150px] sm:max-w-[210px] truncate"
+                  className="appearance-none h-7 sm:h-8 rounded-lg border border-border-strong bg-background pl-2 pr-6 text-[10.5px] sm:text-xs font-semibold text-text-main outline-none hover:bg-primary-light/60 transition-colors cursor-pointer max-w-[150px] sm:max-w-[210px] truncate"
                   title="Select Department / Branch"
                 >
                   {accessibleBranches.map((b) => {
@@ -154,13 +154,13 @@ export function TopHeader({ onMenuClick }: Props) {
                     );
                   })}
                 </select>
-                <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-slate-400 pointer-events-none" />
+                <ChevronDown className="absolute right-1.5 top-2 sm:top-2.5 h-3 w-3 text-text-muted pointer-events-none" />
               </div>
             )}
 
             {/* Interactive Date Range Picker */}
-            <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg border border-slate-200 bg-slate-50 text-[10.5px] sm:text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-100 transition-colors h-7 sm:h-8">
-              <Calendar className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-slate-500 shrink-0" />
+            <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg border border-border-strong bg-background text-[10.5px] sm:text-xs font-semibold text-text-main shadow-2xs hover:bg-primary-light/60 transition-colors h-7 sm:h-8">
+              <Calendar className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-text-sub shrink-0" />
               <input
                 type="date"
                 value={filters.startDate || filters.date}
@@ -169,10 +169,10 @@ export function TopHeader({ onMenuClick }: Props) {
                   const newEnd = (filters.endDate && filters.endDate < newStart) ? newStart : (filters.endDate || newStart);
                   setFilters({ startDate: newStart, endDate: newEnd, date: newStart });
                 }}
-                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none cursor-pointer w-[92px] sm:w-[110px]"
+                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-text-main outline-none cursor-pointer w-[92px] sm:w-[110px]"
                 title="Start Date"
               />
-              <span className="text-slate-400 font-normal select-none text-[10px] sm:text-[11px]">to</span>
+              <span className="text-text-muted font-normal select-none text-[10px] sm:text-[11px]">to</span>
               <input
                 type="date"
                 value={filters.endDate || filters.startDate || filters.date}
@@ -182,7 +182,7 @@ export function TopHeader({ onMenuClick }: Props) {
                   const newStart = (filters.startDate && filters.startDate > newEnd) ? newEnd : (filters.startDate || newEnd);
                   setFilters({ startDate: newStart, endDate: newEnd, date: newStart });
                 }}
-                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none cursor-pointer w-[92px] sm:w-[110px]"
+                className="bg-transparent text-[10.5px] sm:text-xs font-semibold text-text-main outline-none cursor-pointer w-[92px] sm:w-[110px]"
                 title="End Date"
               />
             </div>
@@ -192,7 +192,7 @@ export function TopHeader({ onMenuClick }: Props) {
               <select
                 value={currentAY}
                 onChange={(e) => setFilters({ academicYear: e.target.value })}
-                className="appearance-none h-7 sm:h-8 rounded-lg border border-slate-200 bg-slate-50 pl-2 pr-5 text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer max-w-[100px] sm:max-w-none truncate"
+                className="appearance-none h-7 sm:h-8 rounded-lg border border-border-strong bg-background pl-2 pr-5 text-[10.5px] sm:text-xs font-semibold text-text-main outline-none hover:bg-primary-light/60 transition-colors cursor-pointer max-w-[100px] sm:max-w-none truncate"
                 title="Academic Year"
               >
                 {(masters?.academicYears ?? []).length > 0 ? (
@@ -205,7 +205,7 @@ export function TopHeader({ onMenuClick }: Props) {
                   <option value={currentAY}>{currentAY}</option>
                 )}
               </select>
-              <ChevronDown className="absolute right-1 top-2 h-3 w-3 text-slate-400 pointer-events-none" />
+              <ChevronDown className="absolute right-1 top-2 h-3 w-3 text-text-muted pointer-events-none" />
             </div>
 
             {/* Semester Dropdown */}
@@ -213,13 +213,13 @@ export function TopHeader({ onMenuClick }: Props) {
               <select
                 value={filters.semester === 2 ? 2 : 1}
                 onChange={(e) => setFilters({ semester: Number(e.target.value) })}
-                className="appearance-none h-7 sm:h-8 rounded-lg border border-slate-200 bg-slate-50 pl-2 pr-5 text-[10.5px] sm:text-xs font-semibold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer"
+                className="appearance-none h-7 sm:h-8 rounded-lg border border-border-strong bg-background pl-2 pr-5 text-[10.5px] sm:text-xs font-semibold text-text-main outline-none hover:bg-primary-light/60 transition-colors cursor-pointer"
                 title="Semester"
               >
                 <option value={1}>Sem I</option>
                 <option value={2}>Sem II</option>
               </select>
-              <ChevronDown className="absolute right-1 top-2 h-3 w-3 text-slate-400 pointer-events-none" />
+              <ChevronDown className="absolute right-1 top-2 h-3 w-3 text-text-muted pointer-events-none" />
             </div>
           </div>
         )}
@@ -229,9 +229,9 @@ export function TopHeader({ onMenuClick }: Props) {
             <div
               role="status"
               aria-label="Synchronizing academic data"
-              className="flex items-center gap-1.5 rounded-full border border-blue-200/90 bg-blue-50/90 px-2 sm:px-2.5 py-0.5 text-[11px] font-semibold text-blue-900 shadow-2xs"
+              className="flex items-center gap-1.5 rounded-full border border-info/30 bg-info-light px-2 sm:px-2.5 py-0.5 text-[11px] font-semibold text-info shadow-2xs"
             >
-              <span className="h-2 w-2 rounded-full border-[1.5px] border-blue-700 border-t-transparent animate-spin shrink-0" />
+              <span className="h-2 w-2 rounded-full border-[1.5px] border-info border-t-transparent animate-spin shrink-0" />
               <span className="hidden sm:inline">Updating…</span>
             </div>
           )}
@@ -239,7 +239,7 @@ export function TopHeader({ onMenuClick }: Props) {
           <Link
             href="/alerts"
             aria-label="Alerts"
-            className="relative rounded-lg border border-border p-2 text-slate-600 hover:bg-slate-50 active:scale-95 transition-transform"
+            className="relative rounded-lg border border-border p-2 text-text-sub hover:bg-primary-light/60 hover:text-primary active:scale-95 transition-transform"
             title="Alerts"
           >
             <Bell className="h-4 w-4" />

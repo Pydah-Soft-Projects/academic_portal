@@ -2,9 +2,9 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Pydah Academic Portal",
+    name: "Campo Academic Portal",
     short_name: "Academic Portal",
-    description: "Pydah Group Academic Portal",
+    description: "Campo Group Academic Portal",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

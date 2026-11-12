@@ -1180,7 +1180,7 @@ export function RolesPermissionsPanel({ canManage }: Props) {
                                         className={cn(
                                           "rounded-md px-2.5 py-1 text-xs font-semibold transition-all cursor-pointer",
                                           level === "view"
-                                            ? "bg-blue-600 text-white shadow-2xs"
+                                            ? "bg-primary text-white shadow-2xs"
                                             : "text-slate-600 hover:text-navy-900"
                                         )}
                                       >

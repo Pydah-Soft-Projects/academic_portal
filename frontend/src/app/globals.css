@@ -5,6 +5,14 @@
   --navy-950: #0F2742; /* Dark Navy */
   --navy-900: #123B63; /* Academic Navy */
   --navy-800: #1a4d80;
+  --navy-700: #225c96;
+  --navy-600: #2c6dae;
+  --navy-500: #3d7fc0;
+  --navy-400: #6697ce;
+  --navy-300: #9bbbe0;
+  --navy-200: #c8daee;
+  --navy-100: #e5edf6;
+  --navy-50: #f3f6fa;
 
   /* Text & Structure (Mapped over old slate variables) */
   --slate-700: #123B63; /* Primary Text */
@@ -15,16 +23,22 @@
   --slate-50: #EAF4FB;  /* Soft Blue (Light Accent) */
 
   /* Status Colors */
-  --success: #0FAF83; /* Pydah Teal */
+  --success: #0FAF83; /* Campo Teal */
   --warning: #f59e0b; /* Soft Amber */
   --critical: #ef4444; /* Restrained Red */
   --info: #1e40af;    /* Dark Blue for Info Text */
 
   /* Brand / Teal Accent */
   --brand-50: #e6f7f2; /* Light teal bg */
-  --brand-600: #0FAF83; /* Pydah Teal */
+  --brand-100: #ccefe5;
+  --brand-200: #99dfcb;
+  --brand-300: #66cfb1;
+  --brand-400: #33bf97;
+  --brand-500: #18b88c;
+  --brand-600: #0FAF83; /* Campo Teal */
   --brand-700: #087F68; /* Dark Teal */
   --brand-800: #065c4b;
+  --brand-900: #043d32;
 
   /* App Level */
   --background: #F3F7FB; /* Main Background */
@@ -37,31 +51,207 @@
   --sidebar-active: #1e40af;
   --sidebar-border: #1e3a5f;
   --sidebar-hover: rgba(255, 255, 255, 0.1);
+
+  /* Centralized Theme Token Fallbacks (active only inside portal) */
+  --primary: #123B63;
+  --primary-hover: #0F2742;
+  --primary-light: #EAF4FB;
+  --primary-rgb: 18, 59, 99;
+  --primary-50: #f3f6fa;
+  --primary-100: #e5edf6;
+  --primary-200: #c8daee;
+  --primary-300: #9bbbe0;
+  --primary-400: #6697ce;
+  --primary-500: #1a4d80;
+  --primary-600: #123B63;
+  --primary-700: #0F2742;
+  --primary-800: #0b1e33;
+  --primary-900: #081524;
+  --secondary: #0FAF83;
+  --secondary-rgb: 15, 175, 131;
+  --secondary-50: #e6f7f2;
+  --secondary-100: #ccefe5;
+  --secondary-200: #99dfcb;
+  --secondary-300: #66cfb1;
+  --secondary-400: #33bf97;
+  --secondary-500: #0FAF83;
+  --secondary-600: #087F68;
+  --secondary-700: #065c4b;
+  --secondary-800: #044337;
+  --secondary-900: #032d25;
+  --accent: #0FAF83;
+  --accent-rgb: 15, 175, 131;
+  --surface: #FFFFFF;
+  --surface-rgb: 255, 255, 255;
+  --background-rgb: 243, 247, 251;
+  --sidebar-text: #FFFFFF;
+  --navbar: #FFFFFF;
+  --navbar-border: #E5EDF4;
+  --text-primary: #123B63;
+  --text-secondary: #5F7388;
+  --text-muted: #8A9AAC;
+  --border-strong: #CBD5E1;
+  --danger: #ef4444;
+  --success-light: rgba(15, 175, 131, 0.12);
+  --warning-light: rgba(245, 158, 11, 0.12);
+  --danger-light: rgba(239, 68, 68, 0.12);
+  --info-light: rgba(30, 64, 175, 0.12);
+}
+
+/* Lock Login & Landing pages strictly to untouched default palette */
+:root:root:not([data-portal-theme="true"]) {
+  --navy-950: #0F2742;
+  --navy-900: #123B63;
+  --navy-800: #1a4d80;
+  --slate-700: #123B63;
+  --slate-500: #5F7388;
+  --slate-300: #8A9AAC;
+  --slate-200: #DCE6EF;
+  --slate-100: #F8FBFD;
+  --slate-50: #EAF4FB;
+  --success: #0FAF83;
+  --warning: #f59e0b;
+  --critical: #ef4444;
+  --info: #1e40af;
+  --brand-50: #e6f7f2;
+  --brand-600: #0FAF83;
+  --brand-700: #087F68;
+  --brand-800: #065c4b;
+  --background: #F3F7FB;
+  --foreground: #123B63;
+  --card: #FFFFFF;
+  --border: #E5EDF4;
+  --sidebar: #0F2742;
+  --sidebar-foreground: #FFFFFF;
+  --sidebar-muted: #CBD5E1;
+  --sidebar-active: #1e40af;
+  --sidebar-border: #1e3a5f;
+  --sidebar-hover: rgba(255, 255, 255, 0.1);
+}
+
+/* Scoped Centralized Theme Bridge for Authenticated Portal Shell & Sidebar Pages */
+html[data-portal-theme="true"] {
+  --navy-50: var(--primary-50);
+  --navy-100: var(--primary-100);
+  --navy-200: var(--primary-200);
+  --navy-300: var(--primary-300);
+  --navy-400: var(--primary-400);
+  --navy-500: var(--primary-500);
+  --navy-600: var(--primary-600);
+  --navy-700: var(--primary-700);
+  --navy-800: var(--primary-hover);
+  --navy-900: var(--primary);
+  --navy-950: var(--text-primary);
+
+  --brand-50: var(--primary-light);
+  --brand-100: var(--secondary-100);
+  --brand-200: var(--secondary-200);
+  --brand-300: var(--secondary-300);
+  --brand-400: var(--accent);
+  --brand-500: var(--secondary);
+  --brand-600: var(--primary);
+  --brand-700: var(--primary-hover);
+  --brand-800: var(--primary-800);
+  --brand-900: var(--primary-900);
+
+  --slate-50: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  --slate-100: var(--background);
+  --slate-200: var(--border);
+  --slate-300: var(--text-muted);
+  --slate-500: var(--text-secondary);
+  --slate-700: var(--text-primary);
+
+  --foreground: var(--text-primary);
+  --card: var(--surface);
+  --critical: var(--danger);
+  --sidebar-foreground: var(--sidebar-text);
+  --sidebar-active: var(--primary);
+  --sidebar-border: color-mix(in srgb, var(--sidebar-text) 14%, var(--sidebar));
+  --sidebar-hover: color-mix(in srgb, var(--sidebar-text) 10%, transparent);
 }
 
 @theme inline {
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-light: var(--primary-light);
+  --color-primary-50: var(--primary-50);
+  --color-primary-100: var(--primary-100);
+  --color-primary-200: var(--primary-200);
+  --color-primary-300: var(--primary-300);
+  --color-primary-400: var(--primary-400);
+  --color-primary-500: var(--primary-500);
+  --color-primary-600: var(--primary-600);
+  --color-primary-700: var(--primary-700);
+  --color-primary-800: var(--primary-800);
+  --color-primary-900: var(--primary-900);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-50: var(--secondary-50);
+  --color-secondary-100: var(--secondary-100);
+  --color-secondary-200: var(--secondary-200);
+  --color-secondary-300: var(--secondary-300);
+  --color-secondary-400: var(--secondary-400);
+  --color-secondary-500: var(--secondary-500);
+  --color-secondary-600: var(--secondary-600);
+  --color-secondary-700: var(--secondary-700);
+  --color-secondary-800: var(--secondary-800);
+  --color-secondary-900: var(--secondary-900);
+
+  --color-accent: var(--accent);
+  --color-surface: var(--surface);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
+  --color-navbar: var(--navbar);
+  --color-navbar-border: var(--navbar-border);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text-main: var(--text-primary);
+  --color-text-sub: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+
   --color-navy-950: var(--navy-950);
   --color-navy-900: var(--navy-900);
   --color-navy-800: var(--navy-800);
+  --color-navy-700: var(--navy-700);
+  --color-navy-600: var(--navy-600);
+  --color-navy-500: var(--navy-500);
+  --color-navy-400: var(--navy-400);
+  --color-navy-300: var(--navy-300);
+  --color-navy-200: var(--navy-200);
+  --color-navy-100: var(--navy-100);
+  --color-navy-50: var(--navy-50);
+
   --color-slate-700: var(--slate-700);
   --color-slate-500: var(--slate-500);
   --color-slate-300: var(--slate-300);
   --color-slate-200: var(--slate-200);
   --color-slate-100: var(--slate-100);
   --color-slate-50: var(--slate-50);
+
   --color-success: var(--success);
+  --color-success-light: var(--success-light);
   --color-warning: var(--warning);
+  --color-warning-light: var(--warning-light);
   --color-critical: var(--critical);
+  --color-danger: var(--danger);
+  --color-danger-light: var(--danger-light);
   --color-info: var(--info);
+  --color-info-light: var(--info-light);
+
   --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
   --color-brand-600: var(--brand-600);
   --color-brand-700: var(--brand-700);
   --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+
   --color-sidebar: var(--sidebar);
+  --color-sidebar-text: var(--sidebar-text);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-muted: var(--sidebar-muted);
   --color-sidebar-active: var(--sidebar-active);
@@ -364,7 +554,7 @@ select {
 }
 
 /* =========================================================================
-   Pydah Academic Portal - Premium Loading & Skeleton Shimmer System
+   Campo Academic Portal - Premium Loading & Skeleton Shimmer System
    ========================================================================= */
 
 @keyframes portalShimmer {
@@ -399,6 +589,127 @@ select {
   );
   background-size: 250% 100%;
   animation: portalShimmer 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+@media screen {
+  html[data-portal-theme="true"] .portal-shimmer {
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--border) 80%, var(--background)) 0%,
+      color-mix(in srgb, var(--surface) 92%, var(--primary-light)) 50%,
+      color-mix(in srgb, var(--border) 80%, var(--background)) 100%
+    );
+    background-size: 250% 100%;
+  }
+
+  html[data-portal-theme="true"] {
+    /* Primary Scale mapped dynamically over legacy blue utilities on sidebar pages */
+    --color-blue-50: var(--primary-light);
+    --color-blue-100: var(--primary-100);
+    --color-blue-200: var(--primary-200);
+    --color-blue-300: var(--primary-300);
+    --color-blue-400: var(--primary-400);
+    --color-blue-500: var(--primary);
+    --color-blue-600: var(--primary);
+    --color-blue-700: var(--primary-hover);
+    --color-blue-800: var(--primary-800);
+    --color-blue-900: var(--primary-900);
+    --color-blue-950: var(--text-primary);
+
+    /* Secondary Scale mapped dynamically over legacy indigo utilities on sidebar pages */
+    --color-indigo-50: var(--secondary-50);
+    --color-indigo-100: var(--secondary-100);
+    --color-indigo-200: var(--secondary-200);
+    --color-indigo-300: var(--secondary-300);
+    --color-indigo-400: var(--secondary-400);
+    --color-indigo-500: var(--secondary);
+    --color-indigo-600: var(--secondary);
+    --color-indigo-700: var(--secondary-700);
+    --color-indigo-800: var(--secondary-800);
+    --color-indigo-900: var(--secondary-900);
+    --color-indigo-950: var(--text-primary);
+  }
+
+  html[data-portal-theme="true"] .portal-shimmer-subtle {
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--background) 85%, var(--border)) 0%,
+      var(--surface) 50%,
+      color-mix(in srgb, var(--background) 85%, var(--border)) 100%
+    );
+    background-size: 250% 100%;
+  }
+
+  /* Bridge legacy hardcoded utility surfaces/text inside authenticated portal pages */
+  html[data-portal-theme="true"] .bg-white:not(.keep-white) {
+    background-color: var(--surface);
+  }
+
+  html[data-portal-theme="true"] .bg-white\/95,
+  html[data-portal-theme="true"] .bg-white\/90,
+  html[data-portal-theme="true"] .bg-white\/80,
+  html[data-portal-theme="true"] .bg-white\/60,
+  html[data-portal-theme="true"] .bg-white\/40 {
+    background-color: color-mix(in srgb, var(--surface) 90%, transparent);
+  }
+
+  html[data-portal-theme="true"] .bg-slate-50\/80,
+  html[data-portal-theme="true"] .bg-slate-50\/70,
+  html[data-portal-theme="true"] .bg-slate-50\/60,
+  html[data-portal-theme="true"] .bg-slate-50\/50 {
+    background-color: color-mix(in srgb, var(--primary-light) 65%, var(--surface));
+  }
+
+  html[data-portal-theme="true"] .text-slate-900,
+  html[data-portal-theme="true"] .text-slate-800 {
+    color: var(--text-primary);
+  }
+
+  html[data-portal-theme="true"] .hover\:text-slate-900:hover,
+  html[data-portal-theme="true"] .hover\:text-slate-800:hover {
+    color: var(--text-primary);
+  }
+
+  html[data-portal-theme="true"] .hover\:text-slate-700:hover {
+    color: var(--text-primary);
+  }
+
+  html[data-portal-theme="true"] .hover\:bg-white:hover {
+    background-color: var(--surface);
+  }
+
+  html[data-portal-theme="true"] .hover\:bg-slate-50:hover {
+    background-color: var(--slate-50);
+  }
+
+  html[data-portal-theme="true"] .hover\:bg-slate-100:hover {
+    background-color: var(--background);
+  }
+
+  html[data-portal-theme="true"] .text-slate-600 {
+    color: var(--text-secondary);
+  }
+
+  html[data-portal-theme="true"] .text-slate-400 {
+    color: var(--text-muted);
+  }
+
+  html[data-portal-theme="true"] .border-slate-100 {
+    border-color: var(--border);
+  }
+
+  html[data-portal-theme="true"] .border-slate-300 {
+    border-color: var(--border-strong);
+  }
+
+  html[data-portal-theme="true"] .divide-slate-50 > :not(:last-child),
+  html[data-portal-theme="true"] .divide-slate-100 > :not(:last-child) {
+    border-color: var(--border);
+  }
+
+  html[data-portal-theme="true"] .divide-slate-200 > :not(:last-child) {
+    border-color: var(--border);
+  }
 }
 
 @keyframes portalSpin {

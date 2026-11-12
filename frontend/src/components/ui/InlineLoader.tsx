@@ -30,11 +30,11 @@ export function InlineLoader({
     <div
       role="status"
       aria-label={label || "Loading…"}
-      className={cn("inline-flex items-center gap-2 select-none text-slate-500", className)}
+      className={cn("inline-flex items-center gap-2 select-none text-text-sub", className)}
     >
       <div
         className={cn(
-          "rounded-full border-slate-200 border-t-navy-900 border-r-brand-600 portal-spin shrink-0",
+          "rounded-full border-border border-t-primary border-r-secondary portal-spin shrink-0",
           cfg.ring
         )}
       />

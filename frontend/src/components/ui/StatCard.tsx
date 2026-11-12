@@ -17,27 +17,27 @@ type Props = {
 };
 
 const toneBorderMap = {
-  default: "border-border/80 bg-card",
-  success: "border-emerald-200/90 bg-emerald-50/20",
-  warning: "border-amber-200/90 bg-amber-50/20",
-  critical: "border-rose-200/90 bg-rose-50/20",
-  info: "border-blue-200/90 bg-blue-50/20",
+  default: "border-border bg-surface",
+  success: "border-success/30 bg-success-light",
+  warning: "border-warning/30 bg-warning-light",
+  critical: "border-danger/30 bg-danger-light",
+  info: "border-info/30 bg-info-light",
 };
 
 const tonePillMap = {
-  default: "bg-slate-400",
-  success: "bg-emerald-500",
-  warning: "bg-amber-500",
-  critical: "bg-rose-500",
-  info: "bg-blue-500",
+  default: "bg-text-muted",
+  success: "bg-success",
+  warning: "bg-warning",
+  critical: "bg-danger",
+  info: "bg-info",
 };
 
 const toneValueMap = {
-  default: "text-navy-900",
-  success: "text-emerald-900",
-  warning: "text-amber-900",
-  critical: "text-rose-900",
-  info: "text-blue-900",
+  default: "text-text-main",
+  success: "text-success",
+  warning: "text-warning",
+  critical: "text-danger",
+  info: "text-info",
 };
 
 export function StatCard({
@@ -63,33 +63,33 @@ export function StatCard({
         "group relative flex flex-col justify-between rounded-xl border p-2 sm:p-2.5 shadow-2xs transition-all hover:shadow-xs",
         toneBorderMap[tone],
         isClickable && "cursor-pointer active:scale-[0.98]",
-        selected && "ring-2 ring-navy-800 border-navy-800 bg-navy-50/25 shadow-xs",
+        selected && "ring-2 ring-primary border-primary bg-primary-light/50 shadow-xs",
         className,
       )}
     >
       <div className="flex items-center justify-between gap-1 min-w-0">
         <div className="flex items-center gap-1.5 min-w-0">
           {badge}
-          <p className="truncate text-[9.5px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500">
+          <p className="truncate text-[9.5px] sm:text-[11px] font-bold uppercase tracking-wider text-text-sub">
             {label}
           </p>
         </div>
         {icon ? (
-          <span className="text-slate-400 shrink-0">{icon}</span>
+          <span className="text-text-muted shrink-0">{icon}</span>
         ) : tone !== "default" ? (
           <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", tonePillMap[tone])} />
         ) : null}
       </div>
       <p
         className={cn(
-          "mt-0.5 truncate text-base sm:text-xl font-black tracking-tight leading-tight text-navy-900",
+          "mt-0.5 truncate text-base sm:text-xl font-black tracking-tight leading-tight text-text-main",
           tone !== "default" && toneValueMap[tone],
         )}
       >
         {value}
       </p>
       {hint ? (
-        <p className="mt-0.5 truncate text-[9px] sm:text-[10px] text-slate-400 leading-none print:hidden">
+        <p className="mt-0.5 truncate text-[9px] sm:text-[10px] text-text-muted leading-none print:hidden">
           {hint}
         </p>
       ) : null}
@@ -97,36 +97,36 @@ export function StatCard({
   ) : (
     <div
       className={cn(
-        "group relative rounded-xl sm:rounded-lg border bg-card p-2.5 sm:p-4 shadow-xs transition-all hover:shadow-sm print:p-1.5 print:shadow-none",
+        "group relative rounded-xl sm:rounded-lg border bg-surface p-2.5 sm:p-4 shadow-xs transition-all hover:shadow-sm print:p-1.5 print:shadow-none",
         toneBorderMap[tone],
         isClickable && "cursor-pointer active:scale-[0.98]",
-        selected && "ring-2 ring-navy-800 border-navy-800 bg-navy-50/25 shadow-xs",
+        selected && "ring-2 ring-primary border-primary bg-primary-light/50 shadow-xs",
         className,
       )}
     >
       <div className="flex items-center justify-between gap-1">
         <div className="flex items-center gap-1.5 min-w-0">
           {badge}
-          <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-slate-500 print:text-[9.5px] truncate">
+          <p className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-text-sub print:text-[9.5px] truncate">
             {label}
           </p>
         </div>
         {icon ? (
-          <span className="text-slate-400 shrink-0">{icon}</span>
+          <span className="text-text-muted shrink-0">{icon}</span>
         ) : tone !== "default" ? (
           <span className={cn("h-2 w-2 rounded-full shrink-0", tonePillMap[tone])} />
         ) : null}
       </div>
       <p
         className={cn(
-          "mt-0.5 sm:mt-1.5 text-lg sm:text-2xl font-bold text-navy-900 tracking-tight print:mt-0 print:text-sm truncate",
+          "mt-0.5 sm:mt-1.5 text-lg sm:text-2xl font-bold text-text-main tracking-tight print:mt-0 print:text-sm truncate",
           tone !== "default" && toneValueMap[tone],
         )}
       >
         {value}
       </p>
       {hint ? (
-        <p className="mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-slate-500 print:hidden truncate">
+        <p className="mt-0.5 sm:mt-1 text-[10px] sm:text-xs text-text-sub print:hidden truncate">
           {hint}
         </p>
       ) : null}

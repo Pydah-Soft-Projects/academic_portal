@@ -62,7 +62,7 @@ export function MobileBottomNav({ onMenuClick }: Props) {
   return (
     <nav
       aria-label="Mobile Navigation"
-      className="fixed bottom-0 inset-x-0 z-40 lg:hidden print:hidden border-t border-border/80 bg-white/95 backdrop-blur-md shadow-[0_-4px_20px_rgba(0,0,0,0.06)] pb-[max(0.35rem,env(safe-area-inset-bottom))] transition-transform duration-200"
+      className="fixed bottom-0 inset-x-0 z-40 lg:hidden print:hidden border-t border-navbar-border bg-navbar/95 backdrop-blur-md shadow-[0_-4px_20px_rgba(0,0,0,0.06)] pb-[max(0.35rem,env(safe-area-inset-bottom))] transition-transform duration-200"
     >
       <div className="grid grid-cols-5 items-center h-14 max-w-lg mx-auto px-1">
         {tabs.map((tab) => {
@@ -74,12 +74,12 @@ export function MobileBottomNav({ onMenuClick }: Props) {
               className={cn(
                 "relative flex flex-col items-center justify-center h-full py-1 text-center transition-colors select-none",
                 tab.isActive
-                  ? "text-brand-600 font-bold"
-                  : "text-slate-500 hover:text-slate-800 font-medium",
+                  ? "text-primary font-bold"
+                  : "text-text-sub hover:text-text-main font-medium",
               )}
             >
               {tab.isActive && (
-                <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-brand-600 animate-in fade-in zoom-in-75 duration-150" />
+                <span className="absolute top-0 inset-x-4 h-0.5 rounded-full bg-primary animate-in fade-in zoom-in-75 duration-150" />
               )}
               <div
                 className={cn(
@@ -101,7 +101,7 @@ export function MobileBottomNav({ onMenuClick }: Props) {
           type="button"
           onClick={onMenuClick}
           aria-label="Open all navigation options"
-          className="flex flex-col items-center justify-center h-full py-1 text-center text-slate-500 hover:text-navy-900 transition-colors select-none"
+          className="flex flex-col items-center justify-center h-full py-1 text-center text-text-sub hover:text-primary transition-colors select-none"
         >
           <div className="flex items-center justify-center p-1 rounded-full">
             <Menu className="h-4.5 w-4.5 shrink-0 stroke-[1.8]" />

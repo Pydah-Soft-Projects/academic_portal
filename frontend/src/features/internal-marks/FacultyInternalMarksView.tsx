@@ -443,7 +443,7 @@ export function FacultyInternalMarksView() {
                             ) : sub.status === "approved" || sub.currentApprovalLevel >= maxApprovalLevel ? (
                               <Button
                                 size="sm"
-                                className="bg-indigo-600 text-white hover:bg-indigo-700"
+                                className="bg-primary text-white hover:bg-primary-hover"
                                 disabled={forwardingBusyId === sub.id}
                                 onClick={() => void handleForwardToEms(sub.id)}
                               >
