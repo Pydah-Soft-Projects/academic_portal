@@ -21,15 +21,15 @@ export type PortalBranding = {
 export function getPortalBranding(): PortalBranding {
   return {
     collegeLogo:
-      process.env.NEXT_PUBLIC_COLLEGE_LOGO?.trim() || "/branding/college-logo.svg",
+      process.env.NEXT_PUBLIC_COLLEGE_LOGO?.trim() || "/campo-logos/og-image.png",
     collegeName:
       process.env.NEXT_PUBLIC_COLLEGE_NAME?.trim() || "Campo Group of Institutions",
     portalName: process.env.NEXT_PUBLIC_PORTAL_NAME?.trim() || "ACADEMIC PORTAL",
     appIcon:
       process.env.NEXT_PUBLIC_APP_ICON?.trim() ||
-      "/branding/pydah-academic-portal-icon.png",
+      "/campo-logos/icon-512.png",
     appIconMark:
-      process.env.NEXT_PUBLIC_APP_ICON_MARK?.trim() || "/branding/icon-mark.png",
+      process.env.NEXT_PUBLIC_APP_ICON_MARK?.trim() || "/campo-logos/icon-192.png",
     collegeWebsite: process.env.NEXT_PUBLIC_COLLEGE_WEBSITE?.trim() || undefined,
   };
 }

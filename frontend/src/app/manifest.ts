@@ -11,25 +11,25 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#1f3a5f",
     icons: [
       {
-        src: "/branding/icon-192.png",
+        src: "/campo-logos/icon-192.png",
         sizes: "192x192",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/branding/icon-512.png",
+        src: "/campo-logos/icon-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "any",
       },
       {
-        src: "/branding/icon-maskable-192.png",
+        src: "/campo-logos/icon-192.png",
         sizes: "192x192",
         type: "image/png",
         purpose: "maskable",
       },
       {
-        src: "/branding/icon-maskable-512.png",
+        src: "/campo-logos/icon-512.png",
         sizes: "512x512",
         type: "image/png",
         purpose: "maskable",

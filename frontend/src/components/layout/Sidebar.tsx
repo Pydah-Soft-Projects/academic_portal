@@ -230,31 +230,23 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src="/branding/icon-mark.png"
+                src="/campo-logos/icon-192.png"
                 alt="Campo Academic Portal"
-                className="h-7 w-7 rounded-md object-contain transition-transform group-hover:scale-105"
+                className="h-8 w-8 rounded-lg object-contain transition-transform group-hover:scale-105"
               />
             </button>
           ) : (
             <>
-              <Link href="/dashboard" className="flex min-w-0 flex-1 items-center gap-2">
+              <Link href="/dashboard" className="flex min-w-0 flex-1 flex-col justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src="/branding/icon-mark.png"
+                  src="/campo-logos/campo_logo_transparent_hq.png"
                   alt="Campo Academic Portal"
-                  className="h-8 w-8 shrink-0 rounded-md object-contain"
+                  className="h-8 w-auto max-w-[148px] self-start object-contain object-left"
                 />
-                <div className="min-w-0 flex-1">
-                  <p
-                    className="truncate text-[11px] font-medium uppercase tracking-[0.12em]"
-                    style={{ color: "color-mix(in srgb, var(--secondary) 70%, var(--sidebar-text))" }}
-                  >
-                    Campo Group
-                  </p>
-                  <h1 className="truncate text-sm font-semibold text-sidebar-text">
-                    Academic Portal
-                  </h1>
-                </div>
+                <span className="mt-0.5 truncate text-[10px] font-semibold uppercase tracking-[0.16em] text-sidebar-muted">
+                  Academic Portal
+                </span>
               </Link>
               <button
                 type="button"

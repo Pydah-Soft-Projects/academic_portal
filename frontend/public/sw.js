@@ -1,11 +1,11 @@
 /* Minimal service worker — required for Chromium PWA installability.
    Network-pass-through only; does not change app/API behavior. */
-const CACHE = "ap-pwa-shell-v1";
+const CACHE = "ap-pwa-shell-v2";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches.open(CACHE).then((cache) =>
-      cache.addAll(["/branding/icon-192.png", "/branding/icon-512.png"]),
+      cache.addAll(["/campo-logos/icon-192.png", "/campo-logos/icon-512.png"]),
     ),
   );
   self.skipWaiting();
@@ -30,7 +30,7 @@ self.addEventListener("fetch", (event) => {
       .catch(async () => {
         const cached = await caches.match(request);
         if (cached) return cached;
-        return caches.match("/branding/icon-192.png");
+        return caches.match("/campo-logos/icon-192.png");
       }),
   );
 });
