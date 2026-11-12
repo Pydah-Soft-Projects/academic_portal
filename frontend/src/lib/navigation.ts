@@ -24,6 +24,7 @@ import {
   UserCheck,
   MessageSquare,
   FileSpreadsheet,
+  SlidersHorizontal,
 } from "lucide-react";
 
 export type NavItem = {
@@ -286,6 +287,12 @@ export const NAV_GROUPS: NavGroup[] = [
         permissions: ["catalog.view"],
       },
       {
+        label: "Attendance Percentages",
+        href: "/settings/attendance-thresholds",
+        icon: SlidersHorizontal,
+        permissions: ["settings.view", "attendance.view"],
+      },
+      {
         label: "User Management",
         href: "/user-management",
         icon: UserCog,
@@ -406,6 +413,7 @@ export function breadcrumbsForPath(
       "/settings/workload-thresholds": "Workload Thresholds",
       "/settings/complaint-types": "Mentoring Complaint Types",
       "/settings/feedback-forms": "Academic Feedback Forms",
+      "/settings/attendance-thresholds": "Attendance Percentage Setup & Thresholds",
     };
 
     const label = SETTINGS_LABELS[pathname] || pathname.split("/").pop()?.replace(/-/g, " ");

@@ -27,6 +27,12 @@ const sections: SettingsSection[] = [
     permissions: ["roles.view", "roles.manage"],
   },
   {
+    title: "Attendance Percentage Setup & Thresholds",
+    description: "Configure dynamic percentage setups for semester exam eligibility (≥75%), condonation range, and detention limits.",
+    href: "/settings/attendance-thresholds",
+    permissions: ["settings.view", "settings.edit", "attendance.view", "attendance.edit"],
+  },
+  {
     title: "Attendance Calendar",
     description: "Configure working days, institutional holidays, events, and monthly attendance calendar schedules.",
     href: "/attendance-calendar",
@@ -73,11 +79,6 @@ const sections: SettingsSection[] = [
     description: "Configure student academic feedback forms, questions, rating scales, and activation periods.",
     href: "/settings/feedback-forms",
     permissions: ["settings.view", "settings.edit"],
-  },
-  {
-    title: "Attendance Thresholds",
-    description: "Risk and posting thresholds (coming soon).",
-    permissions: ["settings.view"],
   },
   {
     title: "Academic Configuration",

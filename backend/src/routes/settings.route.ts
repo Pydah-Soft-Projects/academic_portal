@@ -32,6 +32,10 @@ import {
   getCourseExclusionsSettings,
   saveCourseExclusions,
 } from "../services/timetable-course-exclusions.service.js";
+import {
+  getAttendanceThresholdSettings,
+  saveAttendanceThresholdSettings,
+} from "../services/attendance-thresholds.service.js";
 
 export const settingsRouter = Router();
 
@@ -559,5 +563,66 @@ settingsRouter.put(
     }
   },
 );
+
+settingsRouter.get(
+  "/attendance-thresholds",
+  requirePermission("settings.view"),
+  async (req, res, next) => {
+    try {
+      const collegeId =
+        req.query.collegeId == null || req.query.collegeId === ""
+          ? null
+          : Number(req.query.collegeId);
+      res.json(
+        await getAttendanceThresholdSettings(
+          Number.isFinite(collegeId) && collegeId! > 0 ? collegeId : null,
+        ),
+      );
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
+settingsRouter.put(
+  "/attendance-thresholds",
+  requirePermission("settings.edit"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const collegeId =
+        req.body?.collegeId == null || req.body?.collegeId === ""
+          ? null
+          : Number(req.body.collegeId);
+      const parsedCollegeId =
+        Number.isFinite(collegeId) && collegeId! > 0 ? collegeId : null;
+      const previous = await getAttendanceThresholdSettings(parsedCollegeId);
+      const updated = await saveAttendanceThresholdSettings({
+        collegeId: parsedCollegeId,
+        eligibleThreshold: Number(req.body?.eligibleThreshold),
+        condonationMinThreshold: Number(req.body?.condonationMinThreshold),
+      });
+      await writeAuditLog({
+        actorUserId: req.authUser!.id,
+        action: "settings.attendance_thresholds_updated",
+        entityType: "ap_attendance_thresholds",
+        entityId: parsedCollegeId,
+        oldValue: previous.thresholds,
+        newValue: updated.thresholds,
+        ipAddress: req.ip,
+      });
+      res.json(updated);
+    } catch (error) {
+      const status = Number((error as { status?: number }).status);
+      if (status >= 400 && status < 500) {
+        res
+          .status(status)
+          .json({ message: (error as { message?: string }).message || "Invalid payload" });
+        return;
+      }
+      next(error);
+    }
+  },
+);
+
 
 

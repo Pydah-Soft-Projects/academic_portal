@@ -508,6 +508,22 @@ select {
   .print\:hidden {
     display: none !important;
   }
+  /* Completely hide floating AI assistants, chat widgets, and portal switchers in print */
+  #nemo-ai-chat-root,
+  #pydah-ai-chat-root,
+  .nemo-ai-root,
+  [id*="nemo"],
+  [class*="nemo"],
+  #pydah-portal-switcher,
+  #portal-switcher,
+  .pydah-switcher,
+  [id*="switcher"],
+  [class*="switcher"] {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
   table {
     page-break-inside: auto !important;
     break-inside: auto !important;

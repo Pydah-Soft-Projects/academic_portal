@@ -388,7 +388,7 @@ export function NemoChatWidget() {
 
         const container = document.createElement("div");
         container.id = "nemo-ai-chat-root";
-        container.className = "nemo-ai-root";
+        container.className = "nemo-ai-root print:hidden";
         document.body.appendChild(container);
 
         try {

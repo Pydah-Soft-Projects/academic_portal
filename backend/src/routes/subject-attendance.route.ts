@@ -5,6 +5,7 @@ import {
   getSubjectAttendanceData,
   saveSubjectAttendanceData,
 } from "../services/subject-attendance.service.js";
+import { getAttendanceThresholdSettings } from "../services/attendance-thresholds.service.js";
 
 export const subjectAttendanceRouter = Router();
 
@@ -65,8 +66,11 @@ subjectAttendanceRouter.get(
         month,
       });
 
+      const thresholdSettings = await getAttendanceThresholdSettings(finalCollegeId);
+
       res.json({
         ...result,
+        thresholds: thresholdSettings.thresholds,
         permissions: {
           canEdit,
           isSuperAdmin,
