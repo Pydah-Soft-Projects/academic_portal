@@ -292,30 +292,18 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Smooth, thin sidebar scrollbar (dark theme) */
+/* Smooth, hidden sidebar scrollbar (no visible scrollbar, still scrollable) */
 .sidebar-scroll {
   scroll-behavior: smooth;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(138, 154, 172, 0.45) transparent;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   overscroll-behavior: contain;
 }
 
 .sidebar-scroll::-webkit-scrollbar {
-  width: 5px;
-}
-
-.sidebar-scroll::-webkit-scrollbar-track {
-  background: transparent;
-  margin: 8px 0;
-}
-
-.sidebar-scroll::-webkit-scrollbar-thumb {
-  background: rgba(138, 154, 172, 0.35);
-  border-radius: 999px;
-}
-
-.sidebar-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(138, 154, 172, 0.55);
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* Login illustration motion */
