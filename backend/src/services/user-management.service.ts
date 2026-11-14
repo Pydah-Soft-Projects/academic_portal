@@ -231,7 +231,9 @@ async function loadAssignmentsForUsers(userIds: number[]) {
     FROM ap_user_roles ur
     INNER JOIN ap_roles r ON r.id = ur.role_id
     WHERE ur.user_id IN (${placeholders})
-    ORDER BY r.role_key, ur.id
+    ORDER BY
+      FIELD(r.role_key, 'super_admin', 'superadmin', 'principal', 'vice_principal', 'director', 'dean', 'hod', 'class_teacher', 'mentor', 'staff', 'faculty'),
+      ur.id
     `,
     userIds,
   );
@@ -1614,19 +1616,50 @@ export async function ensureStaffUserForSubjectAssignment(input: {
     }
   }
 
-  // 5. Ensure the 'staff' role is assigned in ap_user_roles with the target scope
-  const roleId = await getRoleId("staff");
+  // 5. Ensure the user's role and scope
+  // Check all existing roles for this user in ap_user_roles
+  const userExistingRoles = await queryAcademic<
+    (RowDataPacket & { id: number; role_id: number; role_key: string })[]
+  >(
+    `
+    SELECT ur.id, ur.role_id, r.role_key
+    FROM ap_user_roles ur
+    INNER JOIN ap_roles r ON r.id = ur.role_id
+    WHERE ur.user_id = ?
+    `,
+    [userId],
+  );
+
+  const staffRoleId = await getRoleId("staff");
   const targetCollegeId = input.collegeId ? Number(input.collegeId) : null;
   const targetBranchId = input.branchId ? Number(input.branchId) : null;
 
-  const existingRoles = await queryAcademic<
+  // If user already holds a non-staff role (e.g. super_admin, principal, vice_principal, hod, class_teacher):
+  // They are institutional leadership or administrative users with their own single assigned role.
+  // Their faculty identity is linked via ap_staff_link; DO NOT assign the 'staff' role to them.
+  const hasNonStaffRole = userExistingRoles.some((r) => r.role_key !== "staff");
+  if (hasNonStaffRole) {
+    // If they have any extraneous 'staff' roles, clean them up to maintain single role invariant
+    const extraneousStaff = userExistingRoles.filter((r) => r.role_key === "staff");
+    if (extraneousStaff.length > 0) {
+      await executeAcademic(
+        `DELETE FROM ap_user_roles WHERE user_id = ? AND role_id = ?`,
+        [userId, staffRoleId],
+      );
+      invalidateAuthzCache({ userId });
+    }
+    return { userId, staffLinkId, hrmsEmployeeId };
+  }
+
+  // User is a teaching staff member: ensure 'staff' role with target scope
+  const existingStaffScopes = await queryAcademic<
     (RowDataPacket & { id: number; college_id: number | null; branch_id: number | null })[]
   >(
     `SELECT id, college_id, branch_id FROM ap_user_roles WHERE user_id = ? AND role_id = ?`,
-    [userId, roleId],
+    [userId, staffRoleId],
   );
 
-  const alreadyCovered = existingRoles.some((r) => {
+  const alreadyCovered = existingStaffScopes.some((r) => {
     // Global scope covers all
     if (r.college_id == null && r.branch_id == null) return true;
     // Matching college with all branches covers specific branch
@@ -1643,7 +1676,7 @@ export async function ensureStaffUserForSubjectAssignment(input: {
       VALUES (?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE role_id = VALUES(role_id)
       `,
-      [userId, roleId, targetCollegeId, targetBranchId],
+      [userId, staffRoleId, targetCollegeId, targetBranchId],
     );
 
     await writeAuditLog({

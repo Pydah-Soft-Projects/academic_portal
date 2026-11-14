@@ -166,3 +166,50 @@ export function scopeAllowsBranch(
   return ids.includes(branchId);
 }
 
+export const ROLE_HIERARCHY_ORDER: Record<string, number> = {
+  super_admin: 1,
+  superadmin: 1,
+  principal: 2,
+  vice_principal: 3,
+  director: 3,
+  dean: 3,
+  hod: 4,
+  class_teacher: 5,
+  mentor: 5,
+  staff: 6,
+  faculty: 6,
+};
+
+/**
+ * Returns the unique single role for the user based on institutional hierarchy order.
+ * Deduplicates multi-scope assignments of the same role and prioritizes leadership/administrative roles.
+ */
+export function getUniqueSingleRole(
+  authorization: Authorization | null,
+): { roleKey: string; label: string } | null {
+  if (!authorization?.roles?.length) return null;
+
+  const uniqueRoles = new Map<string, { roleKey: string; label: string }>();
+  for (const r of authorization.roles) {
+    if (!uniqueRoles.has(r.roleKey)) {
+      uniqueRoles.set(r.roleKey, { roleKey: r.roleKey, label: r.label });
+    }
+  }
+
+  const sorted = Array.from(uniqueRoles.values()).sort((a, b) => {
+    const rankA = ROLE_HIERARCHY_ORDER[a.roleKey] ?? 99;
+    const rankB = ROLE_HIERARCHY_ORDER[b.roleKey] ?? 99;
+    return rankA - rankB;
+  });
+
+  return sorted[0] ?? null;
+}
+
+/**
+ * Returns the unique single role display label for the user (e.g. "Super Admin", "HOD", "Staff").
+ */
+export function getUniqueSingleRoleLabel(authorization: Authorization | null): string | null {
+  return getUniqueSingleRole(authorization)?.label ?? null;
+}
+
+

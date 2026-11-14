@@ -26,7 +26,7 @@ import {
 import { NAV_GROUPS, filterNavGroups, navLabelForItem } from "@/lib/navigation";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { isTeachingStaffOnly, isSuperAdminUser } from "@/lib/teaching-scope";
+import { isTeachingStaffOnly, isSuperAdminUser, getUniqueSingleRoleLabel } from "@/lib/teaching-scope";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { apiFetch } from "@/lib/api";
@@ -141,10 +141,8 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
   };
 
   const roleLabel = useMemo(() => {
-    const roles = authorization?.roles ?? [];
-    if (!roles.length) return null;
-    return roles.map((r) => r.label).join(" · ");
-  }, [authorization?.roles]);
+    return getUniqueSingleRoleLabel(authorization);
+  }, [authorization]);
 
   const canOpenProfile =
     Boolean(user) &&

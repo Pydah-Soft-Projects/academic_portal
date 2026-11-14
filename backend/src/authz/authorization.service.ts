@@ -255,7 +255,9 @@ export async function loadAuthzContext(userId: number): Promise<AuthzContext> {
     FROM ap_user_roles ur
     INNER JOIN ap_roles r ON r.id = ur.role_id
     WHERE ur.user_id = ?
-    ORDER BY r.role_key, ur.id
+    ORDER BY
+      FIELD(r.role_key, 'super_admin', 'superadmin', 'principal', 'vice_principal', 'director', 'dean', 'hod', 'class_teacher', 'mentor', 'staff', 'faculty'),
+      ur.id
     `,
     [userId],
   );

@@ -13,6 +13,7 @@ import {
   isTeachingStaffOnly,
   isSuperAdminUser,
   getDefaultDashboardMode,
+  getUniqueSingleRoleLabel,
 } from "@/lib/teaching-scope";
 import {
   BarChart,
@@ -391,7 +392,7 @@ export function DashboardView() {
         userId={user?.id}
         userName={user?.name}
         departmentName={(user as { department?: string })?.department}
-        roleLabel={authorization?.roles?.[0]?.label}
+        roleLabel={getUniqueSingleRoleLabel(authorization) || "HOD"}
         academicYear={filters.academicYear}
         date={filters.date}
       />
@@ -412,7 +413,7 @@ export function DashboardView() {
       <SubjectTeacherDashboard
         userName={user?.name || "Faculty Member"}
         departmentName={(user as { department?: string })?.department || "Department of CSE"}
-        roleLabel={authorization?.roles?.[0]?.label || "Subject Teacher"}
+        roleLabel={getUniqueSingleRoleLabel(authorization) || "Subject Teacher"}
         academicYear={filters.academicYear}
         date={filters.date}
       />
