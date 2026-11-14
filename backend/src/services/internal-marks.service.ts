@@ -225,17 +225,30 @@ export async function ensureInternalMarksSchema() {
       INSERT INTO ap_permissions (permission_key, module, action, display_name, description, is_active)
       VALUES
         ('internal_marks.view', 'internal_marks', 'view', 'View Internal Marks', 'View subjects, assigned faculty, internal marks access status, and student marks.', 1),
-        ('internal_marks.edit', 'internal_marks', 'edit', 'Edit Internal Marks & Upload Access', 'Modify internal marks upload access rules, enter marks, submit, and approve submissions.', 1)
+        ('internal_marks.edit', 'internal_marks', 'edit', 'Edit Internal Marks & Upload Access', 'Modify internal marks upload access rules, enter marks, submit, and approve submissions.', 1),
+        ('internal_marks_mgmt.view', 'internal_marks_mgmt', 'view', 'View Internal Marks Management', 'View subject hierarchy, internal marks access status, access rules, approval workflows, and audit logs.', 1),
+        ('internal_marks_mgmt.edit', 'internal_marks_mgmt', 'edit', 'Edit Internal Marks Access & Configs', 'Configure college/course/branch/faculty upload access rules, approval workflow levels, and system settings.', 1)
       ON DUPLICATE KEY UPDATE display_name = VALUES(display_name), description = VALUES(description), is_active = 1
     `);
 
+    // Grant internal_marks.view and internal_marks.edit to academic & teaching staff
     await executeAcademic(`
       INSERT IGNORE INTO ap_role_permissions (role_id, permission_id)
       SELECT r.id, p.id
       FROM ap_roles r
       CROSS JOIN ap_permissions p
       WHERE p.permission_key IN ('internal_marks.view', 'internal_marks.edit')
-        AND r.role_key IN ('super_admin', 'principal', 'vice_principal', 'hod', 'staff')
+        AND r.role_key IN ('super_admin', 'principal', 'vice_principal', 'hod', 'class_teacher', 'staff')
+    `);
+
+    // Grant internal_marks_mgmt.view and internal_marks_mgmt.edit to leadership / oversight roles
+    await executeAcademic(`
+      INSERT IGNORE INTO ap_role_permissions (role_id, permission_id)
+      SELECT r.id, p.id
+      FROM ap_roles r
+      CROSS JOIN ap_permissions p
+      WHERE p.permission_key IN ('internal_marks_mgmt.view', 'internal_marks_mgmt.edit')
+        AND r.role_key IN ('super_admin', 'principal', 'vice_principal', 'hod')
     `);
   } catch (err) {
     console.warn("Could not seed internal_marks permissions:", err);
@@ -865,11 +878,6 @@ export async function listAccessRules(filters?: {
       created_at: string;
       creator_name: string | null;
       staff_name: string | null;
-      college_name: string | null;
-      course_name: string | null;
-      branch_name: string | null;
-      subject_name: string | null;
-      subject_code: string | null;
     })[]
   >(
     `
@@ -886,45 +894,76 @@ export async function listAccessRules(filters?: {
       a.created_by,
       a.created_at,
       u.name AS creator_name,
-      sl.display_name AS staff_name,
-      c.name AS college_name,
-      cr.name AS course_name,
-      b.name AS branch_name,
-      s.name AS subject_name,
-      s.code AS subject_code
+      sl.display_name AS staff_name
     FROM ap_internal_marks_access a
     LEFT JOIN ap_users u ON u.id = a.created_by
     LEFT JOIN ap_staff_link sl ON sl.id = a.faculty_staff_link_id
-    LEFT JOIN ap_colleges c ON c.id = a.college_id
-    LEFT JOIN ap_courses cr ON cr.id = a.course_id
-    LEFT JOIN ap_branches b ON b.id = a.branch_id
-    LEFT JOIN ap_subjects s ON s.id = a.subject_id
     WHERE ${where.join(" AND ")}
     ORDER BY a.id DESC
     `,
     params
   );
 
-  return rows.map((r) => ({
-    id: Number(r.id),
-    accessLevel: r.access_level,
-    collegeId: r.college_id ? Number(r.college_id) : null,
-    courseId: r.course_id ? Number(r.course_id) : null,
-    branchId: r.branch_id ? Number(r.branch_id) : null,
-    subjectId: r.subject_id ? Number(r.subject_id) : null,
-    facultyStaffLinkId: r.faculty_staff_link_id ? Number(r.faculty_staff_link_id) : null,
-    facultyName: r.staff_name || undefined,
-    collegeName: r.college_name || undefined,
-    courseName: r.course_name || undefined,
-    branchName: r.branch_name || undefined,
-    subjectName: r.subject_name || undefined,
-    subjectCode: r.subject_code || undefined,
-    academicYearLabel: r.academic_year_label,
-    isEnabled: Number(r.is_enabled) === 1,
-    createdBy: r.created_by ? Number(r.created_by) : null,
-    createdByName: r.creator_name || undefined,
-    createdAt: String(r.created_at),
-  }));
+  const collegeIds = [...new Set(rows.map((r) => r.college_id).filter((id): id is number => id != null))];
+  const courseIds = [...new Set(rows.map((r) => r.course_id).filter((id): id is number => id != null))];
+  const branchIds = [...new Set(rows.map((r) => r.branch_id).filter((id): id is number => id != null))];
+  const subjectIds = [...new Set(rows.map((r) => r.subject_id).filter((id): id is number => id != null))];
+
+  const [colleges, courses, branches, subjects] = await Promise.all([
+    collegeIds.length > 0
+      ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
+          `SELECT id, name FROM colleges WHERE id IN (${collegeIds.map(() => "?").join(",")})`,
+          collegeIds
+        )
+      : [],
+    courseIds.length > 0
+      ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
+          `SELECT id, name FROM courses WHERE id IN (${courseIds.map(() => "?").join(",")})`,
+          courseIds
+        )
+      : [],
+    branchIds.length > 0
+      ? queryStudent<(RowDataPacket & { id: number; name: string })[]>(
+          `SELECT id, name FROM course_branches WHERE id IN (${branchIds.map(() => "?").join(",")})`,
+          branchIds
+        )
+      : [],
+    subjectIds.length > 0
+      ? queryExam<(RowDataPacket & { id: number; name: string; code: string })[]>(
+          `SELECT id, name, code FROM subjects WHERE id IN (${subjectIds.map(() => "?").join(",")})`,
+          subjectIds
+        )
+      : [],
+  ]);
+
+  const collegeMap = new Map(colleges.map((c) => [c.id, c.name]));
+  const courseMap = new Map(courses.map((cr) => [cr.id, cr.name]));
+  const branchMap = new Map(branches.map((b) => [b.id, b.name]));
+  const subjectMap = new Map(subjects.map((s) => [s.id, { name: s.name, code: s.code }]));
+
+  return rows.map((r) => {
+    const sMeta = r.subject_id ? subjectMap.get(r.subject_id) : undefined;
+    return {
+      id: Number(r.id),
+      accessLevel: r.access_level,
+      collegeId: r.college_id ? Number(r.college_id) : null,
+      courseId: r.course_id ? Number(r.course_id) : null,
+      branchId: r.branch_id ? Number(r.branch_id) : null,
+      subjectId: r.subject_id ? Number(r.subject_id) : null,
+      facultyStaffLinkId: r.faculty_staff_link_id ? Number(r.faculty_staff_link_id) : null,
+      facultyName: r.staff_name || undefined,
+      collegeName: r.college_id ? collegeMap.get(r.college_id) : undefined,
+      courseName: r.course_id ? courseMap.get(r.course_id) : undefined,
+      branchName: r.branch_id ? branchMap.get(r.branch_id) : undefined,
+      subjectName: sMeta?.name,
+      subjectCode: sMeta?.code,
+      academicYearLabel: r.academic_year_label,
+      isEnabled: Number(r.is_enabled) === 1,
+      createdBy: r.created_by ? Number(r.created_by) : null,
+      createdByName: r.creator_name || undefined,
+      createdAt: String(r.created_at),
+    };
+  });
 }
 
 export async function saveAccessRule(
@@ -1437,6 +1476,21 @@ export async function saveMarksDraft(
 ) {
   await ensureInternalMarksSchema();
 
+  // Verify internal marks posting upload access permission
+  const access = await resolveFacultySubjectAccess(
+    data.collegeId,
+    data.courseId,
+    data.branchId,
+    data.subjectId,
+    data.facultyStaffLinkId
+  );
+  if (!access.isEnabled) {
+    throw Object.assign(
+      new Error("Internal marks posting is currently disabled/locked for this subject. Please contact your HOD or Examination Administrator."),
+      { status: 403 }
+    );
+  }
+
   // 1. Ensure submission record exists
   const existingSub = await queryAcademic<
     (RowDataPacket & { id: number; status: InternalMarksStatus })[]
@@ -1565,6 +1619,21 @@ export async function submitMarksForApproval(
 
   if (sub.status === "approved") {
     throw Object.assign(new Error("Submission is already approved"), { status: 400 });
+  }
+
+  // Verify internal marks posting upload access permission
+  const access = await resolveFacultySubjectAccess(
+    sub.college_id,
+    sub.course_id,
+    sub.branch_id,
+    sub.subject_id,
+    sub.faculty_staff_link_id
+  );
+  if (!access.isEnabled) {
+    throw Object.assign(
+      new Error("Internal marks posting is currently disabled/locked for this subject. Please contact your HOD or Examination Administrator."),
+      { status: 403 }
+    );
   }
 
   // Validate that entries exist

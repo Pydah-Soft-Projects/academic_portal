@@ -59,6 +59,7 @@ export function InternalMarksEntryModal({
   const [maxMarks, setMaxMarks] = useState<number>(30);
   const [submissionId, setSubmissionId] = useState<number | null>(null);
   const [status, setStatus] = useState<string>("draft");
+  const [uploadAccess, setUploadAccess] = useState<boolean>(true);
 
   const [students, setStudents] = useState<StudentEntry[]>([]);
   const [marksState, setMarksState] = useState<Record<number, { marks: string; remarks: string }>>({});
@@ -89,6 +90,7 @@ export function InternalMarksEntryModal({
         setMaxMarks(data.maxMarks || 30);
         setSubmissionId(data.submissionId);
         setStatus(data.status || "draft");
+        setUploadAccess(data.uploadAccess !== false);
         setStudents(data.students || []);
 
         const initialMarks: Record<number, { marks: string; remarks: string }> = {};
@@ -238,7 +240,7 @@ export function InternalMarksEntryModal({
     }
   }
 
-  const isEditable = !readOnly && (status === "draft" || status === "returned" || status === "rejected");
+  const isEditable = !readOnly && uploadAccess && (status === "draft" || status === "returned" || status === "rejected");
 
   return (
     <Modal
@@ -247,6 +249,12 @@ export function InternalMarksEntryModal({
       wide
     >
       <div className="space-y-4">
+        {!uploadAccess && (
+          <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 font-medium">
+            <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
+            <span>Internal marks posting is currently disabled/locked for this subject by administration. Marks can only be viewed in read-only mode.</span>
+          </div>
+        )}
         {/* Header bar */}
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-3 border border-border">
           <div>

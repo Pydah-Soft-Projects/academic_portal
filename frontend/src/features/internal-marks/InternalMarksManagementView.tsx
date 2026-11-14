@@ -83,8 +83,8 @@ type AuditLog = {
 };
 
 export function InternalMarksManagementView() {
-  const { hasPermission, hasAnyPermission } = useAuth();
-  const canEdit = hasAnyPermission("internal_marks_mgmt.edit", "internal_marks_mgmt.view", "examinations.view");
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission("internal_marks_mgmt.edit");
 
   const [activeTab, setActiveTab] = useState<"hierarchy" | "rules" | "workflows" | "audit">("hierarchy");
   const [loading, setLoading] = useState(true);
@@ -259,20 +259,6 @@ export function InternalMarksManagementView() {
                   body: JSON.stringify(payload),
                 });
               }
-            } else {
-              const payload = {
-                accessLevel: "branch",
-                collegeId: item.collegeId,
-                courseId: item.courseId,
-                branchId: item.branchId,
-                subjectId: item.subjectId,
-                isEnabled,
-              };
-              await apiFetch("/internal-marks/access-rules", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
             }
           }
           await fetchData(false);
@@ -394,19 +380,6 @@ export function InternalMarksManagementView() {
               body: JSON.stringify(payload),
             });
           }
-        } else {
-          const payload = {
-            accessLevel: "branch",
-            collegeId: item.collegeId,
-            courseId: item.courseId,
-            branchId: item.branchId,
-            isEnabled,
-          };
-          await apiFetch("/internal-marks/access-rules", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          });
         }
       }
       setSelectedRowIds(new Set());
@@ -437,10 +410,10 @@ export function InternalMarksManagementView() {
           const updatedFaculty = h.assignedFaculty.map((f) =>
             f.staffLinkId === staffLinkId
               ? {
-                  ...f,
-                  accessStatus: isEnabled ? ("enabled" as const) : ("disabled" as const),
-                  accessLevel: "individual" as const,
-                }
+                ...f,
+                accessStatus: isEnabled ? ("enabled" as const) : ("disabled" as const),
+                accessLevel: "individual" as const,
+              }
               : f
           );
           const allEnabled = updatedFaculty.every((f) => f.accessStatus === "enabled");
@@ -817,11 +790,10 @@ export function InternalMarksManagementView() {
         <button
           type="button"
           onClick={() => setActiveTab("hierarchy")}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-            activeTab === "hierarchy"
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${activeTab === "hierarchy"
               ? "border-brand-600 text-brand-600"
               : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
+            }`}
         >
           <Layers className="h-4 w-4" />
           Subject & Faculty Hierarchy
@@ -829,11 +801,10 @@ export function InternalMarksManagementView() {
         <button
           type="button"
           onClick={() => setActiveTab("rules")}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-            activeTab === "rules"
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${activeTab === "rules"
               ? "border-brand-600 text-brand-600"
               : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
+            }`}
         >
           <Shield className="h-4 w-4" />
           Access Rules List ({accessRules.length})
@@ -841,11 +812,10 @@ export function InternalMarksManagementView() {
         <button
           type="button"
           onClick={() => setActiveTab("workflows")}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-            activeTab === "workflows"
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${activeTab === "workflows"
               ? "border-brand-600 text-brand-600"
               : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
+            }`}
         >
           <Sliders className="h-4 w-4" />
           Approval Workflows
@@ -853,11 +823,10 @@ export function InternalMarksManagementView() {
         <button
           type="button"
           onClick={() => setActiveTab("audit")}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
-            activeTab === "audit"
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${activeTab === "audit"
               ? "border-brand-600 text-brand-600"
               : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
+            }`}
         >
           <History className="h-4 w-4" />
           Audit Logs
@@ -1021,22 +990,22 @@ export function InternalMarksManagementView() {
                   filterSemester !== "all" ||
                   filterRegulationId !== "auto" ||
                   searchQuery) && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFilterCollegeId("all");
-                      setFilterCourseId("all");
-                      setFilterBranchId("all");
-                      setFilterYear("all");
-                      setFilterSemester("all");
-                      setFilterRegulationId("auto");
-                      setSearchQuery("");
-                    }}
-                    className="text-[11px] text-slate-500 hover:text-brand-600 underline whitespace-nowrap self-end pb-1.5"
-                  >
-                    Reset
-                  </button>
-                )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFilterCollegeId("all");
+                        setFilterCourseId("all");
+                        setFilterBranchId("all");
+                        setFilterYear("all");
+                        setFilterSemester("all");
+                        setFilterRegulationId("auto");
+                        setSearchQuery("");
+                      }}
+                      className="text-[11px] text-slate-500 hover:text-brand-600 underline whitespace-nowrap self-end pb-1.5"
+                    >
+                      Reset
+                    </button>
+                  )}
               </div>
 
               {/* Action Controls */}
@@ -1157,9 +1126,8 @@ export function InternalMarksManagementView() {
                       return (
                         <tr
                           key={`${itemKey}-${idx}`}
-                          className={`hover:bg-slate-50/80 transition ${
-                            isRowSelected ? "bg-brand-50/40" : ""
-                          }`}
+                          className={`hover:bg-slate-50/80 transition ${isRowSelected ? "bg-brand-50/40" : ""
+                            }`}
                         >
                           <td className="px-3 py-3 align-top text-center">
                             <input
@@ -1244,11 +1212,10 @@ export function InternalMarksManagementView() {
                                       )
                                     ) : (
                                       <span
-                                        className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${
-                                          f.accessStatus === "enabled"
+                                        className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${f.accessStatus === "enabled"
                                             ? "bg-green-100 text-green-800"
                                             : "bg-slate-100 text-slate-600"
-                                        }`}
+                                          }`}
                                       >
                                         {f.accessStatus === "enabled" ? "Active" : "Inactive"}
                                       </span>
@@ -1481,11 +1448,10 @@ export function InternalMarksManagementView() {
                     <button
                       type="button"
                       onClick={() => handleUpdateWorkflowLevel(idx, "isActive", !lvl.isActive)}
-                      className={`inline-flex items-center rounded px-3 py-1 text-xs font-bold transition border ${
-                        lvl.isActive
+                      className={`inline-flex items-center rounded px-3 py-1 text-xs font-bold transition border ${lvl.isActive
                           ? "bg-green-100 text-green-800 border-green-300"
                           : "bg-slate-200 text-slate-600 border-slate-300"
-                      }`}
+                        }`}
                     >
                       {lvl.isActive ? "Active" : "Inactive"}
                     </button>

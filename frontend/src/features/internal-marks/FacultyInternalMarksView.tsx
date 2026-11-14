@@ -76,8 +76,8 @@ type SubmissionItem = {
 };
 
 export function FacultyInternalMarksView() {
-  const { hasPermission, hasAnyPermission } = useAuth();
-  const canEdit = hasAnyPermission("internal_marks.edit", "internal_marks.view", "examinations.view");
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission("internal_marks.edit");
 
   const [activeTab, setActiveTab] = useState<"my_subjects" | "pending_approvals">("my_subjects");
   const [loading, setLoading] = useState(true);

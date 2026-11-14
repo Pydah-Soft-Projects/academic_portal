@@ -1,6 +1,18 @@
 import { Router } from "express";
+import type { RowDataPacket } from "mysql2";
 import type { AuthedRequest } from "../middleware/auth.middleware.js";
-import { requirePermission, scopedFilters, statusFromAuthzError } from "../authz/require-permission.js";
+import {
+  requirePermission,
+  scopedFilters,
+  ensureEntityScope,
+  getAuthz,
+  statusFromAuthzError,
+} from "../authz/require-permission.js";
+import {
+  shouldRestrictToOwnTeachingLoad,
+  resolveStaffLinkIdForUser,
+} from "../authz/faculty-self-scope.js";
+import { queryAcademic } from "../db/pools.js";
 import {
   getSubjectFacultyHierarchy,
   listAccessRules,
@@ -50,12 +62,12 @@ internalMarksRouter.get(
       const regParam = req.query.regulationId;
       const regulationId = regParam === "all" ? "all" : regParam === "auto" ? "auto" : num(regParam);
 
-      scopedFilters(req, { collegeId, branchId });
+      const scoped = scopedFilters(req, { collegeId, branchId });
 
       const result = await getSubjectFacultyHierarchy({
-        collegeId,
+        collegeId: scoped.collegeId ?? collegeId,
         courseId,
-        branchId,
+        branchId: scoped.branchId ?? branchId,
         subjectId,
         facultyId,
         year,
@@ -85,9 +97,13 @@ internalMarksRouter.get(
       const courseId = num(req.query.courseId);
       const branchId = num(req.query.branchId);
 
-      scopedFilters(req, { collegeId, branchId });
+      const scoped = scopedFilters(req, { collegeId, branchId });
 
-      const rules = await listAccessRules({ collegeId, courseId, branchId });
+      const rules = await listAccessRules({
+        collegeId: scoped.collegeId ?? collegeId,
+        courseId,
+        branchId: scoped.branchId ?? branchId,
+      });
       res.json({ data: rules });
     } catch (error) {
       const status = statusFromAuthzError(error);
@@ -118,6 +134,12 @@ internalMarksRouter.post(
         return;
       }
 
+      // Verify scope for the target college/branch
+      ensureEntityScope(req, {
+        collegeId: num(collegeId),
+        branchId: num(branchId),
+      });
+
       const result = await saveAccessRule(req.authUser.id, {
         accessLevel: accessLevel as AccessLevel,
         collegeId: num(collegeId),
@@ -130,6 +152,11 @@ internalMarksRouter.post(
 
       res.json(result);
     } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
       next(error);
     }
   }
@@ -152,9 +179,25 @@ internalMarksRouter.delete(
         return;
       }
 
+      const ruleRows = await queryAcademic<(RowDataPacket & { college_id: number | null; branch_id: number | null })[]>(
+        `SELECT college_id, branch_id FROM ap_internal_marks_access WHERE id = ? LIMIT 1`,
+        [id]
+      );
+      if (ruleRows[0]) {
+        ensureEntityScope(req, {
+          collegeId: ruleRows[0].college_id,
+          branchId: ruleRows[0].branch_id,
+        });
+      }
+
       const result = await deleteAccessRule(req.authUser.id, id);
       res.json(result);
     } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
       next(error);
     }
   }
@@ -206,6 +249,15 @@ internalMarksRouter.get(
       }
 
       scopedFilters(req, { collegeId, branchId });
+
+      const authz = getAuthz(req);
+      if (shouldRestrictToOwnTeachingLoad(authz)) {
+        const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
+        if (userStaffLinkId != null && facultyStaffLinkId !== userStaffLinkId) {
+          res.status(403).json({ message: "You can only view marks entry for your own assigned subjects" });
+          return;
+        }
+      }
 
       const data = await getStudentsForMarksEntry({
         collegeId,
@@ -265,6 +317,20 @@ internalMarksRouter.post(
         return;
       }
 
+      ensureEntityScope(req, {
+        collegeId: num(collegeId),
+        branchId: num(branchId),
+      });
+
+      const authz = getAuthz(req);
+      if (shouldRestrictToOwnTeachingLoad(authz)) {
+        const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
+        if (userStaffLinkId != null && Number(facultyStaffLinkId) !== userStaffLinkId) {
+          res.status(403).json({ message: "You can only save marks for your own assigned subjects" });
+          return;
+        }
+      }
+
       const result = await saveMarksDraft(req.authUser.id, {
         collegeId: Number(collegeId),
         courseId: Number(courseId),
@@ -279,6 +345,11 @@ internalMarksRouter.post(
 
       res.json(result);
     } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
       next(error);
     }
   }
@@ -301,6 +372,25 @@ internalMarksRouter.post(
         return;
       }
 
+      const authz = getAuthz(req);
+      if (shouldRestrictToOwnTeachingLoad(authz)) {
+        const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
+        const subCheck = await queryAcademic<(RowDataPacket & { faculty_staff_link_id: number; college_id: number; branch_id: number })[]>(
+          `SELECT faculty_staff_link_id, college_id, branch_id FROM ap_internal_marks_submissions WHERE id = ? LIMIT 1`,
+          [Number(submissionId)]
+        );
+        if (subCheck[0]) {
+          ensureEntityScope(req, {
+            collegeId: subCheck[0].college_id,
+            branchId: subCheck[0].branch_id,
+          });
+          if (userStaffLinkId != null && Number(subCheck[0].faculty_staff_link_id) !== userStaffLinkId) {
+            res.status(403).json({ message: "You can only submit marks for your own assigned subjects" });
+            return;
+          }
+        }
+      }
+
       const result = await submitMarksForApproval(req.authUser.id, {
         submissionId: Number(submissionId),
         comments: str(comments),
@@ -308,6 +398,11 @@ internalMarksRouter.post(
 
       res.json(result);
     } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
       next(error);
     }
   }
@@ -325,12 +420,12 @@ internalMarksRouter.get(
       const subjectId = num(req.query.subjectId);
       const status = str(req.query.status) as InternalMarksStatus | undefined;
 
-      scopedFilters(req, { collegeId, branchId });
+      const scoped = scopedFilters(req, { collegeId, branchId });
 
       const submissions = await getInternalMarksSubmissions({
-        collegeId,
+        collegeId: scoped.collegeId ?? collegeId,
         courseId,
-        branchId,
+        branchId: scoped.branchId ?? branchId,
         subjectId,
         status,
         userRoleKeys: req.authz?.roleKeys,
@@ -367,7 +462,21 @@ internalMarksRouter.post(
         return;
       }
 
-      const roleKey = req.authz?.roleKeys?.[0] || "staff";
+      const subCheck = await queryAcademic<(RowDataPacket & { college_id: number; branch_id: number })[]>(
+        `SELECT college_id, branch_id FROM ap_internal_marks_submissions WHERE id = ? LIMIT 1`,
+        [submissionId]
+      );
+      if (subCheck[0]) {
+        ensureEntityScope(req, {
+          collegeId: subCheck[0].college_id,
+          branchId: subCheck[0].branch_id,
+        });
+      }
+
+      const roleKey =
+        req.authz?.roleKeys?.find((r) => ["super_admin", "principal", "vice_principal", "hod"].includes(r)) ||
+        req.authz?.roleKeys?.[0] ||
+        "staff";
 
       const result = await processApprovalAction(req.authUser.id, roleKey, {
         submissionId,
@@ -377,6 +486,11 @@ internalMarksRouter.post(
 
       res.json(result);
     } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
       next(error);
     }
   }
@@ -399,7 +513,21 @@ internalMarksRouter.post(
         return;
       }
 
-      const roleKey = req.authz?.roleKeys?.[0] || "staff";
+      const subCheck = await queryAcademic<(RowDataPacket & { college_id: number; branch_id: number })[]>(
+        `SELECT college_id, branch_id FROM ap_internal_marks_submissions WHERE id = ? LIMIT 1`,
+        [submissionId]
+      );
+      if (subCheck[0]) {
+        ensureEntityScope(req, {
+          collegeId: subCheck[0].college_id,
+          branchId: subCheck[0].branch_id,
+        });
+      }
+
+      const roleKey =
+        req.authz?.roleKeys?.find((r) => ["super_admin", "principal", "vice_principal", "hod"].includes(r)) ||
+        req.authz?.roleKeys?.[0] ||
+        "staff";
       const result = await forwardSubmissionToEms(req.authUser.id, roleKey, submissionId);
 
       if (!result.success && result.error) {
@@ -409,6 +537,11 @@ internalMarksRouter.post(
 
       res.json(result);
     } catch (error) {
+      const status = statusFromAuthzError(error);
+      if (status === 401 || status === 403) {
+        res.status(status).json({ message: (error as Error).message || "Forbidden" });
+        return;
+      }
       next(error);
     }
   }
@@ -417,7 +550,7 @@ internalMarksRouter.post(
 /** Approval Workflows Configuration */
 internalMarksRouter.get(
   "/approval-configs",
-  requirePermission("internal_marks_mgmt.view"),
+  requirePermission("internal_marks_mgmt.view", "internal_marks.view"),
   async (req: AuthedRequest, res, next) => {
     try {
       const collegeId = num(req.query.collegeId);
