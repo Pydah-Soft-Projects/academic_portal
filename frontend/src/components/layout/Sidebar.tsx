@@ -5,7 +5,6 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -24,7 +23,7 @@ import {
   Briefcase,
   Award,
 } from "lucide-react";
-import { NAV_GROUPS, filterNavGroups, navLabelForItem, type NavGroup } from "@/lib/navigation";
+import { NAV_GROUPS, filterNavGroups, navLabelForItem } from "@/lib/navigation";
 import { cn } from "@/lib/cn";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { isTeachingStaffOnly, isSuperAdminUser } from "@/lib/teaching-scope";
@@ -44,19 +43,13 @@ type Props = {
 export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { user, authorization, logout, refresh, hasAnyPermission, hasPermission } =
+  const { user, authorization, refresh, hasAnyPermission, hasPermission } =
     useAuth();
   const [profileOpen, setProfileOpen] = useState(false);
   const [logoutModalOpen, setLogoutModalOpen] = useState(false);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [mounted, setMounted] = useState(false);
   const [hoveredItem, setHoveredItem] = useState<{
     title: string;
-    top: number;
-    left: number;
-  } | null>(null);
-  const [flyoutMenu, setFlyoutMenu] = useState<{
-    group: NavGroup;
     top: number;
     left: number;
   } | null>(null);
@@ -83,46 +76,14 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
   }, []);
 
   useEffect(() => {
-    setFlyoutMenu(null);
     setHoveredItem(null);
   }, [pathname, searchParams, collapsed]);
 
-  useEffect(() => {
-    if (!flyoutMenu) return;
-
-    function handleClickOutside(event: MouseEvent) {
-      const target = event.target as Node | null;
-      const flyoutEl = document.getElementById("sidebar-flyout-menu");
-      if (flyoutEl && flyoutEl.contains(target)) {
-        return;
-      }
-      const clickedToggleButton = (target as Element | null)?.closest?.("[data-group-toggle]");
-      if (clickedToggleButton) {
-        return;
-      }
-      setFlyoutMenu(null);
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setFlyoutMenu(null);
-      }
-    }
-
-    window.addEventListener("mousedown", handleClickOutside);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("mousedown", handleClickOutside);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [flyoutMenu]);
-
   const showTooltip = (title: string, e: React.MouseEvent<HTMLElement>) => {
-    if (flyoutMenu) return;
     const rect = e.currentTarget.getBoundingClientRect();
     setHoveredItem({
       title,
-      top: rect.top + rect.height / 2 - 13,
+      top: rect.top + rect.height / 2 - 14,
       left: rect.right + 10,
     });
   };
@@ -179,28 +140,6 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
     return false;
   };
 
-  // Auto-expand group containing the active page on load & navigation
-  useEffect(() => {
-    const parentGroup = groups.find((g) =>
-      g.items.some((item) => isItemActive(item.href)),
-    );
-    if (parentGroup) {
-      setExpandedGroups({
-        [parentGroup.title]: true,
-      });
-    }
-  }, [pathname, searchParams, groups]);
-
-  const toggleGroup = (title: string) => {
-    setExpandedGroups((prev) => {
-      const isOpen = Boolean(prev[title]);
-      if (isOpen) {
-        return {};
-      }
-      return { [title]: true };
-    });
-  };
-
   const roleLabel = useMemo(() => {
     const roles = authorization?.roles ?? [];
     if (!roles.length) return null;
@@ -220,84 +159,87 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
           "fixed inset-0 z-[45] backdrop-blur-[1px] transition-opacity lg:hidden",
           open ? "opacity-60" : "pointer-events-none opacity-0",
         )}
-        style={{ backgroundColor: "var(--sidebar)" }}
+        style={{ backgroundColor: "var(--sidebar, #1E3150)" }}
         onClick={onClose}
         aria-hidden={!open}
       />
 
       <aside
         className={cn(
-          "fixed top-0 left-0 bottom-0 z-40 flex h-dvh flex-col border-r transition-all duration-200",
-          collapsed ? "w-20" : "w-64",
+          "fixed top-0 left-0 bottom-0 z-40 flex h-dvh flex-col border-r transition-all duration-200 ease-in-out select-none",
+          collapsed ? "w-[80px]" : "w-[256px]",
           open ? "translate-x-0 max-lg:z-50" : "-translate-x-full lg:translate-x-0",
         )}
         style={{
-          backgroundColor: "var(--sidebar)",
-          color: "var(--sidebar-text)",
-          borderColor: "var(--border)",
+          backgroundColor: "var(--sidebar, #1E3150)",
+          color: "var(--sidebar-text, #FFFFFF)",
+          borderColor: "var(--border, rgba(255, 255, 255, 0.1))",
+          boxShadow: "4px 0 24px -2px rgba(10, 20, 35, 0.45)",
           fontFamily: "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
         }}
       >
-        {/* Floating circular collapse button */}
+        {/* Floating circular collapse control */}
         <button
           type="button"
           onClick={onToggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="hidden lg:flex items-center justify-center absolute -right-3 top-[106px] z-50 w-6 h-6 rounded-full shadow-md border transition-transform hover:scale-105 cursor-pointer focus:outline-hidden"
+          className="hidden lg:flex items-center justify-center absolute -right-[12px] top-[106px] z-50 w-[24px] h-[24px] rounded-full border shadow-md transition-transform hover:scale-105 cursor-pointer focus:outline-hidden"
           style={{
-            backgroundColor: "var(--surface)",
-            borderColor: "var(--border)",
-            color: "var(--text-primary)",
+            backgroundColor: "var(--surface, #FFFFFF)",
+            borderColor: "var(--border, rgba(255, 255, 255, 0.15))",
+            color: "var(--text-primary, #123B63)",
           }}
         >
           {collapsed ? (
-            <ChevronRight size={14} className="stroke-[2.5]" />
+            <ChevronRight size={14} strokeWidth={2.5} />
           ) : (
-            <ChevronLeft size={14} className="stroke-[2.5]" />
+            <ChevronLeft size={14} strokeWidth={2.5} />
           )}
         </button>
 
-        {/* Centered Top Header */}
+        {/* Brand Header */}
         <div
           className={cn(
-            "relative flex shrink-0 flex-col items-center justify-center text-center pt-6 pb-4 border-b px-3",
-            collapsed && "min-h-[91px] px-2",
+            "relative flex shrink-0 flex-col items-center justify-center text-center border-b transition-all duration-200",
+            collapsed
+              ? "pt-[24px] pb-[16px] px-[8px]"
+              : "pt-[24px] pb-[16px] px-[24px]",
           )}
-          style={{ borderColor: "var(--border)" }}
+          style={{ borderColor: "var(--border, rgba(255, 255, 255, 0.1))" }}
         >
           <Link
             href="/dashboard"
             onClick={onClose}
             className="flex flex-col items-center justify-center focus:outline-hidden"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={
-                collapsed
-                  ? "/campo-logos/icon-192.png"
-                  : "/campo-logos/campo_logo_transparent_hq.png"
-              }
-              alt="Campo Academic Portal"
-              style={collapsed ? undefined : { maxWidth: "120px" }}
-              className={cn(
-                "mx-auto object-contain transition-all duration-200",
-                collapsed ? "h-8 w-8 rounded-lg" : "h-7",
-              )}
-            />
-            {!collapsed ? (
-              <span
-                className="mt-1.5 text-xs font-medium tracking-wide"
-                style={{ color: "var(--sidebar-muted)" }}
-              >
-                Academic Portal
-              </span>
-            ) : null}
+            {collapsed ? (
+              <img
+                src="/campo-logos/icon-192.png"
+                alt="Campo Academic Portal"
+                className="h-[36px] w-[36px] rounded-[10px] object-contain transition-all duration-200 shadow-xs"
+              />
+            ) : (
+              <>
+                <img
+                  src="/campo-logos/campo_logo_transparent_hq.png"
+                  alt="Campo Academic Portal"
+                  className="h-[28px] max-w-[120px] object-contain transition-all duration-200"
+                />
+                <span
+                  className="mt-[8px] text-[12px] font-medium tracking-wide"
+                  style={{ color: "var(--sidebar-muted, #AABBD4)" }}
+                >
+                  Academic Portal
+                </span>
+              </>
+            )}
           </Link>
 
+          {/* Close button for mobile drawer */}
           <button
             type="button"
-            className="absolute right-3 top-3 rounded-md p-1.5 text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text lg:hidden"
+            className="absolute right-3 top-3 rounded-md p-1.5 text-sidebar-muted transition hover:bg-white/10 hover:text-white lg:hidden cursor-pointer"
             onClick={onClose}
             aria-label="Close navigation"
           >
@@ -305,247 +247,139 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
           </button>
         </div>
 
-        <nav className="sidebar-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-3 py-4">
-          {groups.map((group) => {
-            const GroupIcon = group.icon;
-            const isGroupActive = group.items.some((item) => isItemActive(item.href));
-            const isGroupExpanded = expandedGroups[group.title] ?? isGroupActive;
-            const hasMultiple = group.items.length > 1;
+        {/* Navigation Area */}
+        <nav
+          className={cn(
+            "sidebar-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain transition-all duration-200 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden",
+            collapsed
+              ? "px-[12px] pt-[12px] pb-[16px]"
+              : "px-[14px] pt-[12px] pb-[16px]",
+          )}
+        >
+          <div className="space-y-[24px]">
+            {groups.map((group) => {
+              if (!group.items.length) return null;
 
-            if (collapsed) {
-              if (hasMultiple) {
-                const isFlyoutOpen = flyoutMenu?.group.title === group.title;
-                const buttonActive = isGroupActive || isFlyoutOpen;
+              if (collapsed) {
                 return (
-                  <div key={group.title} className="mb-2">
-                    <button
-                      type="button"
-                      data-group-toggle={group.title}
-                      onClick={(e) => {
-                        hideTooltip();
-                        if (isFlyoutOpen) {
-                          setFlyoutMenu(null);
-                        } else {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const estimatedHeight = Math.min(
-                            window.innerHeight - 32,
-                            50 + group.items.length * 36,
-                          );
-                          const maxTop = window.innerHeight - estimatedHeight - 16;
-                          const top = Math.max(16, Math.min(rect.top, maxTop));
-                          setFlyoutMenu({
-                            group,
-                            top,
-                            left: rect.right + 8,
-                          });
-                        }
-                      }}
-                      onMouseEnter={(e) => showTooltip(group.title, e)}
-                      onMouseLeave={hideTooltip}
-                      className={cn(
-                        "mx-auto flex h-10 w-10 items-center justify-center rounded-xl transition-all cursor-pointer",
-                        buttonActive
-                          ? "text-sidebar-text shadow-sm"
-                          : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
-                      )}
-                      style={
-                        buttonActive
-                          ? {
-                              backgroundColor: "var(--primary)",
-                              color: "var(--sidebar-text)",
+                  <div key={group.title} className="space-y-[6px]">
+                    {group.items.map((item) => {
+                      const active = isItemActive(item.href);
+                      const ItemIcon = item.icon || group.icon;
+                      const label = navLabelForItem(item, { superAdminUser });
+
+                      return (
+                        <div key={item.href} className="flex justify-center">
+                          <Link
+                            href={item.href}
+                            onClick={() => {
+                              hideTooltip();
+                              onClose();
+                            }}
+                            onMouseEnter={(e) => showTooltip(label, e)}
+                            onMouseLeave={hideTooltip}
+                            className={cn(
+                              "flex h-[44px] w-[44px] items-center justify-center rounded-[12px] transition-all duration-150 focus:outline-hidden",
+                              active
+                                ? "shadow-sm"
+                                : "hover:bg-white/10 hover:text-white",
+                            )}
+                            style={
+                              active
+                                ? {
+                                    backgroundColor: "var(--primary, #123B63)",
+                                    color: "var(--sidebar-text, #FFFFFF)",
+                                  }
+                                : {
+                                    color: "var(--sidebar-muted, #AABBD4)",
+                                  }
                             }
-                          : undefined
-                      }
-                      title={group.title}
-                      aria-label={group.title}
-                    >
-                      <GroupIcon className="h-5 w-5" />
-                    </button>
+                            title={label}
+                            aria-label={label}
+                          >
+                            <ItemIcon
+                              size={20}
+                              strokeWidth={2}
+                              className="shrink-0"
+                            />
+                          </Link>
+                        </div>
+                      );
+                    })}
                   </div>
                 );
               }
 
-              // Single item in collapsed mode
-              const singleItem = group.items[0];
-              if (!singleItem) return null;
-              const active = isItemActive(singleItem.href);
-              const ItemIcon = singleItem.icon || GroupIcon;
-              const label = navLabelForItem(singleItem, { superAdminUser });
-
               return (
-                <div key={group.title} className="mb-2">
-                  <Link
-                    href={singleItem.href}
-                    onClick={() => {
-                      setFlyoutMenu(null);
-                      hideTooltip();
-                      onClose();
-                    }}
-                    onMouseEnter={(e) => showTooltip(label, e)}
-                    onMouseLeave={hideTooltip}
-                    className={cn(
-                      "mx-auto flex h-10 w-10 items-center justify-center rounded-xl transition-all",
-                      active
-                        ? "text-sidebar-text shadow-sm"
-                        : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text",
-                    )}
-                    style={
-                      active
-                        ? {
-                            backgroundColor: "var(--primary)",
-                            color: "var(--sidebar-text)",
-                          }
-                        : undefined
-                    }
-                    title={label}
-                    aria-label={label}
+                <div key={group.title}>
+                  {/* Section heading: 14px horizontal, 4px top, 8px bottom padding, 11px bold uppercase 0.06em tracking */}
+                  <div
+                    className="px-[14px] pt-[4px] pb-[8px] text-[11px] font-bold uppercase tracking-[0.06em]"
+                    style={{ color: "var(--sidebar-muted, #AABBD4)" }}
                   >
-                    <ItemIcon className="h-5 w-5" />
-                  </Link>
+                    {group.title}
+                  </div>
+
+                  {/* 4px between section heading and its items */}
+                  <ul className="space-y-[4px]">
+                    {group.items.map((item) => {
+                      const active = isItemActive(item.href);
+                      const ItemIcon = item.icon || group.icon;
+                      const label = navLabelForItem(item, { superAdminUser });
+
+                      return (
+                        <li key={item.href}>
+                          <Link
+                            href={item.href}
+                            onClick={onClose}
+                            className={cn(
+                              "group flex w-full items-center px-[14px] py-[10px] rounded-[12px] gap-[14px] text-[13px] transition-all duration-150 focus:outline-hidden",
+                              active
+                                ? "font-semibold shadow-sm"
+                                : "font-medium hover:bg-white/10 hover:text-white",
+                            )}
+                            style={
+                              active
+                                ? {
+                                    backgroundColor: "var(--primary, #123B63)",
+                                    color: "var(--sidebar-text, #FFFFFF)",
+                                  }
+                                : {
+                                    color: "var(--sidebar-text, #FFFFFF)",
+                                  }
+                            }
+                          >
+                            <ItemIcon
+                              size={18}
+                              strokeWidth={2}
+                              className={cn(
+                                "shrink-0 transition-colors",
+                                active
+                                  ? "text-inherit"
+                                  : "text-[var(--sidebar-muted,#AABBD4)] group-hover:text-white",
+                              )}
+                            />
+                            <span className="truncate leading-snug">{label}</span>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </div>
               );
-            }
-
-            return (
-              <div key={group.title} className="mb-3">
-                {hasMultiple ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => toggleGroup(group.title)}
-                      className={cn(
-                        "flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-medium transition-colors cursor-pointer hover:bg-sidebar-hover",
-                        isGroupActive
-                          ? "text-sidebar-text"
-                          : "text-sidebar-muted hover:text-sidebar-text",
-                      )}
-                    >
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <GroupIcon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em]">
-                          {group.title}
-                        </span>
-                      </div>
-                      <div className="flex shrink-0 items-center">
-                        {isGroupExpanded ? (
-                          <ChevronDown className="h-3.5 w-3.5" />
-                        ) : (
-                          <ChevronRight className="h-3.5 w-3.5" />
-                        )}
-                      </div>
-                    </button>
-
-                    {isGroupExpanded ? (
-                      <ul
-                        className="ml-3.5 mt-1 space-y-1 border-l pl-2.5"
-                        style={{
-                          borderColor:
-                            "color-mix(in srgb, var(--border) 35%, transparent)",
-                        }}
-                      >
-                        {group.items.map((item) => {
-                          const active = isItemActive(item.href);
-                          const ItemIcon = item.icon;
-                          const label = navLabelForItem(item, { superAdminUser });
-                          return (
-                            <li key={item.href}>
-                              <Link
-                                href={item.href}
-                                onClick={onClose}
-                                className={cn(
-                                  "group flex items-center gap-3 rounded-xl px-3 py-2 text-[13px] transition-colors",
-                                  active
-                                    ? "font-semibold shadow-sm"
-                                    : "font-medium text-sidebar-text/90 hover:bg-sidebar-hover hover:text-sidebar-text",
-                                )}
-                                style={
-                                  active
-                                    ? {
-                                        backgroundColor: "var(--primary)",
-                                        color: "var(--sidebar-text)",
-                                      }
-                                    : undefined
-                                }
-                              >
-                                <ItemIcon
-                                  className={cn(
-                                    "h-4 w-4 shrink-0",
-                                    active
-                                      ? "text-sidebar-text"
-                                      : "text-sidebar-muted group-hover:text-sidebar-text",
-                                  )}
-                                />
-                                <span className="truncate">{label}</span>
-                              </Link>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    ) : null}
-                  </>
-                ) : (
-                  // Single-item group rendered as uppercase section heading + pill link
-                  <div>
-                    <p
-                      className="px-3 mb-2 text-[11px] font-semibold uppercase tracking-[0.08em]"
-                      style={{ color: "var(--sidebar-muted)" }}
-                    >
-                      {group.title}
-                    </p>
-                    <ul className="space-y-1">
-                      {group.items.map((item) => {
-                        const active = isItemActive(item.href);
-                        const ItemIcon = item.icon;
-                        const label = navLabelForItem(item, { superAdminUser });
-                        return (
-                          <li key={item.href}>
-                            <Link
-                              href={item.href}
-                              onClick={onClose}
-                              className={cn(
-                                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] transition-colors",
-                                active
-                                  ? "font-semibold shadow-sm"
-                                  : "font-medium text-sidebar-text/90 hover:bg-sidebar-hover hover:text-sidebar-text",
-                              )}
-                              style={
-                                active
-                                  ? {
-                                      backgroundColor: "var(--primary)",
-                                      color: "var(--sidebar-text)",
-                                    }
-                                  : undefined
-                              }
-                            >
-                              <ItemIcon
-                                className={cn(
-                                  "h-4 w-4 shrink-0",
-                                  active
-                                    ? "text-sidebar-text"
-                                    : "text-sidebar-muted group-hover:text-sidebar-text",
-                                )}
-                              />
-                              <span className="truncate">{label}</span>
-                            </Link>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+            })}
+          </div>
         </nav>
 
+        {/* Bottom User Profile */}
         <div
           className={cn(
-            "shrink-0 px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))]",
-            collapsed && "px-2",
+            "shrink-0 mt-auto transition-all duration-200",
+            collapsed ? "p-[14px]" : "p-[14px]",
           )}
         >
           {collapsed ? (
-            <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center">
               <button
                 type="button"
                 disabled={!canOpenProfile}
@@ -554,18 +388,26 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   setProfileOpen(true);
                   onClose();
                 }}
-                onMouseEnter={(e) => showTooltip(user?.name || "Profile", e)}
+                onMouseEnter={(e) =>
+                  showTooltip(
+                    `${user?.name || "User"} (${roleLabel || user?.email || user?.username || "Staff"})`,
+                    e,
+                  )
+                }
                 onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-full overflow-hidden text-sm font-bold transition hover:opacity-90 disabled:cursor-default"
+                className={cn(
+                  "flex h-[40px] w-[40px] items-center justify-center rounded-full overflow-hidden text-[14px] font-bold shadow-xs transition hover:opacity-90",
+                  canOpenProfile ? "cursor-pointer" : "cursor-default",
+                )}
                 style={
                   user?.profilePhoto
                     ? undefined
                     : {
-                        backgroundColor: "var(--primary-light)",
-                        color: "var(--primary)",
+                        backgroundColor: "var(--primary-light, #EAF4FB)",
+                        color: "var(--primary, #123B63)",
                       }
                 }
-                title={user?.name || "Profile"}
+                title={`${user?.name || "User"} (${roleLabel || user?.email || user?.username || "Staff"})`}
                 aria-label="Profile"
               >
                 {user?.profilePhoto ? (
@@ -577,29 +419,17 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                 ) : user?.name ? (
                   user.name.trim().charAt(0).toUpperCase()
                 ) : (
-                  <UserRound className="h-4 w-4" />
+                  <UserRound size={18} strokeWidth={2} />
                 )}
-              </button>
-              <button
-                type="button"
-                onClick={() => setLogoutModalOpen(true)}
-                onMouseEnter={(e) => showTooltip("Sign out", e)}
-                onMouseLeave={hideTooltip}
-                className="flex h-9 w-9 items-center justify-center rounded-lg text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
-                title="Sign out"
-                aria-label="Sign out"
-              >
-                <LogOut className="h-4 w-4" />
               </button>
             </div>
           ) : (
             <div
-              className="flex items-center gap-2 rounded-xl border px-2.5 py-2 shadow-sm"
+              className="flex h-[64px] items-center justify-between rounded-[16px] px-[14px] border shadow-md transition-all duration-150"
               style={{
-                backgroundColor:
-                  "color-mix(in srgb, var(--primary-light) 10%, var(--sidebar))",
-                borderColor:
-                  "color-mix(in srgb, var(--border) 25%, transparent)",
+                backgroundColor: "rgba(0, 0, 0, 0.25)",
+                borderColor: "rgba(255, 255, 255, 0.08)",
+                boxShadow: "0 4px 16px -2px rgba(0, 0, 0, 0.3)",
               }}
             >
               <button
@@ -610,17 +440,20 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   setProfileOpen(true);
                   onClose();
                 }}
-                className="flex min-w-0 flex-1 items-center gap-2.5 text-left transition hover:opacity-90 disabled:cursor-default"
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-[12px] text-left transition hover:opacity-95 focus:outline-hidden",
+                  canOpenProfile ? "cursor-pointer" : "cursor-default",
+                )}
                 title={canOpenProfile ? "View / edit your profile" : undefined}
               >
                 <span
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold overflow-hidden"
+                  className="flex h-[40px] w-[40px] shrink-0 items-center justify-center rounded-full text-[14px] font-bold overflow-hidden"
                   style={
                     user?.profilePhoto
                       ? undefined
                       : {
-                          backgroundColor: "var(--primary-light)",
-                          color: "var(--primary)",
+                          backgroundColor: "var(--primary-light, #EAF4FB)",
+                          color: "var(--primary, #123B63)",
                         }
                   }
                 >
@@ -633,32 +466,33 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
                   ) : user?.name ? (
                     user.name.trim().charAt(0).toUpperCase()
                   ) : (
-                    <UserRound className="h-4 w-4" />
+                    <UserRound size={18} strokeWidth={2} />
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span
-                    className="block truncate text-xs font-bold uppercase tracking-wide"
-                    style={{ color: "var(--sidebar-text)" }}
+                    className="block truncate text-[13px] font-bold leading-tight"
+                    style={{ color: "var(--sidebar-text, #FFFFFF)" }}
                   >
                     {user?.name || "Signed in"}
                   </span>
                   <span
-                    className="block truncate text-[11px] font-medium mt-0.5"
-                    style={{ color: "var(--sidebar-muted)" }}
+                    className="block truncate text-[11px] font-normal leading-tight mt-0.5"
+                    style={{ color: "var(--sidebar-muted, #AABBD4)" }}
                   >
-                    {roleLabel || user?.email || user?.username || "HRMS account"}
+                    {roleLabel || user?.email || user?.username || "Staff"}
                   </span>
                 </span>
               </button>
+
               <button
                 type="button"
                 onClick={() => setLogoutModalOpen(true)}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sidebar-muted transition hover:bg-sidebar-hover hover:text-sidebar-text cursor-pointer"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sidebar-muted transition hover:bg-white/10 hover:text-white cursor-pointer ml-1 focus:outline-hidden"
                 title="Sign out"
                 aria-label="Sign out"
               >
-                <LogOut className="h-4 w-4 shrink-0" />
+                <LogOut size={16} strokeWidth={2} />
               </button>
             </div>
           )}
@@ -684,100 +518,22 @@ export function Sidebar({ open, collapsed, onClose, onToggleCollapsed }: Props) 
       {mounted && typeof document !== "undefined"
         ? createPortal(
             <>
-              {/* Tooltip on hover */}
-              {hoveredItem && !flyoutMenu ? (
+              {/* Tooltip on hover in collapsed mode */}
+              {hoveredItem ? (
                 <div
                   className="pointer-events-none fixed z-[9999] rounded-md border px-2.5 py-1 text-xs font-medium shadow-xl whitespace-nowrap animate-in fade-in zoom-in-95 duration-100"
                   style={{
                     top: hoveredItem.top,
                     left: hoveredItem.left,
-                    backgroundColor: "var(--sidebar)",
-                    borderColor: "var(--border)",
-                    color: "var(--sidebar-text)",
+                    backgroundColor: "var(--sidebar, #1E3150)",
+                    borderColor: "var(--border, rgba(255, 255, 255, 0.15))",
+                    color: "var(--sidebar-text, #FFFFFF)",
                     fontFamily:
                       "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
+                    boxShadow: "0 4px 14px rgba(0, 0, 0, 0.35)",
                   }}
                 >
                   {hoveredItem.title}
-                </div>
-              ) : null}
-
-              {/* Side subsection flyout on click */}
-              {flyoutMenu ? (
-                <div
-                  id="sidebar-flyout-menu"
-                  className="fixed z-[9999] w-60 max-h-[calc(100vh-2rem)] overflow-y-auto rounded-xl border p-2 shadow-2xl animate-in fade-in zoom-in-95 duration-150"
-                  style={{
-                    top: flyoutMenu.top,
-                    left: flyoutMenu.left,
-                    backgroundColor: "var(--sidebar)",
-                    borderColor: "var(--border)",
-                    color: "var(--sidebar-text)",
-                    fontFamily:
-                      "'Plus Jakarta Sans', system-ui, -apple-system, sans-serif",
-                  }}
-                >
-                  <div
-                    className="mb-1.5 flex items-center justify-between border-b px-2.5 py-1.5"
-                    style={{ borderColor: "var(--border)" }}
-                  >
-                    <p
-                      className="text-[11px] font-semibold uppercase tracking-[0.08em]"
-                      style={{ color: "var(--sidebar-muted)" }}
-                    >
-                      {flyoutMenu.group.title}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setFlyoutMenu(null)}
-                      className="rounded p-0.5 text-sidebar-muted hover:text-sidebar-text hover:bg-sidebar-hover transition"
-                      aria-label="Close menu"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <ul className="space-y-1">
-                    {flyoutMenu.group.items.map((item) => {
-                      const active = isItemActive(item.href);
-                      const ItemIcon = item.icon;
-                      const label = navLabelForItem(item, { superAdminUser });
-                      return (
-                        <li key={item.href}>
-                          <Link
-                            href={item.href}
-                            onClick={() => {
-                              setFlyoutMenu(null);
-                              onClose();
-                            }}
-                            className={cn(
-                              "group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-xs transition-colors",
-                              active
-                                ? "font-semibold shadow-sm"
-                                : "font-medium text-sidebar-text/90 hover:bg-sidebar-hover hover:text-sidebar-text",
-                            )}
-                            style={
-                              active
-                                ? {
-                                    backgroundColor: "var(--primary)",
-                                    color: "var(--sidebar-text)",
-                                  }
-                                : undefined
-                            }
-                          >
-                            <ItemIcon
-                              className={cn(
-                                "h-4 w-4 shrink-0",
-                                active
-                                  ? "text-sidebar-text"
-                                  : "text-sidebar-muted group-hover:text-sidebar-text",
-                              )}
-                            />
-                            <span className="truncate">{label}</span>
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
                 </div>
               ) : null}
             </>,
