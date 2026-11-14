@@ -238,6 +238,7 @@ internalMarksRouter.get(
       const subjectId = num(req.query.subjectId);
       const facultyStaffLinkId = num(req.query.facultyStaffLinkId);
       const batch = str(req.query.batch);
+      const section = str(req.query.section);
       const semester = num(req.query.semester);
       const year = num(req.query.year);
 
@@ -268,6 +269,7 @@ internalMarksRouter.get(
         year,
         batch,
         semester,
+        section,
       });
 
       res.json({ data });

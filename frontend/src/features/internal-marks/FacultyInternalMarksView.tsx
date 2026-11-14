@@ -30,6 +30,8 @@ type AssignedSubject = {
   semester: number | null;
   year: number | null;
   batch: string;
+  sections?: string[];
+  sectionName?: string;
   accessStatus: "enabled" | "disabled";
   accessLevel: "college" | "course" | "branch" | "individual" | "none";
   submissionId: number | null;
@@ -289,6 +291,15 @@ export function FacultyInternalMarksView() {
                         {sub.year && sub.semester ? (
                           <div><span className="font-medium text-slate-700">Year / Sem:</span> Year {sub.year}, Sem {sub.semester}</div>
                         ) : null}
+                        {sub.sections && sub.sections.length > 0 ? (
+                          <div>
+                            <span className="font-medium text-slate-700">Sections:</span>{" "}
+                            <span className="font-semibold text-brand-700">
+                              {sub.sections.join(", ")}
+                              {sub.sections.length > 1 ? " (Merged / Multi-Section)" : ""}
+                            </span>
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="flex items-center justify-between pt-2 text-xs border-t border-border">
@@ -517,6 +528,7 @@ export function FacultyInternalMarksView() {
           year={"year" in entryModal.subject ? entryModal.subject.year : undefined}
           semester={"semester" in entryModal.subject ? entryModal.subject.semester : undefined}
           batch={"batch" in entryModal.subject ? entryModal.subject.batch : undefined}
+          section={"sectionName" in entryModal.subject ? entryModal.subject.sectionName : undefined}
           readOnly={entryModal.readOnly}
           onClose={() => setEntryModal({ open: false })}
           onSaved={() => void loadData()}

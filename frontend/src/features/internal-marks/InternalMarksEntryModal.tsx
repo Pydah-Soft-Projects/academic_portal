@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { LoadingAnimation } from "@/components/ui/LoadingAnimation";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import { apiFetch } from "@/lib/api";
-import { Check, Save, Send, AlertCircle } from "lucide-react";
+import { Check, Save, Send, AlertCircle, Search, Filter } from "lucide-react";
 
 type StudentEntry = {
   studentDbId: number;
@@ -30,6 +30,7 @@ type Props = {
   year?: number | null;
   semester?: number | null;
   batch?: string | null;
+  section?: string | null;
   readOnly?: boolean;
   onClose: () => void;
   onSaved?: () => void;
@@ -46,6 +47,7 @@ export function InternalMarksEntryModal({
   year,
   semester,
   batch,
+  section,
   readOnly = false,
   onClose,
   onSaved,
@@ -64,6 +66,37 @@ export function InternalMarksEntryModal({
   const [students, setStudents] = useState<StudentEntry[]>([]);
   const [marksState, setMarksState] = useState<Record<number, { marks: string; remarks: string }>>({});
   const [validationErrors, setValidationErrors] = useState<Record<number, string>>({});
+
+  const [filterSection, setFilterSection] = useState<string>(section || "all");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  const availableSections = useMemo(() => {
+    const secs = new Set<string>();
+    for (const s of students) {
+      if (s.sectionName && s.sectionName.trim()) {
+        secs.add(s.sectionName.trim());
+      }
+    }
+    return Array.from(secs).sort();
+  }, [students]);
+
+  const displayedStudents = useMemo(() => {
+    return students.filter((st) => {
+      if (filterSection !== "all") {
+        if ((st.sectionName || "").trim().toUpperCase() !== filterSection.trim().toUpperCase()) {
+          return false;
+        }
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const mRoll = st.rollNumber.toLowerCase().includes(q);
+        const mAdm = st.admissionNumber.toLowerCase().includes(q);
+        const mName = st.studentName.toLowerCase().includes(q);
+        if (!mRoll && !mAdm && !mName) return false;
+      }
+      return true;
+    });
+  }, [students, filterSection, searchQuery]);
 
   // Fetch students & current marks
   useEffect(() => {
@@ -302,71 +335,131 @@ export function InternalMarksEntryModal({
             No students found for this subject and branch scope.
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 border-b border-border">
-                <tr>
-                  <th className="px-3 py-2.5">#</th>
-                  <th className="px-3 py-2.5">Roll / PIN Number</th>
-                  <th className="px-3 py-2.5">Student Name</th>
-                  <th className="px-3 py-2.5">Section</th>
-                  <th className="px-3 py-2.5 w-32">Internal Marks (Max: {maxMarks})</th>
-                  <th className="px-3 py-2.5">Remarks</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border text-xs">
-                {students.map((st, idx) => {
-                  const state = marksState[st.studentDbId] || { marks: "", remarks: "" };
-                  const errText = validationErrors[st.studentDbId];
+          <div className="space-y-3">
+            {/* Search and Section Filter Controls */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border bg-slate-50 px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by Roll / PIN / Name..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="h-8 w-56 rounded border border-border bg-white pl-8 pr-2.5 text-xs text-slate-800 outline-none focus:border-brand-600"
+                  />
+                </div>
 
-                  return (
-                    <tr key={st.studentDbId} className="hover:bg-slate-50">
-                      <td className="px-3 py-2 text-slate-400 font-mono">{idx + 1}</td>
-                      <td className="px-3 py-2 font-mono font-semibold text-slate-900">
-                        {st.rollNumber}
-                      </td>
-                      <td className="px-3 py-2 font-medium text-slate-800">{st.studentName}</td>
-                      <td className="px-3 py-2 text-slate-500">{st.sectionName || "—"}</td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          step="0.5"
-                          min="0"
-                          max={maxMarks}
-                          disabled={!isEditable}
-                          placeholder="0.0"
-                          className={`w-24 rounded border px-2 py-1 text-center font-bold outline-none focus:border-brand-600 ${
-                            errText
-                              ? "border-red-500 bg-red-50 text-red-900"
-                              : "border-border bg-white text-slate-900"
-                          }`}
-                          value={state.marks}
-                          onChange={(e) => handleMarkChange(st.studentDbId, e.target.value)}
-                        />
-                        {errText && (
-                          <div className="mt-0.5 text-[10px] text-critical font-medium">{errText}</div>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="text"
-                          disabled={!isEditable}
-                          placeholder="Optional remarks"
-                          className="w-full rounded border border-border bg-white px-2 py-1 text-xs outline-none focus:border-brand-600"
-                          value={state.remarks}
-                          onChange={(e) =>
-                            setMarksState((prev) => ({
-                              ...prev,
-                              [st.studentDbId]: { ...prev[st.studentDbId], remarks: e.target.value },
-                            }))
-                          }
-                        />
-                      </td>
+                {availableSections.length > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <Filter className="h-3.5 w-3.5 text-slate-400" />
+                    <select
+                      value={filterSection}
+                      onChange={(e) => setFilterSection(e.target.value)}
+                      className="h-8 rounded border border-border bg-white px-2 text-xs font-semibold text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                    >
+                      <option value="all">All Sections ({students.length})</option>
+                      {availableSections.map((sec) => {
+                        const count = students.filter(
+                          (s) => (s.sectionName || "").trim().toUpperCase() === sec.toUpperCase()
+                        ).length;
+                        return (
+                          <option key={sec} value={sec}>
+                            Section {sec} ({count})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="text-slate-500 font-medium text-[11px] sm:text-xs">
+                Showing <span className="font-bold text-slate-800">{displayedStudents.length}</span> of <span className="font-bold text-slate-800">{students.length}</span> students
+                {availableSections.length > 1 && (
+                  <span className="ml-1 text-[11px] text-brand-700 font-semibold bg-brand-50 px-1.5 py-0.5 rounded">
+                    Merged Sections: {availableSections.join(", ")}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {displayedStudents.length === 0 ? (
+              <div className="py-8 text-center text-sm text-slate-500 border border-border rounded-lg bg-white">
+                No students match your search query or section filter.
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 border-b border-border">
+                    <tr>
+                      <th className="px-3 py-2.5">#</th>
+                      <th className="px-3 py-2.5">Roll / PIN Number</th>
+                      <th className="px-3 py-2.5">Student Name</th>
+                      <th className="px-3 py-2.5">Section</th>
+                      <th className="px-3 py-2.5 w-32">Internal Marks (Max: {maxMarks})</th>
+                      <th className="px-3 py-2.5">Remarks</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody className="divide-y divide-border text-xs">
+                    {displayedStudents.map((st, idx) => {
+                      const state = marksState[st.studentDbId] || { marks: "", remarks: "" };
+                      const errText = validationErrors[st.studentDbId];
+
+                      return (
+                        <tr key={st.studentDbId} className="hover:bg-slate-50">
+                          <td className="px-3 py-2 text-slate-400 font-mono">{idx + 1}</td>
+                          <td className="px-3 py-2 font-mono font-semibold text-slate-900">
+                            {st.rollNumber}
+                          </td>
+                          <td className="px-3 py-2 font-medium text-slate-800">{st.studentName}</td>
+                          <td className="px-3 py-2">
+                            <span className="font-semibold text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded text-[11px]">
+                              {st.sectionName || "A"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              max={maxMarks}
+                              disabled={!isEditable}
+                              placeholder="0.0"
+                              className={`w-24 rounded border px-2 py-1 text-center font-bold outline-none focus:border-brand-600 ${
+                                errText
+                                  ? "border-red-500 bg-red-50 text-red-900"
+                                  : "border-border bg-white text-slate-900"
+                              }`}
+                              value={state.marks}
+                              onChange={(e) => handleMarkChange(st.studentDbId, e.target.value)}
+                            />
+                            {errText && (
+                              <div className="mt-0.5 text-[10px] text-critical font-medium">{errText}</div>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <input
+                              type="text"
+                              disabled={!isEditable}
+                              placeholder="Optional remarks"
+                              className="w-full rounded border border-border bg-white px-2 py-1 text-xs outline-none focus:border-brand-600"
+                              value={state.remarks}
+                              onChange={(e) =>
+                                setMarksState((prev) => ({
+                                  ...prev,
+                                  [st.studentDbId]: { ...prev[st.studentDbId], remarks: e.target.value },
+                                }))
+                              }
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -374,6 +467,9 @@ export function InternalMarksEntryModal({
         <div className="flex items-center justify-between border-t border-border pt-4">
           <div className="text-xs text-slate-500">
             Total Students: <span className="font-semibold text-slate-800">{students.length}</span>
+            {displayedStudents.length !== students.length && (
+              <span> (Filtered: <span className="font-semibold text-brand-700">{displayedStudents.length}</span>)</span>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <Button variant="secondary" onClick={onClose}>

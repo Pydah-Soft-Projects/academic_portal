@@ -1124,14 +1124,15 @@ export async function getFacultyAssignedSubjects(
     (RowDataPacket & {
       subject_id: number;
       branch_id: number;
+      section_name: string | null;
     })[]
   >(
     `
-    SELECT DISTINCT subject_id, branch_id
+    SELECT DISTINCT subject_id, branch_id, NULL AS section_name
     FROM ap_faculty_assignments
     WHERE faculty_staff_link_id = ?
     UNION
-    SELECT DISTINCT te.subject_id, tp.branch_id
+    SELECT DISTINCT te.subject_id, tp.branch_id, tp.section_name
     FROM ap_timetable_entries te
     INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
     WHERE te.faculty_staff_link_id = ? AND te.subject_id IS NOT NULL
@@ -1216,6 +1217,16 @@ export async function getFacultyAssignedSubjects(
       continue;
     }
 
+    const relatedAssignments = assignments.filter(
+      (a) =>
+        Number(a.subject_id) === Number(item.subjectId) &&
+        Number(a.branch_id) === Number(item.branchId)
+    );
+    const rawSections = relatedAssignments
+      .map((a) => (a.section_name ? String(a.section_name).trim() : null))
+      .filter((s): s is string => Boolean(s));
+    const uniqueSections = [...new Set(rawSections)].sort();
+
     const acc = await resolveFacultySubjectAccess(
       item.collegeId,
       item.courseId,
@@ -1244,6 +1255,8 @@ export async function getFacultyAssignedSubjects(
       semester: item.semester,
       year: item.yearOfStudy,
       batch: item.batch || "",
+      sections: uniqueSections,
+      sectionName: uniqueSections.join(", "),
       accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
       accessLevel: acc.accessLevel,
       submissionId: sub ? Number(sub.id) : null,
@@ -1267,6 +1280,7 @@ export async function getStudentsForMarksEntry(params: {
   year?: number;
   semester?: number;
   batch?: string;
+  section?: string;
 }) {
   await ensureInternalMarksSchema();
 
@@ -1368,6 +1382,13 @@ export async function getStudentsForMarksEntry(params: {
     paramsStud.push(targetBatch.trim());
   }
 
+  if (params.section && params.section !== "all") {
+    whereStud.push(
+      "(TRIM(COALESCE(s.section, '')) = ? OR TRIM(COALESCE(ss.section_name, '')) = ?)"
+    );
+    paramsStud.push(params.section.trim(), params.section.trim());
+  }
+
   let studentRows = await queryStudent<
     (RowDataPacket & {
       id: number;
@@ -1434,6 +1455,10 @@ export async function getStudentsForMarksEntry(params: {
     };
   });
 
+  const uniqueSections = [
+    ...new Set(studentList.map((s) => s.sectionName).filter(Boolean)),
+  ].sort();
+
   return {
     subjectId: params.subjectId,
     subjectCode: subjectMeta.code,
@@ -1447,6 +1472,7 @@ export async function getStudentsForMarksEntry(params: {
     submissionId,
     status,
     maxMarks,
+    sections: uniqueSections,
     students: studentList,
   };
 }
