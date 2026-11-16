@@ -288,9 +288,14 @@ export function FacultyInternalMarksView() {
                   <Card key={`${sub.branchId}-${sub.subjectId}`} className="flex flex-col justify-between p-4 space-y-4 hover:border-brand-300 transition shadow-xs">
                     <div className="space-y-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-xs font-semibold uppercase text-brand-700 bg-brand-50 px-2 py-0.5 rounded">
-                          {sub.subjectCode}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-xs font-semibold uppercase text-brand-700 bg-brand-50 px-2 py-0.5 rounded">
+                            {sub.subjectCode}
+                          </span>
+                          <span className="font-semibold text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
+                            {sub.branchName}
+                          </span>
+                        </div>
                         <StatusBadge status={sub.submissionStatus} />
                       </div>
 
