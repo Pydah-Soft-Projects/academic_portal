@@ -179,6 +179,26 @@ todayTimetableRouter.post("/override", requirePermission("today_timetable.edit",
       return;
     }
 
+    const isSplit = Boolean(body.isSplit);
+    const rawBatches = Array.isArray(body.batches)
+      ? body.batches
+      : Array.isArray(body.splitDetails)
+      ? body.splitDetails
+      : null;
+
+    const splitDetails = rawBatches
+      ? (rawBatches as Array<Record<string, unknown>>).map((b) => ({
+          batchLabel: str(b.batchLabel) || "Batch",
+          subjectId: num(b.subjectId) ?? null,
+          subjectCode: str(b.subjectCode) ?? null,
+          subjectName: str(b.customLabel) || str(b.subjectName) || null,
+          customLabel: str(b.customLabel) ?? null,
+          hrmsEmployeeId: str(b.hrmsEmployeeId) ?? null,
+          facultyName: str(b.facultyName) ?? null,
+          roomLabel: str(b.roomLabel) ?? null,
+        }))
+      : null;
+
     let lastResult: unknown = null;
     for (const tSlotId of targetSlotIds) {
       lastResult = await recordDailyTimetableChange({
@@ -210,6 +230,9 @@ todayTimetableRouter.post("/override", requirePermission("today_timetable.edit",
         changeType: body.changeType === "REVERTED_TO_MASTER" ? "REVERTED_TO_MASTER" : "PERIOD_CHANGE",
         actorUserId: req.authUser?.id,
         actorName: req.authUser?.name || req.authUser?.username || "Authorized User",
+
+        isSplit,
+        splitDetails,
       });
     }
 

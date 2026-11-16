@@ -142,6 +142,17 @@ type PlannerResponse = {
   }>;
 };
 
+export type PeriodOverrideBatch = {
+  batchLabel: string;
+  subjectId: string;
+  subjectCode: string;
+  subjectName: string;
+  customLabel?: string;
+  hrmsEmployeeId: string;
+  facultyName: string;
+  roomLabel?: string;
+};
+
 type PeriodOverride = {
   slotId: number;
   slotLabel?: string;
@@ -155,6 +166,8 @@ type PeriodOverride = {
   remarks?: string | null;
   changedByName?: string | null;
   changedAt?: string;
+  isSplit?: boolean;
+  batches?: PeriodOverrideBatch[];
 };
 
 export type AllBatchesCohort = {
@@ -764,6 +777,8 @@ function PeriodEditModal({
     remarks: string;
     slotIds?: number[];
     isMoveSplitToSingle?: boolean;
+    isSplit?: boolean;
+    batches?: PeriodOverrideBatch[];
     masterSubjectName?: string;
     masterFacultyName?: string;
   }) => void;
@@ -798,6 +813,159 @@ function PeriodEditModal({
       currentOverride?.subjectName?.toLowerCase().includes("holiday") ||
       (currentOverride as unknown as { changeType?: string })?.changeType === "HOLIDAY",
   );
+
+  const [isSplit, setIsSplit] = useState<boolean>(() => {
+    if (currentOverride?.isSplit != null) return Boolean(currentOverride.isSplit);
+    if (isMasterSplit && !currentOverride) return true;
+    return false;
+  });
+
+  type SplitBatchDraft = {
+    batchLabel: string;
+    mode: "subject" | "special";
+    subjectId: string;
+    customLabel: string;
+    hrmsEmployeeId: string;
+    facultyName: string;
+    roomLabel: string;
+    facultySearch: string;
+    facultyOpen: boolean;
+  };
+
+  const [splitBatches, setSplitBatches] = useState<SplitBatchDraft[]>(() => {
+    if (currentOverride?.batches && currentOverride.batches.length > 0) {
+      return currentOverride.batches.map((b) => ({
+        batchLabel: b.batchLabel,
+        mode: b.customLabel ? "special" : "subject",
+        subjectId: b.subjectId || "",
+        customLabel: b.customLabel || "",
+        hrmsEmployeeId: b.hrmsEmployeeId || "",
+        facultyName: b.facultyName || "",
+        roomLabel: b.roomLabel || "",
+        facultySearch: "",
+        facultyOpen: false,
+      }));
+    }
+    if (masterEntries.length > 1) {
+      return masterEntries.map((e, idx) => ({
+        batchLabel: e.batchLabel || `Batch ${idx + 1}`,
+        mode: e.customLabel ? "special" : "subject",
+        subjectId: e.subjectId != null ? String(e.subjectId) : "",
+        customLabel: e.customLabel || "",
+        hrmsEmployeeId: e.facultyHrmsId || "",
+        facultyName: e.facultyName || "",
+        roomLabel: e.roomLabel || "",
+        facultySearch: "",
+        facultyOpen: false,
+      }));
+    }
+    return [
+      {
+        batchLabel: "Batch 1",
+        mode: masterEntry?.customLabel ? "special" : "subject",
+        subjectId: masterEntry?.subjectId != null ? String(masterEntry.subjectId) : (subjects[0] ? String(subjects[0].id) : ""),
+        customLabel: masterEntry?.customLabel || "",
+        hrmsEmployeeId: masterEntry?.facultyHrmsId || "",
+        facultyName: masterEntry?.facultyName || "",
+        roomLabel: "",
+        facultySearch: "",
+        facultyOpen: false,
+      },
+      {
+        batchLabel: "Batch 2",
+        mode: "subject",
+        subjectId: subjects[1] ? String(subjects[1].id) : (subjects[0] ? String(subjects[0].id) : ""),
+        customLabel: "",
+        hrmsEmployeeId: "",
+        facultyName: "",
+        roomLabel: "",
+        facultySearch: "",
+        facultyOpen: false,
+      },
+    ];
+  });
+
+  const updateBatch = (index: number, patch: Partial<SplitBatchDraft>) => {
+    setSplitBatches((prev) =>
+      prev.map((b, idx) => (idx === index ? { ...b, ...patch } : b))
+    );
+  };
+
+  const handleSwapBatches = () => {
+    if (splitBatches.length < 2) return;
+    setSplitBatches((prev) => {
+      const copy = [...prev];
+      const temp = {
+        mode: copy[0].mode,
+        subjectId: copy[0].subjectId,
+        customLabel: copy[0].customLabel,
+        hrmsEmployeeId: copy[0].hrmsEmployeeId,
+        facultyName: copy[0].facultyName,
+        roomLabel: copy[0].roomLabel,
+      };
+      copy[0] = {
+        ...copy[0],
+        mode: copy[1].mode,
+        subjectId: copy[1].subjectId,
+        customLabel: copy[1].customLabel,
+        hrmsEmployeeId: copy[1].hrmsEmployeeId,
+        facultyName: copy[1].facultyName,
+        roomLabel: copy[1].roomLabel,
+      };
+      copy[1] = {
+        ...copy[1],
+        mode: temp.mode,
+        subjectId: temp.subjectId,
+        customLabel: temp.customLabel,
+        hrmsEmployeeId: temp.hrmsEmployeeId,
+        facultyName: temp.facultyName,
+        roomLabel: temp.roomLabel,
+      };
+      return copy;
+    });
+  };
+
+  const handleCopyMasterBatches = () => {
+    if (masterEntries.length > 0) {
+      setSplitBatches(
+        masterEntries.map((e, idx) => ({
+          batchLabel: e.batchLabel || `Batch ${idx + 1}`,
+          mode: e.customLabel ? "special" : "subject",
+          subjectId: e.subjectId != null ? String(e.subjectId) : "",
+          customLabel: e.customLabel || "",
+          hrmsEmployeeId: e.facultyHrmsId || "",
+          facultyName: e.facultyName || "",
+          roomLabel: e.roomLabel || "",
+          facultySearch: "",
+          facultyOpen: false,
+        }))
+      );
+    }
+  };
+
+  const handleAddBatch = () => {
+    if (splitBatches.length >= 4) return;
+    const nextNum = splitBatches.length + 1;
+    setSplitBatches((prev) => [
+      ...prev,
+      {
+        batchLabel: `Batch ${nextNum}`,
+        mode: "subject",
+        subjectId: subjects[nextNum - 1] ? String(subjects[nextNum - 1].id) : (subjects[0] ? String(subjects[0].id) : ""),
+        customLabel: "",
+        hrmsEmployeeId: "",
+        facultyName: "",
+        roomLabel: "",
+        facultySearch: "",
+        facultyOpen: false,
+      },
+    ]);
+  };
+
+  const handleRemoveBatch = (index: number) => {
+    if (splitBatches.length <= 2) return;
+    setSplitBatches((prev) => prev.filter((_, idx) => idx !== index));
+  };
 
   const [periodType, setPeriodType] = useState<"subject" | "special" | "holiday">(() => {
     if (isCurrentHoliday) return "holiday";
@@ -838,13 +1006,34 @@ function PeriodEditModal({
       .slice(0, 8);
   }, [faculty, facultySearch]);
 
-  const isPeriodModified = Boolean(
-    currentOverride &&
-      (isMasterSplit ||
+  const isPeriodModified = useMemo(() => {
+    if (!currentOverride) return false;
+    if (currentOverride.isSplit !== isMasterSplit) return true;
+    if (currentOverride.isSplit) {
+      if (!currentOverride.batches || currentOverride.batches.length !== masterEntries.length) return true;
+      for (let i = 0; i < masterEntries.length; i++) {
+        const m = masterEntries[i];
+        const b = currentOverride.batches[i];
+        if (!b) return true;
+        const mSubId = m.subjectId != null ? String(m.subjectId) : "";
+        const mSubName = (m.customLabel || m.subjectName || "").trim().toLowerCase();
+        const mFac = (m.facultyHrmsId || "").trim();
+        const bSubId = (b.subjectId || "").trim();
+        const bSubName = (b.customLabel || b.subjectName || "").trim().toLowerCase();
+        const bFac = (b.hrmsEmployeeId || "").trim();
+        if (((bSubId && mSubId) ? bSubId !== mSubId : bSubName !== mSubName) || bFac !== mFac) {
+          return true;
+        }
+      }
+      return false;
+    }
+    return Boolean(
+      isMasterSplit ||
         currentOverride.subjectId !== (masterEntry?.subjectId != null ? String(masterEntry.subjectId) : "") ||
         currentOverride.hrmsEmployeeId !== (masterEntry?.facultyHrmsId || "") ||
-        (currentOverride.customLabel || "").trim().toLowerCase() !== (masterEntry?.customLabel || "").trim().toLowerCase()),
-  );
+        (currentOverride.customLabel || "").trim().toLowerCase() !== (masterEntry?.customLabel || "").trim().toLowerCase()
+    );
+  }, [currentOverride, isMasterSplit, masterEntries, masterEntry]);
 
   const handleSave = () => {
     if (!canEdit) return;
@@ -868,9 +1057,13 @@ function PeriodEditModal({
 
     const autoRemarks =
       remarks.trim() ||
-      (isMasterSplit ? "Moved split sections to single class" : "");
+      (isSplit
+        ? "Split slot into parallel batches"
+        : isMasterSplit
+        ? "Moved split sections to single class"
+        : "");
 
-    if (periodType === "holiday") {
+    if (periodType === "holiday" && !isSplit) {
       const cleanHoliday = holidayTitle.trim() || "Declared Holiday";
       onSave({
         override: {
@@ -884,11 +1077,63 @@ function PeriodEditModal({
           hrmsEmployeeId: "",
           facultyName: "",
           remarks: autoRemarks || `Holiday: ${cleanHoliday}`,
+          isSplit: false,
         },
         isRevert: false,
         remarks: autoRemarks || `Holiday: ${cleanHoliday}`,
         slotIds: selectedSlotIds,
         isMoveSplitToSingle: isMasterSplit,
+        isSplit: false,
+        masterSubjectName: masterSplitSubjectSummary,
+        masterFacultyName: masterSplitFacultySummary,
+      });
+      return;
+    }
+
+    if (isSplit) {
+      const formattedBatches: PeriodOverrideBatch[] = splitBatches.map((b) => {
+        const sub = subjects.find((s) => String(s.id) === b.subjectId);
+        const facItem = faculty.find((f) => f.hrmsEmployeeId === b.hrmsEmployeeId);
+        const sName = b.mode === "subject" ? (sub?.name || sub?.code || "") : (b.customLabel.trim() || "Special Class");
+        return {
+          batchLabel: b.batchLabel.trim() || "Batch",
+          subjectId: b.mode === "subject" ? b.subjectId : "",
+          subjectCode: b.mode === "subject" ? (sub?.code ?? "") : "",
+          subjectName: sName,
+          customLabel: b.mode === "special" ? (b.customLabel.trim() || "Special Class") : undefined,
+          hrmsEmployeeId: b.hrmsEmployeeId,
+          facultyName: facItem?.name || b.facultyName || "",
+          roomLabel: b.roomLabel.trim() || undefined,
+        };
+      });
+
+      const splitSubjectSummary = formattedBatches
+        .map((b) => `${b.batchLabel}: ${b.customLabel || b.subjectName || b.subjectCode || "Free"}`)
+        .join(" | ");
+
+      const splitFacultySummary = formattedBatches
+        .map((b) => `${b.batchLabel}: ${b.facultyName || "None"}`)
+        .join(" | ");
+
+      onSave({
+        override: {
+          slotId: slot.id,
+          slotLabel: slot.label,
+          slotTime: `${slot.startTime}–${slot.endTime}`,
+          subjectId: formattedBatches[0]?.subjectId || "",
+          subjectCode: formattedBatches[0]?.subjectCode || "",
+          subjectName: splitSubjectSummary,
+          hrmsEmployeeId: formattedBatches[0]?.hrmsEmployeeId || "",
+          facultyName: splitFacultySummary,
+          remarks: autoRemarks,
+          isSplit: true,
+          batches: formattedBatches,
+        },
+        isRevert: false,
+        remarks: autoRemarks,
+        slotIds: selectedSlotIds,
+        isSplit: true,
+        batches: formattedBatches,
         masterSubjectName: masterSplitSubjectSummary,
         masterFacultyName: masterSplitFacultySummary,
       });
@@ -913,11 +1158,13 @@ function PeriodEditModal({
           hrmsEmployeeId,
           facultyName: fac?.name ?? "",
           remarks: autoRemarks,
+          isSplit: false,
         },
         isRevert: false,
         remarks: autoRemarks,
         slotIds: selectedSlotIds,
         isMoveSplitToSingle: isMasterSplit,
+        isSplit: false,
         masterSubjectName: masterSplitSubjectSummary,
         masterFacultyName: masterSplitFacultySummary,
       });
@@ -943,11 +1190,13 @@ function PeriodEditModal({
         hrmsEmployeeId,
         facultyName: fac?.name ?? "",
         remarks: autoRemarks,
+        isSplit: false,
       },
       isRevert: false,
       remarks: autoRemarks,
       slotIds: selectedSlotIds,
       isMoveSplitToSingle: isMasterSplit,
+      isSplit: false,
       masterSubjectName: masterSplitSubjectSummary,
       masterFacultyName: masterSplitFacultySummary,
     });
@@ -968,7 +1217,14 @@ function PeriodEditModal({
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/60 p-3 sm:p-4 md:p-6 backdrop-blur-xs animate-in fade-in duration-150">
       <button type="button" className="absolute inset-0" onClick={onClose} aria-label="Close" />
-      <div className="relative z-10 w-full max-w-4xl lg:max-w-5xl max-h-[92vh] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+      <div
+        className={cn(
+          "relative z-10 w-full flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden transition-all duration-200",
+          isSplit
+            ? "max-w-5xl lg:max-w-6xl xl:max-w-7xl 2xl:max-w-[1400px] max-h-[95vh]"
+            : "max-w-4xl lg:max-w-5xl max-h-[92vh]"
+        )}
+      >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-slate-200/80 bg-white px-5 sm:px-6 py-4 shrink-0">
           <div>
@@ -1123,9 +1379,19 @@ function PeriodEditModal({
           )}
 
           {/* SIDE-BY-SIDE 2 CARDS */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+          <div
+            className={cn(
+              "grid gap-4 sm:gap-5 items-start",
+              isSplit ? "grid-cols-1 lg:grid-cols-12" : "grid-cols-1 md:grid-cols-2"
+            )}
+          >
             {/* CARD 1: Actual Period (Master Timetable Baseline) */}
-            <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 flex flex-col justify-between space-y-4">
+            <div
+              className={cn(
+                "rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5 flex flex-col justify-between space-y-4",
+                isSplit ? "lg:col-span-4 xl:col-span-3" : ""
+              )}
+            >
               <div>
                 <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-200/80">
                   <div className="flex items-center gap-2.5">
@@ -1235,6 +1501,7 @@ function PeriodEditModal({
             <div
               className={cn(
                 "rounded-2xl border p-4 sm:p-5 flex flex-col justify-between space-y-4 shadow-xs",
+                isSplit ? "lg:col-span-8 xl:col-span-9" : "",
                 isPeriodModified
                   ? "border-rose-300 bg-rose-50/40"
                   : isMasterSplit
@@ -1261,7 +1528,9 @@ function PeriodEditModal({
                   <span
                     className={cn(
                       "text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full border",
-                      isMasterSplit
+                      isSplit
+                        ? "bg-indigo-100 text-indigo-900 border-indigo-300"
+                        : isMasterSplit
                         ? currentOverride
                           ? "bg-indigo-100 text-indigo-900 border-indigo-300"
                           : "bg-indigo-50 text-indigo-800 border-indigo-200"
@@ -1270,7 +1539,9 @@ function PeriodEditModal({
                         : "bg-slate-100 text-slate-700 border-slate-200",
                     )}
                   >
-                    {isMasterSplit
+                    {isSplit
+                      ? `Split (${splitBatches.length} Batches)`
+                      : isMasterSplit
                       ? currentOverride
                         ? "Single (Combined)"
                         : "Move Split to Single"
@@ -1282,318 +1553,637 @@ function PeriodEditModal({
 
                 {canEdit ? (
                   <div className="space-y-3.5">
-                    {/* When master is split, render the Move Split to Single quick-actions panel */}
-                    {isMasterSplit && (
-                      <div className="rounded-xl border border-indigo-200/90 bg-gradient-to-b from-indigo-50/70 to-white p-3.5 space-y-2.5 shadow-2xs">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-1.5">
-                            <div className="p-1 rounded-md bg-indigo-100 text-indigo-700">
-                              <ArrowRightLeft className="h-3.5 w-3.5" />
-                            </div>
-                            <span className="text-xs font-bold text-indigo-950">
-                              Move Split to Single Class
-                            </span>
-                          </div>
-                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9.5px] font-bold text-indigo-900 uppercase tracking-wider">
-                            Quick Pick
+                    {/* Split Slot Checkbox Banner */}
+                    <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-indigo-200/90 bg-indigo-50/70 p-3.5 shadow-2xs">
+                      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={isSplit}
+                          onChange={(e) => {
+                            const next = e.target.checked;
+                            setIsSplit(next);
+                            if (!next && isMasterSplit) {
+                              setRemarks(remarks || "Moved split sections to single class");
+                            } else if (next) {
+                              setRemarks(remarks || "Split slot into parallel batches");
+                            }
+                          }}
+                          className="h-4.5 w-4.5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                        />
+                        <div>
+                          <span className="text-xs sm:text-sm font-bold text-navy-950 flex items-center gap-1.5">
+                            <Users className="h-4 w-4 text-indigo-600" />
+                            Split this slot into parallel batches (Batch 1 / Batch 2)
                           </span>
+                          <p className="text-[11.5px] text-slate-500 mt-0.5">
+                            Enable for practicals, labs, tutorials, or parallel electives running today.
+                          </p>
+                        </div>
+                      </label>
+                      <span
+                        className={cn(
+                          "text-[10.5px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border shrink-0",
+                          isSplit
+                            ? "bg-indigo-600 text-white border-indigo-700"
+                            : "bg-white text-slate-600 border-slate-200",
+                        )}
+                      >
+                        {isSplit ? "Split Mode" : "Single Class"}
+                      </span>
+                    </div>
+
+                    {isSplit ? (
+                      /* Split Mode Active: Parallel Batches Editor */
+                      <div className="space-y-4">
+                        {/* Quick Actions Row */}
+                        <div className="flex flex-wrap items-center justify-between gap-2.5 pt-0.5 pb-0.5">
+                          <span className="text-xs sm:text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                            <span className="inline-block h-2 w-2 rounded-full bg-indigo-600" />
+                            <span>Configuring {splitBatches.length} Parallel Batches</span>
+                          </span>
+
+                          <div className="flex items-center gap-2">
+                            {isMasterSplit && (
+                              <button
+                                type="button"
+                                onClick={handleCopyMasterBatches}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition-colors cursor-pointer"
+                                title="Reset batches to master timetable assignments"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                <span>Copy Master</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={handleSwapBatches}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
+                              title="Swap subjects & faculty between Batch 1 and Batch 2"
+                            >
+                              <ArrowRightLeft className="h-3.5 w-3.5" />
+                              <span>Swap Batches</span>
+                            </button>
+                            {splitBatches.length < 4 && (
+                              <button
+                                type="button"
+                                onClick={handleAddBatch}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-navy-900 bg-navy-50 hover:bg-navy-100 border border-navy-200 transition-colors cursor-pointer"
+                              >
+                                <span>+ Add Batch</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
 
-                        <p className="text-[11px] text-slate-600 leading-snug">
-                          Select a batch schedule to apply to all students today, or customize below:
-                        </p>
-
-                        <div className="grid grid-cols-1 gap-2 pt-0.5">
-                          {masterEntries.map((ent, idx) => {
-                            const bLabel = ent.batchLabel || `Batch ${idx + 1}`;
-                            const subTitle = ent.customLabel || ent.subjectName || ent.subjectCode || `Batch ${idx + 1}`;
-                            const isSelected =
-                              (ent.customLabel
-                                ? periodType === "special" && customLabel.trim().toUpperCase() === ent.customLabel.trim().toUpperCase()
-                                : periodType === "subject" && ent.subjectId != null && String(ent.subjectId) === subjectId) &&
-                              hrmsEmployeeId === (ent.facultyHrmsId || "");
+                        {/* Batch Cards Grid */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {splitBatches.map((b, bIdx) => {
+                            const facItem = faculty.find((f) => f.hrmsEmployeeId === b.hrmsEmployeeId);
+                            const filteredBatchFaculty = b.facultySearch.trim().length >= 2
+                              ? faculty
+                                  .filter(
+                                    (f) =>
+                                      f.name.toLowerCase().includes(b.facultySearch.trim().toLowerCase()) ||
+                                      f.hrmsEmployeeId.toLowerCase().includes(b.facultySearch.trim().toLowerCase()) ||
+                                      (f.department || "").toLowerCase().includes(b.facultySearch.trim().toLowerCase()),
+                                  )
+                                  .slice(0, 6)
+                              : [];
 
                             return (
-                              <button
-                                key={idx}
-                                type="button"
-                                onClick={() => {
-                                  if (ent.customLabel) {
-                                    setPeriodType("special");
-                                    setCustomLabel(ent.customLabel);
-                                    setSubjectId("");
-                                  } else {
-                                    setPeriodType("subject");
-                                    setSubjectId(ent.subjectId ? String(ent.subjectId) : "");
-                                    setCustomLabel("");
-                                  }
-                                  setHrmsEmployeeId(ent.facultyHrmsId || "");
-                                  setFacultySearch("");
-                                  setFacultyOpen(false);
-                                  setRemarks(
-                                    remarks.trim() && !remarks.includes("Moved split")
-                                      ? remarks
-                                      : `Moved split to single class (${bLabel} schedule applied to all students)`
-                                  );
-                                }}
-                                className={cn(
-                                  "w-full flex items-center justify-between rounded-xl border p-2.5 text-left transition-all cursor-pointer",
-                                  isSelected
-                                    ? "border-indigo-600 bg-indigo-50/80 ring-2 ring-indigo-200/70 shadow-xs"
-                                    : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/80 shadow-2xs",
-                                )}
+                              <div
+                                key={bIdx}
+                                className="rounded-2xl border border-indigo-200 bg-white p-4 sm:p-4.5 space-y-3 shadow-2xs hover:border-indigo-300 transition-colors"
                               >
-                                <div className="min-w-0 flex-1 pr-2">
-                                  <div className="flex items-center gap-1.5 mb-0.5">
-                                    <span
-                                      className={cn(
-                                        "rounded px-1.5 py-0.2 text-[9px] font-bold uppercase tracking-wider",
-                                        isSelected ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700 border border-slate-200",
-                                      )}
-                                    >
-                                      {bLabel}
+                                {/* Batch Header */}
+                                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                                  <div className="flex items-center gap-2">
+                                    <span className="rounded bg-indigo-900 text-white font-bold px-2.5 py-1 text-[10px] uppercase tracking-wider shrink-0">
+                                      {b.batchLabel}
                                     </span>
-                                    <span className="text-xs font-bold text-slate-900 truncate">
-                                      {subTitle}
-                                    </span>
+                                    <input
+                                      type="text"
+                                      value={b.batchLabel}
+                                      onChange={(e) => updateBatch(bIdx, { batchLabel: e.target.value })}
+                                      className="w-28 text-xs font-bold text-slate-800 border-b border-slate-200 hover:border-slate-300 focus:border-indigo-500 outline-none px-1.5 py-0.5"
+                                      placeholder="Batch Label"
+                                    />
                                   </div>
-                                  {ent.facultyName && (
-                                    <p className="text-[11px] text-slate-600 truncate flex items-center gap-1">
-                                      <User className="h-2.5 w-2.5 text-slate-400" />
-                                      <span>{ent.facultyName}</span>
-                                      {ent.facultyHrmsId && <span className="text-slate-400">({ent.facultyHrmsId})</span>}
-                                    </p>
+
+                                  <div className="flex items-center gap-1.5 shrink-0">
+                                    {/* Mini Mode Switcher */}
+                                    <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs">
+                                      <button
+                                        type="button"
+                                        onClick={() => updateBatch(bIdx, { mode: "subject" })}
+                                        className={cn(
+                                          "px-2.5 py-1 rounded font-bold transition-all cursor-pointer",
+                                          b.mode === "subject" ? "bg-white text-navy-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+                                        )}
+                                      >
+                                        Subject
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => updateBatch(bIdx, { mode: "special" })}
+                                        className={cn(
+                                          "px-2.5 py-1 rounded font-bold transition-all cursor-pointer",
+                                          b.mode === "special" ? "bg-white text-purple-900 shadow-2xs" : "text-slate-600 hover:text-slate-900"
+                                        )}
+                                      >
+                                        Special Class
+                                      </button>
+                                    </div>
+
+                                    {splitBatches.length > 2 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveBatch(bIdx)}
+                                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                        title="Remove Batch"
+                                      >
+                                        <X className="h-4 w-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Subject / Special selection */}
+                                {b.mode === "subject" ? (
+                                  <div>
+                                    <label className="block text-[10.5px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                      Subject
+                                    </label>
+                                    <select
+                                      className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs sm:text-sm font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer"
+                                      value={b.subjectId}
+                                      onChange={(e) => updateBatch(bIdx, { subjectId: e.target.value })}
+                                    >
+                                      <option value="">— Free / Unassigned —</option>
+                                      {subjects.map((s) => (
+                                        <option key={s.id} value={String(s.id)}>
+                                          {s.code} — {s.name}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <label className="block text-[10.5px] font-bold uppercase tracking-wider text-purple-900 mb-1">
+                                      Special Class / Lab
+                                    </label>
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. LAB, CRT, LIBRARY…"
+                                      value={b.customLabel}
+                                      onChange={(e) => updateBatch(bIdx, { customLabel: e.target.value.toUpperCase() })}
+                                      className="h-10 w-full rounded-xl border border-purple-300 bg-white px-3 text-xs sm:text-sm font-bold text-purple-950 uppercase outline-none focus:border-purple-500 mb-1.5"
+                                    />
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {["LAB", "CRT", "LIBRARY", "PROJECT", "SEMINAR"].map((lbl) => (
+                                        <button
+                                          key={lbl}
+                                          type="button"
+                                          onClick={() => updateBatch(bIdx, { customLabel: lbl })}
+                                          className={cn(
+                                            "rounded-md px-2 py-0.5 text-[10px] font-bold transition-all border cursor-pointer",
+                                            b.customLabel === lbl
+                                              ? "bg-purple-700 text-white border-purple-700"
+                                              : "bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100"
+                                          )}
+                                        >
+                                          {lbl}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Faculty selection */}
+                                <div>
+                                  <label className="block text-[10.5px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                    Faculty
+                                  </label>
+                                  {facItem && !b.facultyOpen ? (
+                                    <div className="flex items-center justify-between rounded-xl border border-indigo-200 bg-indigo-50/50 p-2.5 text-xs sm:text-sm">
+                                      <div className="flex items-center gap-2 min-w-0 pr-2">
+                                        <User className="h-4 w-4 text-indigo-600 shrink-0" />
+                                        <span className="font-bold text-slate-900 truncate">{facItem.name}</span>
+                                        <span className="text-[11px] text-slate-500 shrink-0">({facItem.hrmsEmployeeId})</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline shrink-0 cursor-pointer"
+                                        onClick={() => updateBatch(bIdx, { hrmsEmployeeId: "", facultySearch: "", facultyOpen: true })}
+                                      >
+                                        Change
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="relative">
+                                      <input
+                                        type="search"
+                                        placeholder="Search faculty name or ID…"
+                                        value={b.facultySearch}
+                                        autoFocus={b.facultyOpen}
+                                        onChange={(e) => updateBatch(bIdx, { facultySearch: e.target.value, facultyOpen: true })}
+                                        className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs sm:text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                                      />
+                                      {filteredBatchFaculty.length > 0 && (
+                                        <ul className="absolute top-full left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl divide-y divide-slate-100">
+                                          {filteredBatchFaculty.map((f) => (
+                                            <li key={f.hrmsEmployeeId}>
+                                              <button
+                                                type="button"
+                                                className="w-full px-3 py-2 text-left text-xs hover:bg-indigo-50 flex items-center justify-between cursor-pointer"
+                                                onClick={() => {
+                                                  updateBatch(bIdx, {
+                                                    hrmsEmployeeId: f.hrmsEmployeeId,
+                                                    facultyName: f.name,
+                                                    facultySearch: "",
+                                                    facultyOpen: false,
+                                                  });
+                                                }}
+                                              >
+                                                <span className="font-bold text-slate-800">{f.name}</span>
+                                                <span className="text-[10.5px] text-slate-400">{f.hrmsEmployeeId}</span>
+                                              </button>
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      )}
+                                    </div>
                                   )}
                                 </div>
-                                <div
-                                  className={cn(
-                                    "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all",
-                                    isSelected
-                                      ? "border-indigo-600 bg-indigo-600 text-white"
-                                      : "border-slate-300 bg-white text-transparent",
-                                  )}
-                                >
-                                  <Check className="h-3 w-3 stroke-[3]" />
+
+                                {/* Optional Room Label */}
+                                <div>
+                                  <label className="block text-[10.5px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                    Room / Lab (Optional)
+                                  </label>
+                                  <input
+                                    type="text"
+                                    placeholder="e.g. Lab 1, Room 204"
+                                    value={b.roomLabel}
+                                    onChange={(e) => updateBatch(bIdx, { roomLabel: e.target.value })}
+                                    className="h-9.5 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs sm:text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                                  />
                                 </div>
-                              </button>
+                              </div>
                             );
                           })}
                         </div>
-                      </div>
-                    )}
 
-                    {/* Period Mode Selector: Subject vs Special Class vs Holiday */}
-                    <div>
-                      <div className="flex rounded-xl border border-slate-200 bg-slate-100/90 p-1 text-xs mb-3">
-                        <button
-                          type="button"
-                          onClick={() => setPeriodType("subject")}
-                          className={cn(
-                            "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
-                            periodType === "subject"
-                              ? "bg-white text-navy-900 shadow-xs"
-                              : "text-slate-600 hover:text-slate-900",
-                          )}
-                        >
-                          <BookOpen className="h-3.5 w-3.5" />
-                          <span>Subject Class</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPeriodType("special")}
-                          className={cn(
-                            "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
-                            periodType === "special"
-                              ? "bg-white text-purple-900 shadow-xs ring-1 ring-purple-200"
-                              : "text-slate-600 hover:text-slate-900",
-                          )}
-                        >
-                          <Sparkles className="h-3.5 w-3.5 text-purple-600" />
-                          <span>Special Class</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setPeriodType("holiday")}
-                          className={cn(
-                            "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
-                            periodType === "holiday"
-                              ? "bg-white text-amber-900 shadow-xs ring-1 ring-amber-300"
-                              : "text-slate-600 hover:text-slate-900",
-                          )}
-                        >
-                          <CalendarOff className="h-3.5 w-3.5 text-amber-600" />
-                          <span>Holiday</span>
-                        </button>
-                      </div>
-
-                      {periodType === "holiday" ? (
-                        <div>
-                          <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-900 mb-1">
-                            Holiday Title / Occasion
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Festival Holiday, Sports Day, Special Leave…"
-                            value={holidayTitle}
-                            onChange={(e) => setHolidayTitle(e.target.value)}
-                            className="h-10 w-full rounded-xl border border-amber-300 bg-white px-3 text-xs font-bold text-amber-950 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200 mb-2"
-                          />
-                        </div>
-                      ) : periodType === "subject" ? (
+                        {/* Split Remarks */}
                         <div>
                           <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
-                            Subject for {formatDate(fromYMD(date))}
-                          </label>
-                          <select
-                            className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer"
-                            value={subjectId}
-                            onChange={(e) => setSubjectId(e.target.value)}
-                          >
-                            <option value="">— Free / Unassigned Period —</option>
-                            {subjects.map((s) => (
-                              <option key={s.id} value={String(s.id)}>
-                                {s.code} — {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : (
-                        <div>
-                          <label className="block text-[11px] font-bold uppercase tracking-wider text-purple-900 mb-1">
-                            Special Class / Custom Label
+                            Reason / Activity Remarks (Optional)
                           </label>
                           <input
                             type="text"
-                            placeholder="e.g. CRT, LIBRARY, SPORTS…"
-                            value={customLabel}
-                            onChange={(e) => setCustomLabel(e.target.value.toUpperCase())}
-                            className="h-10 w-full rounded-xl border border-purple-300 bg-white px-3 text-xs font-bold text-purple-950 uppercase outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200 mb-2"
+                            placeholder="e.g. Parallel practical batches, Elective labs"
+                            value={remarks}
+                            onChange={(e) => setRemarks(e.target.value)}
+                            className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs sm:text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
                           />
-                          <div className="flex flex-wrap gap-1">
-                            {["CRT", "LIBRARY", "SPORTS", "SEMINAR", "PLACEMENT", "PROJECT", "MENTORING", "FREE"].map((lbl) => (
-                              <button
-                                key={lbl}
-                                type="button"
-                                onClick={() => setCustomLabel(lbl)}
-                                className={cn(
-                                  "rounded-md px-2 py-0.5 text-[10.5px] font-bold transition-all border cursor-pointer",
-                                  customLabel === lbl
-                                    ? "bg-purple-700 text-white border-purple-700 shadow-xs"
-                                    : "bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100",
-                                )}
-                              >
-                                {lbl}
-                              </button>
-                            ))}
-                          </div>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    ) : (
+                      /* Single Class Mode */
+                      <>
+                        {/* When master is split, render the Move Split to Single quick-actions panel */}
+                        {isMasterSplit && (
+                          <div className="rounded-xl border border-indigo-200/90 bg-gradient-to-b from-indigo-50/70 to-white p-3.5 space-y-2.5 shadow-2xs">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <div className="p-1 rounded-md bg-indigo-100 text-indigo-700">
+                                  <ArrowRightLeft className="h-3.5 w-3.5" />
+                                </div>
+                                <span className="text-xs font-bold text-indigo-950">
+                                  Move Split to Single Class
+                                </span>
+                              </div>
+                              <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[9.5px] font-bold text-indigo-900 uppercase tracking-wider">
+                                Quick Pick
+                              </span>
+                            </div>
 
-                    {/* Faculty Selector */}
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
-                        Staff / Faculty for {formatDate(fromYMD(date))}
-                      </label>
-                      {selectedFaculty && !facultyOpen ? (
-                        <div className="flex items-center justify-between rounded-xl border border-indigo-200 bg-white p-2.5 text-xs shadow-2xs">
-                          <div className="flex items-center gap-2.5">
-                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 shrink-0">
-                              <User className="h-3.5 w-3.5" />
-                            </div>
-                            <div>
-                              <p className="font-bold text-slate-900">{selectedFaculty.name}</p>
-                              <p className="text-[10px] text-slate-500">
-                                {selectedFaculty.hrmsEmployeeId} {selectedFaculty.department ? `· ${selectedFaculty.department}` : ""}
-                              </p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline px-2 py-1 rounded cursor-pointer"
-                            onClick={() => {
-                              setHrmsEmployeeId("");
-                              setFacultySearch("");
-                              setFacultyOpen(true);
-                            }}
-                          >
-                            Change
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="relative">
-                          <div className="relative rounded-xl border border-slate-300 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
-                            <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
-                            <input
-                              type="search"
-                              className="h-10 w-full pl-9 pr-3 text-xs outline-none rounded-xl"
-                              placeholder="Type to search faculty name or ID…"
-                              value={facultySearch}
-                              autoFocus={facultyOpen}
-                              onChange={(e) => {
-                                setFacultySearch(e.target.value);
-                                setFacultyOpen(true);
-                              }}
-                            />
-                          </div>
-                          {filteredFaculty.length > 0 && (
-                            <ul className="absolute top-full left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl divide-y divide-slate-100">
-                              {filteredFaculty.map((f) => (
-                                <li key={f.hrmsEmployeeId}>
+                            <p className="text-[11px] text-slate-600 leading-snug">
+                              Select a batch schedule to apply to all students today, or customize below:
+                            </p>
+
+                            <div className="grid grid-cols-1 gap-2 pt-0.5">
+                              {masterEntries.map((ent, idx) => {
+                                const bLabel = ent.batchLabel || `Batch ${idx + 1}`;
+                                const subTitle = ent.customLabel || ent.subjectName || ent.subjectCode || `Batch ${idx + 1}`;
+                                const isSelected =
+                                  (ent.customLabel
+                                    ? periodType === "special" && customLabel.trim().toUpperCase() === ent.customLabel.trim().toUpperCase()
+                                    : periodType === "subject" && ent.subjectId != null && String(ent.subjectId) === subjectId) &&
+                                  hrmsEmployeeId === (ent.facultyHrmsId || "");
+
+                                return (
                                   <button
+                                    key={idx}
                                     type="button"
-                                    className="w-full px-3 py-2 text-left text-xs hover:bg-indigo-50/70 transition-colors cursor-pointer flex items-center justify-between"
                                     onClick={() => {
-                                      setHrmsEmployeeId(f.hrmsEmployeeId);
+                                      if (ent.customLabel) {
+                                        setPeriodType("special");
+                                        setCustomLabel(ent.customLabel);
+                                        setSubjectId("");
+                                      } else {
+                                        setPeriodType("subject");
+                                        setSubjectId(ent.subjectId ? String(ent.subjectId) : "");
+                                        setCustomLabel("");
+                                      }
+                                      setHrmsEmployeeId(ent.facultyHrmsId || "");
                                       setFacultySearch("");
                                       setFacultyOpen(false);
+                                      setRemarks(
+                                        remarks.trim() && !remarks.includes("Moved split")
+                                          ? remarks
+                                          : `Moved split to single class (${bLabel} schedule applied to all students)`
+                                      );
                                     }}
+                                    className={cn(
+                                      "w-full flex items-center justify-between rounded-xl border p-2.5 text-left transition-all cursor-pointer",
+                                      isSelected
+                                        ? "border-indigo-600 bg-indigo-50/80 ring-2 ring-indigo-200/70 shadow-xs"
+                                        : "border-slate-200 bg-white hover:border-indigo-300 hover:bg-slate-50/80 shadow-2xs",
+                                    )}
                                   >
-                                    <div>
-                                      <span className="font-bold text-slate-800">{f.name}</span>
-                                      {f.department && <span className="ml-1.5 text-[10.5px] text-slate-500">· {f.department}</span>}
+                                    <div className="min-w-0 flex-1 pr-2">
+                                      <div className="flex items-center gap-1.5 mb-0.5">
+                                        <span
+                                          className={cn(
+                                            "rounded px-1.5 py-0.2 text-[9px] font-bold uppercase tracking-wider",
+                                            isSelected ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-700 border border-slate-200",
+                                          )}
+                                        >
+                                          {bLabel}
+                                        </span>
+                                        <span className="text-xs font-bold text-slate-900 truncate">
+                                          {subTitle}
+                                        </span>
+                                      </div>
+                                      {ent.facultyName && (
+                                        <p className="text-[11px] text-slate-600 truncate flex items-center gap-1">
+                                          <User className="h-2.5 w-2.5 text-slate-400" />
+                                          <span>{ent.facultyName}</span>
+                                          {ent.facultyHrmsId && <span className="text-slate-400">({ent.facultyHrmsId})</span>}
+                                        </p>
+                                      )}
                                     </div>
-                                    <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
-                                      {f.hrmsEmployeeId}
-                                    </span>
+                                    <div
+                                      className={cn(
+                                        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all",
+                                        isSelected
+                                          ? "border-indigo-600 bg-indigo-600 text-white"
+                                          : "border-slate-300 bg-white text-transparent",
+                                      )}
+                                    >
+                                      <Check className="h-3 w-3 stroke-[3]" />
+                                    </div>
                                   </button>
-                                </li>
-                              ))}
-                            </ul>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Period Mode Selector: Subject vs Special Class vs Holiday */}
+                        <div>
+                          <div className="flex rounded-xl border border-slate-200 bg-slate-100/90 p-1 text-xs mb-3">
+                            <button
+                              type="button"
+                              onClick={() => setPeriodType("subject")}
+                              className={cn(
+                                "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
+                                periodType === "subject"
+                                  ? "bg-white text-navy-900 shadow-xs"
+                                  : "text-slate-600 hover:text-slate-900",
+                              )}
+                            >
+                              <BookOpen className="h-3.5 w-3.5" />
+                              <span>Subject Class</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPeriodType("special")}
+                              className={cn(
+                                "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
+                                periodType === "special"
+                                  ? "bg-white text-purple-900 shadow-xs ring-1 ring-purple-200"
+                                  : "text-slate-600 hover:text-slate-900",
+                              )}
+                            >
+                              <Sparkles className="h-3.5 w-3.5 text-purple-600" />
+                              <span>Special Class</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPeriodType("holiday")}
+                              className={cn(
+                                "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-center font-bold transition-all cursor-pointer",
+                                periodType === "holiday"
+                                  ? "bg-white text-amber-900 shadow-xs ring-1 ring-amber-300"
+                                  : "text-slate-600 hover:text-slate-900",
+                              )}
+                            >
+                              <CalendarOff className="h-3.5 w-3.5 text-amber-600" />
+                              <span>Holiday</span>
+                            </button>
+                          </div>
+
+                          {periodType === "holiday" ? (
+                            <div>
+                              <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-900 mb-1">
+                                Holiday Title / Occasion
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. Festival Holiday, Sports Day, Special Leave…"
+                                value={holidayTitle}
+                                onChange={(e) => setHolidayTitle(e.target.value)}
+                                className="h-10 w-full rounded-xl border border-amber-300 bg-white px-3 text-xs font-bold text-amber-950 outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-200 mb-2"
+                              />
+                            </div>
+                          ) : periodType === "subject" ? (
+                            <div>
+                              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
+                                Subject for {formatDate(fromYMD(date))}
+                              </label>
+                              <select
+                                className="h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all cursor-pointer"
+                                value={subjectId}
+                                onChange={(e) => setSubjectId(e.target.value)}
+                              >
+                                <option value="">— Free / Unassigned Period —</option>
+                                {subjects.map((s) => (
+                                  <option key={s.id} value={String(s.id)}>
+                                    {s.code} — {s.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-[11px] font-bold uppercase tracking-wider text-purple-900 mb-1">
+                                Special Class / Custom Label
+                              </label>
+                              <input
+                                type="text"
+                                placeholder="e.g. CRT, LIBRARY, SPORTS…"
+                                value={customLabel}
+                                onChange={(e) => setCustomLabel(e.target.value.toUpperCase())}
+                                className="h-10 w-full rounded-xl border border-purple-300 bg-white px-3 text-xs font-bold text-purple-950 uppercase outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200 mb-2"
+                              />
+                              <div className="flex flex-wrap gap-1">
+                                {["CRT", "LIBRARY", "SPORTS", "SEMINAR", "PLACEMENT", "PROJECT", "MENTORING", "FREE"].map((lbl) => (
+                                  <button
+                                    key={lbl}
+                                    type="button"
+                                    onClick={() => setCustomLabel(lbl)}
+                                    className={cn(
+                                      "rounded-md px-2 py-0.5 text-[10.5px] font-bold transition-all border cursor-pointer",
+                                      customLabel === lbl
+                                        ? "bg-purple-700 text-white border-purple-700 shadow-xs"
+                                        : "bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100",
+                                    )}
+                                  >
+                                    {lbl}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
 
-                    {/* Remarks */}
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
-                        Reason / Activity Remarks (Optional)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g., Moved split to single class, Special combined lab"
-                        value={remarks}
-                        onChange={(e) => setRemarks(e.target.value)}
-                        className="h-9 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
-                      />
-                    </div>
+                        {/* Faculty Selector */}
+                        <div>
+                          <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
+                            Staff / Faculty for {formatDate(fromYMD(date))}
+                          </label>
+                          {selectedFaculty && !facultyOpen ? (
+                            <div className="flex items-center justify-between rounded-xl border border-indigo-200 bg-white p-2.5 text-xs shadow-2xs">
+                              <div className="flex items-center gap-2.5">
+                                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-100 text-indigo-700 shrink-0">
+                                  <User className="h-3.5 w-3.5" />
+                                </div>
+                                <div>
+                                  <p className="font-bold text-slate-900">{selectedFaculty.name}</p>
+                                  <p className="text-[10px] text-slate-500">
+                                    {selectedFaculty.hrmsEmployeeId} {selectedFaculty.department ? `· ${selectedFaculty.department}` : ""}
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline px-2 py-1 rounded cursor-pointer"
+                                onClick={() => {
+                                  setHrmsEmployeeId("");
+                                  setFacultySearch("");
+                                  setFacultyOpen(true);
+                                }}
+                              >
+                                Change
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="relative">
+                              <div className="relative rounded-xl border border-slate-300 bg-white focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-100 transition-all">
+                                <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                                <input
+                                  type="search"
+                                  className="h-10 w-full pl-9 pr-3 text-xs outline-none rounded-xl"
+                                  placeholder="Type to search faculty name or ID…"
+                                  value={facultySearch}
+                                  autoFocus={facultyOpen}
+                                  onChange={(e) => {
+                                    setFacultySearch(e.target.value);
+                                    setFacultyOpen(true);
+                                  }}
+                                />
+                              </div>
+                              {filteredFaculty.length > 0 && (
+                                <ul className="absolute top-full left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl divide-y divide-slate-100">
+                                  {filteredFaculty.map((f) => (
+                                    <li key={f.hrmsEmployeeId}>
+                                      <button
+                                        type="button"
+                                        className="w-full px-3 py-2 text-left text-xs hover:bg-indigo-50/70 transition-colors cursor-pointer flex items-center justify-between"
+                                        onClick={() => {
+                                          setHrmsEmployeeId(f.hrmsEmployeeId);
+                                          setFacultySearch("");
+                                          setFacultyOpen(false);
+                                        }}
+                                      >
+                                        <div>
+                                          <span className="font-bold text-slate-800">{f.name}</span>
+                                          {f.department && <span className="ml-1.5 text-[10.5px] text-slate-500">· {f.department}</span>}
+                                        </div>
+                                        <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
+                                          {f.hrmsEmployeeId}
+                                        </span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Remarks */}
+                        <div>
+                          <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-600 mb-1">
+                            Reason / Activity Remarks (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g., Moved split to single class, Special combined lab"
+                            value={remarks}
+                            onChange={(e) => setRemarks(e.target.value)}
+                            className="h-9 w-full rounded-xl border border-slate-300 bg-white px-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition-all"
+                          />
+                        </div>
+                      </>
+                    )}
                   </div>
                 ) : (
                   <div className="space-y-3.5">
-                    <div>
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Subject</span>
-                      <p className="text-sm font-bold text-slate-900 mt-0.5">
-                        {currentOverride?.subjectName || currentOverride?.subjectCode || masterEntry?.subjectName || "Free Period"}
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Faculty</span>
-                      <p className="text-sm font-semibold text-slate-800 mt-0.5 flex items-center gap-1.5">
-                        <User className="h-3.5 w-3.5 text-slate-400" />
-                        <span>{currentOverride?.facultyName || masterEntry?.facultyName || "No faculty assigned"}</span>
-                      </p>
-                    </div>
+                    {currentOverride?.isSplit && currentOverride.batches && currentOverride.batches.length > 0 ? (
+                      <div className="space-y-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Split Batches</span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {currentOverride.batches.map((b, bIdx) => (
+                            <div key={bIdx} className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-2.5">
+                              <span className="rounded bg-indigo-900 text-white font-bold px-1.5 py-0.2 text-[8.5px] uppercase">
+                                {b.batchLabel}
+                              </span>
+                              <p className="text-xs font-bold text-slate-900 mt-1">{b.customLabel || b.subjectName || "Free"}</p>
+                              {b.facultyName && <p className="text-[10.5px] text-slate-600 mt-0.5">{b.facultyName}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Subject</span>
+                          <p className="text-sm font-bold text-slate-900 mt-0.5">
+                            {currentOverride?.subjectName || currentOverride?.subjectCode || masterEntry?.subjectName || "Free Period"}
+                          </p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Current Faculty</span>
+                          <p className="text-sm font-semibold text-slate-800 mt-0.5 flex items-center gap-1.5">
+                            <User className="h-3.5 w-3.5 text-slate-400" />
+                            <span>{currentOverride?.facultyName || masterEntry?.facultyName || "No faculty assigned"}</span>
+                          </p>
+                        </div>
+                      </>
+                    )}
                     {currentOverride?.remarks && (
                       <div>
                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Remarks</span>
@@ -1654,13 +2244,19 @@ function PeriodEditModal({
                 onClick={handleSave}
                 className="h-9 px-4.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-bold transition-all shadow-xs inline-flex items-center gap-1.5 cursor-pointer"
               >
-                {isMasterSplit && !currentOverride ? (
+                {isSplit ? (
+                  <Users className="h-3.5 w-3.5" />
+                ) : isMasterSplit && !currentOverride ? (
                   <ArrowRightLeft className="h-3.5 w-3.5" />
                 ) : (
                   <Check className="h-3.5 w-3.5" />
                 )}
                 <span>
-                  {isMasterSplit && !currentOverride
+                  {isSplit
+                    ? selectedSlotIds.length > 1
+                      ? `Save Split (${selectedSlotIds.length} Periods)`
+                      : "Save Split Batches"
+                    : isMasterSplit && !currentOverride
                     ? selectedSlotIds.length > 1
                       ? `Move Split to Single (${selectedSlotIds.length} Periods)`
                       : "Move Split to Single Class"
@@ -1915,6 +2511,37 @@ function TodayPeriodGrid({
                   <div className="flex flex-col items-center justify-center h-full w-full my-auto text-center">
                     <span className="text-xs text-slate-400 italic">Free Period</span>
                   </div>
+                ) : override?.isSplit && override.batches && override.batches.length > 0 ? (
+                  <div className="w-full space-y-1.5 divide-y divide-slate-100">
+                    <div className="flex items-center justify-between pb-0.5">
+                      <span className="inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 text-[8px] font-bold text-indigo-900 uppercase">
+                        <Users className="h-2.5 w-2.5 text-indigo-600" />
+                        Split ({override.batches.length} Batches)
+                      </span>
+                      {changed && (
+                        <span className="rounded bg-rose-100 px-1 py-0.2 text-[7.5px] font-extrabold text-rose-700 uppercase">
+                          Changed
+                        </span>
+                      )}
+                    </div>
+                    {override.batches.map((ent, eIdx) => (
+                      <div key={eIdx} className={cn("text-left", eIdx > 0 ? "pt-1" : "")}>
+                        <div className="flex items-center gap-1">
+                          <span className="rounded bg-navy-100 text-navy-800 font-bold px-1 py-0.2 text-[8.5px] uppercase">
+                            {ent.batchLabel || `B${eIdx + 1}`}
+                          </span>
+                          <span className="text-xs font-bold text-navy-900 truncate" title={ent.customLabel || ent.subjectName || ent.subjectCode || ""}>
+                            {ent.customLabel || ent.subjectName || ent.subjectCode}
+                          </span>
+                        </div>
+                        {ent.facultyName && (
+                          <span className="text-[10px] text-slate-600 truncate block mt-0.5" title={ent.facultyName}>
+                            {ent.facultyName}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 ) : isMultiBatch && !override ? (
                   <div className="w-full space-y-1.5 divide-y divide-slate-100">
                     {masterEntries.map((ent, eIdx) => (
@@ -1975,7 +2602,7 @@ function TodayPeriodGrid({
                   {changed ? (
                     <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.2 text-[9px] font-extrabold text-rose-700 border border-rose-200">
                       <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-                      <span>{isMultiBatch ? "Single · Changed" : "Changed"}</span>
+                      <span>{override?.isSplit ? "Split · Changed" : isMultiBatch ? "Single · Changed" : "Changed"}</span>
                     </span>
                   ) : isMultiBatch ? (
                     <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-indigo-700">
@@ -2137,6 +2764,37 @@ function TodayPeriodGrid({
                       </p>
                       <p className="text-[10px] text-purple-600 mt-0.5">Free / Special</p>
                     </div>
+                  ) : override?.isSplit && override.batches && override.batches.length > 0 ? (
+                    <div className="w-full space-y-1 divide-y divide-slate-100">
+                      <div className="flex items-center justify-between pb-0.5">
+                        <span className="inline-flex items-center gap-1 rounded bg-indigo-50 border border-indigo-200 px-1.5 py-0.2 text-[8px] font-bold text-indigo-900 uppercase">
+                          <Users className="h-2.5 w-2.5 text-indigo-600" />
+                          Split ({override.batches.length} Batches)
+                        </span>
+                        {changed && (
+                          <span className="rounded bg-rose-100 px-1 py-0.2 text-[7.5px] font-extrabold text-rose-700 uppercase">
+                            Changed
+                          </span>
+                        )}
+                      </div>
+                      {override.batches.map((ent, eIdx) => (
+                        <div key={eIdx} className={cn("text-left", eIdx > 0 ? "pt-1" : "")}>
+                          <div className="flex items-center gap-1">
+                            <span className="rounded bg-navy-100 text-navy-800 font-bold px-1 py-0.2 text-[8px] uppercase">
+                              {ent.batchLabel || `B${eIdx + 1}`}
+                            </span>
+                            <span className="text-xs font-bold text-navy-900 truncate" title={ent.customLabel || ent.subjectName || ent.subjectCode || ""}>
+                              {ent.customLabel || ent.subjectName || ent.subjectCode}
+                            </span>
+                          </div>
+                          {ent.facultyName && (
+                            <span className="text-[10px] text-slate-600 truncate block mt-0.5">
+                              {ent.facultyName}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   ) : isMultiBatch && !override ? (
                     <div className="w-full space-y-1 divide-y divide-slate-100">
                       {masterEntries.map((ent, eIdx) => (
@@ -2185,7 +2843,7 @@ function TodayPeriodGrid({
                   {changed ? (
                     <span className="inline-flex items-center gap-1 text-[9px] font-extrabold text-rose-700">
                       <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-                      <span>{isMultiBatch ? "Single · Changed" : "Changed"}</span>
+                      <span>{override?.isSplit ? "Split · Changed" : isMultiBatch ? "Single · Changed" : "Changed"}</span>
                     </span>
                   ) : isMultiBatch ? (
                     <span className="inline-flex items-center gap-1 text-[9px] font-semibold text-indigo-700">
@@ -2679,6 +3337,27 @@ export function TodayTimetableView() {
         : cell?.entry
         ? [cell.entry]
         : [];
+
+    if (override.isSplit) {
+      if (masterEntries.length <= 1) return true;
+      if (!override.batches || override.batches.length !== masterEntries.length) return true;
+      for (let i = 0; i < masterEntries.length; i++) {
+        const m = masterEntries[i];
+        const b = override.batches[i];
+        if (!b) return true;
+        const mSubId = m.subjectId != null ? String(m.subjectId) : "";
+        const mSubName = (m.customLabel || m.subjectName || "").trim().toLowerCase();
+        const mFac = (m.facultyHrmsId || "").trim();
+        const bSubId = (b.subjectId || "").trim();
+        const bSubName = (b.customLabel || b.subjectName || "").trim().toLowerCase();
+        const bFac = (b.hrmsEmployeeId || "").trim();
+        const subMatch = (bSubId && mSubId) ? bSubId === mSubId : bSubName === mSubName;
+        const facMatch = bFac === mFac;
+        if (!subMatch || !facMatch) return true;
+      }
+      return false;
+    }
+
     if (masterEntries.length > 1) {
       // Master has split sections; override turns it into a single combined period
       return true;
@@ -2715,6 +3394,27 @@ export function TodayTimetableView() {
         : cell?.entry
         ? [cell.entry]
         : [];
+
+    if (override.isSplit) {
+      if (masterEntries.length <= 1) return true;
+      if (!override.batches || override.batches.length !== masterEntries.length) return true;
+      for (let i = 0; i < masterEntries.length; i++) {
+        const m = masterEntries[i];
+        const b = override.batches[i];
+        if (!b) return true;
+        const mSubId = m.subjectId != null ? String(m.subjectId) : "";
+        const mSubName = (m.customLabel || m.subjectName || "").trim().toLowerCase();
+        const mFac = (m.facultyHrmsId || "").trim();
+        const bSubId = (b.subjectId || "").trim();
+        const bSubName = (b.customLabel || b.subjectName || "").trim().toLowerCase();
+        const bFac = (b.hrmsEmployeeId || "").trim();
+        const subMatch = (bSubId && mSubId) ? bSubId === mSubId : bSubName === mSubName;
+        const facMatch = bFac === mFac;
+        if (!subMatch || !facMatch) return true;
+      }
+      return false;
+    }
+
     if (masterEntries.length > 1) {
       // Master has split sections; override turns it into a single combined period
       return true;
@@ -2765,6 +3465,8 @@ export function TodayTimetableView() {
     isMoveSplitToSingle?: boolean;
     masterSubjectName?: string;
     masterFacultyName?: string;
+    isSplit?: boolean;
+    batches?: PeriodOverrideBatch[];
   }) => {
     if (!editingSlot || isPastDate || !canChangeTimetable) return;
     const { slot, masterCell, masterEntry, cohort } = editingSlot;
@@ -2872,6 +3574,9 @@ export function TodayTimetableView() {
               .join(" | ")
           : masterEntry?.facultyName);
 
+      const isSplitOverride = payload.isSplit ?? Boolean(newOverride?.isSplit);
+      const splitBatches = payload.batches ?? newOverride?.batches ?? null;
+
       const body = {
         date: selectedDate,
         collegeId: targetCollegeId,
@@ -2898,8 +3603,11 @@ export function TodayTimetableView() {
         newFacultyHrmsId: newOverride?.hrmsEmployeeId ?? null,
         newFacultyName: newOverride?.facultyName ?? null,
 
+        isSplit: isSplitOverride,
+        batches: splitBatches,
+
         remarks: payload.remarks || (payload.isMoveSplitToSingle ? "Moved split sections to single class" : null),
-        changeType: isRevert ? "REVERTED_TO_MASTER" : "PERIOD_CHANGE",
+        changeType: isRevert ? "REVERTED_TO_MASTER" : (isSplitOverride ? "SPLIT_SLOT" : "PERIOD_CHANGE"),
       };
 
       const res = await apiFetch("/today-timetable/override", {

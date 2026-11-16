@@ -14,6 +14,17 @@ export type DailyTimetableFilter = {
   timetableDate?: string;
 };
 
+export type PeriodOverrideBatch = {
+  batchLabel: string;
+  subjectId?: string | number | null;
+  subjectCode?: string | null;
+  subjectName?: string | null;
+  customLabel?: string | null;
+  hrmsEmployeeId?: string | null;
+  facultyName?: string | null;
+  roomLabel?: string | null;
+};
+
 export type RecordPeriodOverrideInput = {
   timetableDate: string; // YYYY-MM-DD
   collegeId: number;
@@ -43,6 +54,10 @@ export type RecordPeriodOverrideInput = {
   changeType?: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
   actorUserId?: number | null;
   actorName?: string | null;
+
+  isSplit?: boolean;
+  batchLabel?: string | null;
+  splitDetails?: PeriodOverrideBatch[] | null;
 };
 
 export type DailyPeriodOverride = {
@@ -58,6 +73,8 @@ export type DailyPeriodOverride = {
   remarks: string | null;
   changedByName: string | null;
   changedAt: string;
+  isSplit?: boolean;
+  batches?: PeriodOverrideBatch[];
 };
 
 export type DailyActivityRow = {
@@ -88,7 +105,22 @@ export type DailyActivityRow = {
   changedByUserId: number | null;
   changedByName: string | null;
   createdAt: string;
+  isSplit?: boolean;
+  batchLabel?: string | null;
+  splitDetails?: PeriodOverrideBatch[] | null;
 };
+
+async function columnExists(table: string, column: string): Promise<boolean> {
+  try {
+    const rows = await queryAcademic<(RowDataPacket & { c: number })[]>(
+      `SELECT COUNT(*) as c FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [table, column],
+    );
+    return Number(rows[0]?.c ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
 
 let tableReady: Promise<void> | null = null;
 
@@ -133,6 +165,16 @@ export async function ensureDailyTimetableTable() {
           KEY idx_created_at (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
+
+      if (!(await columnExists("ap_daily_timetable_activities", "is_split"))) {
+        await executeAcademic(`ALTER TABLE ap_daily_timetable_activities ADD COLUMN is_split TINYINT(1) NOT NULL DEFAULT 0 AFTER change_type`);
+      }
+      if (!(await columnExists("ap_daily_timetable_activities", "batch_label"))) {
+        await executeAcademic(`ALTER TABLE ap_daily_timetable_activities ADD COLUMN batch_label VARCHAR(100) NULL AFTER is_split`);
+      }
+      if (!(await columnExists("ap_daily_timetable_activities", "split_details"))) {
+        await executeAcademic(`ALTER TABLE ap_daily_timetable_activities ADD COLUMN split_details LONGTEXT NULL AFTER batch_label`);
+      }
     })();
   }
   await tableReady;
@@ -162,6 +204,9 @@ type ActivityDbRow = RowDataPacket & {
   new_faculty_hrms_id: string | null;
   new_faculty_name: string | null;
   change_type: "PERIOD_CHANGE" | "REVERTED_TO_MASTER" | "HOLIDAY";
+  is_split?: number;
+  batch_label?: string | null;
+  split_details?: string | null;
   remarks: string | null;
   changed_by_user_id: number | null;
   changed_by_name: string | null;
@@ -169,6 +214,13 @@ type ActivityDbRow = RowDataPacket & {
 };
 
 function mapActivityRow(r: ActivityDbRow): DailyActivityRow {
+  let parsedSplitDetails: PeriodOverrideBatch[] | null = null;
+  if (r.split_details) {
+    try {
+      parsedSplitDetails = typeof r.split_details === "string" ? JSON.parse(r.split_details) : (r.split_details as unknown as PeriodOverrideBatch[]);
+    } catch {}
+  }
+
   return {
     id: r.id,
     timetableDate: r.timetable_date,
@@ -193,6 +245,9 @@ function mapActivityRow(r: ActivityDbRow): DailyActivityRow {
     newFacultyHrmsId: r.new_faculty_hrms_id,
     newFacultyName: r.new_faculty_name,
     changeType: r.change_type,
+    isSplit: Boolean(r.is_split || (parsedSplitDetails && parsedSplitDetails.length > 0)),
+    batchLabel: r.batch_label ?? null,
+    splitDetails: parsedSplitDetails,
     remarks: r.remarks,
     changedByUserId: r.changed_by_user_id,
     changedByName: r.changed_by_name,
@@ -270,6 +325,14 @@ export async function getDailyTimetableData(filters: DailyTimetableFilter) {
         delete overrides[r.timing_slot_id];
       } else {
         const isSpecialClass = r.new_subject_id == null && Boolean(r.new_subject_name);
+        let parsedSplitDetails: PeriodOverrideBatch[] | null = null;
+        if (r.split_details) {
+          try {
+            parsedSplitDetails = typeof r.split_details === "string" ? JSON.parse(r.split_details) : (r.split_details as unknown as PeriodOverrideBatch[]);
+          } catch {}
+        }
+        const isSplitSlot = Boolean(r.is_split || (parsedSplitDetails && parsedSplitDetails.length > 0));
+
         overrides[r.timing_slot_id] = {
           slotId: r.timing_slot_id,
           slotLabel: r.slot_label || "",
@@ -277,12 +340,14 @@ export async function getDailyTimetableData(filters: DailyTimetableFilter) {
           subjectId: r.new_subject_id != null ? String(r.new_subject_id) : "",
           subjectCode: r.new_subject_code || "",
           subjectName: r.new_subject_name || "",
-          customLabel: isSpecialClass ? (r.new_subject_name || "") : undefined,
+          customLabel: isSpecialClass && !isSplitSlot ? (r.new_subject_name || "") : undefined,
           hrmsEmployeeId: r.new_faculty_hrms_id || "",
           facultyName: r.new_faculty_name || "",
           remarks: r.remarks,
           changedByName: r.changed_by_name,
           changedAt: r.created_at,
+          isSplit: isSplitSlot,
+          batches: parsedSplitDetails || undefined,
         };
       }
     }
@@ -380,6 +445,7 @@ export async function applyDailyTimetableOverridesForDate(timetableDate: string)
             cs.subject_id = te.subject_id,
             cs.subject_code = te.subject_code,
             cs.subject_name = COALESCE(te.custom_label, te.subject_name),
+            cs.batch_label = te.batch_label,
             cs.status = IF(cs.status = 'posted', cs.status, 'scheduled')
         WHERE cs.session_date = ?
           AND (cs.timing_slot_id = ? OR cs.period_slot_id = ?)
@@ -408,6 +474,115 @@ export async function applyDailyTimetableOverridesForDate(timetableDate: string)
         ],
       );
       continue;
+    }
+
+    if (act.is_split && act.split_details) {
+      let batches: PeriodOverrideBatch[] = [];
+      try {
+        batches = typeof act.split_details === "string" ? JSON.parse(act.split_details) : (act.split_details as unknown as PeriodOverrideBatch[]);
+      } catch {}
+
+      if (Array.isArray(batches) && batches.length > 0) {
+        const sessRows = await queryAcademic<(RowDataPacket & { id: number; batch_label: string | null; plan_id: number })[]>(
+          `
+          SELECT cs.id, cs.batch_label, cs.plan_id
+          FROM ap_class_sessions cs
+          JOIN ap_timetable_plans p ON p.id = cs.plan_id
+          WHERE cs.session_date = ?
+            AND (cs.timing_slot_id = ? OR cs.period_slot_id = ?)
+            AND cs.college_id = ?
+            AND cs.branch_id = ?
+            AND cs.semester_number = ?
+            AND (? IS NULL OR p.batch = ? OR p.batch = CONCAT('Batch ', ?) OR p.batch = REPLACE(?, 'Batch ', ''))
+            AND (? IS NULL OR cs.section_name = ? OR cs.section_name = CONCAT('Section ', ?) OR cs.section_name = REPLACE(?, 'Section ', ''))
+            AND cs.status <> 'posted'
+          ORDER BY cs.id ASC
+          `,
+          [
+            timetableDate,
+            act.timing_slot_id,
+            act.timing_slot_id,
+            act.college_id,
+            act.branch_id,
+            act.semester,
+            act.batch ? act.batch : null,
+            act.batch ? act.batch : null,
+            act.batch ? act.batch : null,
+            act.batch ? act.batch : null,
+            secName,
+            secName,
+            secName,
+            secName,
+          ],
+        );
+
+        for (let bIdx = 0; bIdx < batches.length; bIdx++) {
+          const b = batches[bIdx];
+          const bLabel = b.batchLabel || `Batch ${bIdx + 1}`;
+          const bSubId = b.subjectId ? Number(b.subjectId) : null;
+          const bSubName = b.customLabel || b.subjectName || null;
+          const bSubCode = b.subjectCode || null;
+          const bHrmsId = b.hrmsEmployeeId || null;
+          const bFacName = b.facultyName || null;
+
+          let bStaffLinkId: number | null = null;
+          if (bHrmsId) {
+            const staffRows = await queryAcademic<(RowDataPacket & { id: number })[]>(
+              `SELECT id FROM ap_staff_link WHERE hrms_employee_id = ? LIMIT 1`,
+              [bHrmsId],
+            );
+            if (staffRows[0]) {
+              bStaffLinkId = Number(staffRows[0].id);
+            } else {
+              const insertRes = await executeAcademic(
+                `INSERT INTO ap_staff_link (hrms_employee_id, display_name) VALUES (?, ?)`,
+                [bHrmsId, bFacName ?? null],
+              );
+              bStaffLinkId = Number(insertRes.insertId);
+            }
+          }
+
+          const matchingSess = sessRows.find((s) => (s.batch_label || "").trim().toLowerCase() === bLabel.trim().toLowerCase()) || sessRows[bIdx];
+          if (matchingSess) {
+            await executeAcademic(
+              `
+              UPDATE ap_class_sessions
+              SET faculty_staff_link_id = ?,
+                  subject_id = ?,
+                  subject_code = COALESCE(?, subject_code),
+                  subject_name = COALESCE(?, subject_name),
+                  batch_label = ?,
+                  status = IF(status = 'posted', status, 'scheduled')
+              WHERE id = ?
+              `,
+              [bStaffLinkId, bSubId, bSubCode, bSubName, bLabel, matchingSess.id],
+            );
+          } else if (sessRows[0]) {
+            const baseSess = sessRows[0];
+            await executeAcademic(
+              `
+              INSERT INTO ap_class_sessions (
+                timetable_entry_id, plan_id, college_id, academic_year_label, semester_number,
+                timing_template_id, session_date, day_of_week, start_time, end_time,
+                period_slot_id, timing_slot_id, section_name, branch_id, subject_id,
+                subject_code, subject_name, subject_type_snapshot, faculty_staff_link_id,
+                room_label, batch_label, status
+              )
+              SELECT
+                timetable_entry_id, plan_id, college_id, academic_year_label, semester_number,
+                timing_template_id, session_date, day_of_week, start_time, end_time,
+                period_slot_id, timing_slot_id, section_name, branch_id, ?,
+                ?, ?, 'lab', ?,
+                ?, ?, 'scheduled'
+              FROM ap_class_sessions
+              WHERE id = ?
+              `,
+              [bSubId, bSubCode, bSubName, bStaffLinkId, b.roomLabel ?? null, bLabel, baseSess.id],
+            );
+          }
+        }
+        continue;
+      }
     }
 
     const targetHrmsId = act.new_faculty_hrms_id;
@@ -483,6 +658,9 @@ export async function recordDailyTimetableChange(input: RecordPeriodOverrideInpu
   await ensureDailyTimetableTable();
 
   const changeType = input.changeType || "PERIOD_CHANGE";
+  const isSplit = input.isSplit ? 1 : 0;
+  const splitDetailsJson = input.splitDetails ? JSON.stringify(input.splitDetails) : null;
+  const batchLabel = input.batchLabel ?? null;
 
   const result = await executeAcademic(
     `
@@ -509,19 +687,22 @@ export async function recordDailyTimetableChange(input: RecordPeriodOverrideInpu
       new_faculty_hrms_id,
       new_faculty_name,
       change_type,
+      is_split,
+      batch_label,
+      split_details,
       remarks,
       changed_by_user_id,
       changed_by_name
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
     [
       input.timetableDate,
       input.collegeId,
       input.courseId,
       input.branchId,
-      input.batch,
+      input.batch ?? "",
       input.semester,
-      input.sectionName && input.sectionName !== "all" ? input.sectionName : null,
+      input.sectionName ?? null,
       input.academicYear,
       input.timingSlotId,
       input.slotLabel ?? null,
@@ -537,6 +718,9 @@ export async function recordDailyTimetableChange(input: RecordPeriodOverrideInpu
       input.newFacultyHrmsId ?? null,
       input.newFacultyName ?? null,
       changeType,
+      isSplit,
+      batchLabel,
+      splitDetailsJson,
       input.remarks ?? null,
       input.actorUserId ?? null,
       input.actorName ?? null,
