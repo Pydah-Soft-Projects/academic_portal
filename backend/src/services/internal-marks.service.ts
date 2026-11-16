@@ -1163,26 +1163,33 @@ export async function getFacultyAssignedSubjects(
       semester: number | null;
       yearOfStudy: number | null;
       batch: string | null;
+      internalMarks: number | null;
     })[]
   >(
     `
     SELECT
-      sme.subjectId,
-      s.code,
-      s.name,
-      s.type,
       sme.collegeId,
-      sme.collegeName,
+      MAX(sme.collegeName) AS collegeName,
       sme.courseId,
-      sme.courseName,
+      MAX(sme.courseName) AS courseName,
       sme.branchId,
-      sme.branchName,
-      sme.semester,
-      sme.yearOfStudy,
-      sme.batch
+      MAX(sme.branchName) AS branchName,
+      sme.subjectId,
+      MAX(s.code) AS code,
+      MAX(s.name) AS name,
+      MAX(s.type) AS type,
+      MAX(s.internalMarks) AS internalMarks,
+      MAX(sme.semester) AS semester,
+      MAX(sme.yearOfStudy) AS yearOfStudy,
+      MAX(sme.batch) AS batch
     FROM subject_mapping_entries sme
     INNER JOIN subjects s ON s.id = sme.subjectId
     WHERE sme.subjectId IN (${placeholders})
+    GROUP BY
+      sme.collegeId,
+      sme.courseId,
+      sme.branchId,
+      sme.subjectId
     `,
     subjectIds
   );
@@ -1211,11 +1218,18 @@ export async function getFacultyAssignedSubjects(
   const assignedPairs = new Set(
     assignments.map((a) => `${a.subject_id}-${a.branch_id}`)
   );
+  const processedPairs = new Set<string>();
 
   for (const item of examSubjects) {
-    if (!assignedPairs.has(`${item.subjectId}-${item.branchId}`)) {
+    const pairKey = `${item.subjectId}-${item.branchId}`;
+    if (!assignedPairs.has(pairKey)) {
       continue;
     }
+    // Prevent duplicate entries if a subject is mapped multiple times across batches or regulations
+    if (processedPairs.has(pairKey)) {
+      continue;
+    }
+    processedPairs.add(pairKey);
 
     const relatedAssignments = assignments.filter(
       (a) =>
@@ -1241,6 +1255,15 @@ export async function getFacultyAssignedSubjects(
         Number(s.branch_id) === Number(item.branchId)
     );
 
+    const defaultMaxMarks =
+      item.internalMarks != null && Number(item.internalMarks) > 0
+        ? Number(item.internalMarks)
+        : 30;
+    let finalMaxMarks = sub ? Number(sub.max_marks) : defaultMaxMarks;
+    if (sub && (sub.status === "draft" || sub.status === "returned") && defaultMaxMarks !== 30 && finalMaxMarks === 30) {
+      finalMaxMarks = defaultMaxMarks;
+    }
+
     results.push({
       collegeId: item.collegeId,
       collegeName: item.collegeName || "College",
@@ -1262,9 +1285,123 @@ export async function getFacultyAssignedSubjects(
       submissionId: sub ? Number(sub.id) : null,
       submissionStatus: sub ? sub.status : ("draft" as const),
       currentApprovalLevel: sub ? Number(sub.current_approval_level) : 0,
-      maxMarks: sub ? Number(sub.max_marks) : 30,
+      maxMarks: finalMaxMarks,
       lastUpdated: sub ? String(sub.updated_at) : null,
     });
+  }
+
+  // Fallback for any assigned subjects not present in subject_mapping_entries
+  const unmappedAssignments = assignments.filter(
+    (a) => !processedPairs.has(`${a.subject_id}-${a.branch_id}`)
+  );
+  if (unmappedAssignments.length > 0) {
+    const missingSubjectIds = [...new Set(unmappedAssignments.map((a) => Number(a.subject_id)))];
+    const missingBranchIds = [...new Set(unmappedAssignments.map((a) => Number(a.branch_id)))];
+
+    try {
+      const [subRows, branchRows] = await Promise.all([
+        queryExam<(RowDataPacket & { id: number; code: string; name: string; type: string; internalMarks: number | null })[]>(
+          `SELECT id, code, name, type, internalMarks FROM subjects WHERE id IN (${missingSubjectIds.map(() => "?").join(",")})`,
+          missingSubjectIds
+        ),
+        queryStudent<
+          (RowDataPacket & {
+            branchId: number;
+            branchName: string;
+            courseId: number;
+            courseName: string;
+            collegeId: number;
+            collegeName: string;
+          })[]
+        >(
+          `SELECT
+            cb.id AS branchId,
+            cb.name AS branchName,
+            c.id AS courseId,
+            c.name AS courseName,
+            col.id AS collegeId,
+            col.name AS collegeName
+          FROM course_branches cb
+          INNER JOIN courses c ON c.id = cb.course_id
+          INNER JOIN colleges col ON col.id = c.college_id
+          WHERE cb.id IN (${missingBranchIds.map(() => "?").join(",")})`,
+          missingBranchIds
+        ),
+      ]);
+
+      const subMap = new Map(subRows.map((s) => [s.id, s]));
+      const branchMap = new Map(branchRows.map((b) => [b.branchId, b]));
+
+      for (const a of unmappedAssignments) {
+        const pairKey = `${a.subject_id}-${a.branch_id}`;
+        if (processedPairs.has(pairKey)) continue;
+        processedPairs.add(pairKey);
+
+        const sObj = subMap.get(Number(a.subject_id));
+        const bObj = branchMap.get(Number(a.branch_id));
+        if (!sObj || !bObj) continue;
+
+        const relatedAssignments = assignments.filter(
+          (x) =>
+            Number(x.subject_id) === Number(a.subject_id) &&
+            Number(x.branch_id) === Number(a.branch_id)
+        );
+        const rawSections = relatedAssignments
+          .map((x) => (x.section_name ? String(x.section_name).trim() : null))
+          .filter((s): s is string => Boolean(s));
+        const uniqueSections = [...new Set(rawSections)].sort();
+
+        const acc = await resolveFacultySubjectAccess(
+          bObj.collegeId,
+          bObj.courseId,
+          bObj.branchId,
+          sObj.id,
+          staffLinkId
+        );
+
+        const sub = submissions.find(
+          (s) =>
+            Number(s.subject_id) === Number(sObj.id) &&
+            Number(s.branch_id) === Number(bObj.branchId)
+        );
+
+        const defaultMaxMarks =
+          sObj.internalMarks != null && Number(sObj.internalMarks) > 0
+            ? Number(sObj.internalMarks)
+            : 30;
+        let finalMaxMarks = sub ? Number(sub.max_marks) : defaultMaxMarks;
+        if (sub && (sub.status === "draft" || sub.status === "returned") && defaultMaxMarks !== 30 && finalMaxMarks === 30) {
+          finalMaxMarks = defaultMaxMarks;
+        }
+
+        results.push({
+          collegeId: bObj.collegeId,
+          collegeName: bObj.collegeName || "College",
+          courseId: bObj.courseId,
+          courseName: bObj.courseName || "Course",
+          branchId: bObj.branchId,
+          branchName: bObj.branchName || "Branch",
+          subjectId: sObj.id,
+          subjectCode: sObj.code,
+          subjectName: sObj.name,
+          subjectType: sObj.type,
+          semester: null,
+          year: null,
+          batch: "",
+          sections: uniqueSections,
+          sectionName: uniqueSections.join(", "),
+          accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
+          accessLevel: acc.accessLevel,
+          submissionId: sub ? Number(sub.id) : null,
+          submissionStatus: sub ? sub.status : ("draft" as const),
+          currentApprovalLevel: sub ? Number(sub.current_approval_level) : 0,
+          maxMarks: finalMaxMarks,
+          lastUpdated: sub ? String(sub.updated_at) : null,
+        });
+      }
+    } catch {
+      // Ignore unmapped fallback query failures
+    }
   }
 
   return { staffLinkId, subjects: results };
@@ -1293,13 +1430,13 @@ export async function getStudentsForMarksEntry(params: {
     params.facultyStaffLinkId
   );
 
-  // 2. Fetch subject info
+  // 2. Fetch subject info from EMS including internalMarks
   const subRows = await queryExam<
-    (RowDataPacket & { code: string; name: string })[]
-  >(`SELECT code, name FROM subjects WHERE id = ? LIMIT 1`, [
+    (RowDataPacket & { code: string; name: string; internalMarks: number | null })[]
+  >(`SELECT code, name, internalMarks FROM subjects WHERE id = ? LIMIT 1`, [
     params.subjectId,
   ]);
-  const subjectMeta = subRows[0] || { code: "", name: "Subject" };
+  const subjectMeta = subRows[0] || { code: "", name: "Subject", internalMarks: null };
 
   // 3. Check existing submission
   const subRowsDb = await queryAcademic<
@@ -1327,7 +1464,23 @@ export async function getStudentsForMarksEntry(params: {
 
   let submissionId: number | null = subRowsDb[0] ? Number(subRowsDb[0].id) : null;
   let status: InternalMarksStatus = subRowsDb[0] ? subRowsDb[0].status : "draft";
-  let maxMarks = subRowsDb[0] ? Number(subRowsDb[0].max_marks) : 30;
+
+  const defaultMaxMarks =
+    subjectMeta.internalMarks != null && Number(subjectMeta.internalMarks) > 0
+      ? Number(subjectMeta.internalMarks)
+      : 30;
+
+  let maxMarks = subRowsDb[0] ? Number(subRowsDb[0].max_marks) : defaultMaxMarks;
+  // If the draft was stored with old default 30 but EMS has a specific internalMarks (e.g. 40 or 20)
+  if (subRowsDb[0] && (status === "draft" || status === "returned") && defaultMaxMarks !== 30 && maxMarks === 30) {
+    maxMarks = defaultMaxMarks;
+    if (submissionId) {
+      await executeAcademic(
+        `UPDATE ap_internal_marks_submissions SET max_marks = ? WHERE id = ?`,
+        [defaultMaxMarks, submissionId]
+      );
+    }
+  }
 
   // 4. Fetch existing entries if submission exists
   let existingEntries = new Map<number, { marks: number | null; remarks: string | null }>();
@@ -1346,22 +1499,18 @@ export async function getStudentsForMarksEntry(params: {
     }
   }
 
-  // Resolve target year, semester, batch from subject mapping if not explicitly passed
+  // Resolve target year from subject mapping if not explicitly passed
   let targetYear = params.year;
-  let targetSemester = params.semester;
-  let targetBatch = params.batch;
 
-  if (!targetYear || !targetSemester) {
+  if (!targetYear) {
     const smeRows = await queryExam<
-      (RowDataPacket & { yearOfStudy: number | null; semester: number | null; batch: string | null })[]
+      (RowDataPacket & { yearOfStudy: number | null })[]
     >(
-      `SELECT yearOfStudy, semester, batch FROM subject_mapping_entries WHERE collegeId = ? AND courseId = ? AND branchId = ? AND subjectId = ? LIMIT 1`,
+      `SELECT yearOfStudy FROM subject_mapping_entries WHERE collegeId = ? AND courseId = ? AND branchId = ? AND subjectId = ? LIMIT 1`,
       [params.collegeId, params.courseId, params.branchId, params.subjectId]
     );
-    if (smeRows[0]) {
-      if (!targetYear) targetYear = smeRows[0].yearOfStudy ?? undefined;
-      if (!targetSemester) targetSemester = smeRows[0].semester ?? undefined;
-      if (!targetBatch) targetBatch = smeRows[0].batch ?? undefined;
+    if (smeRows[0]?.yearOfStudy) {
+      targetYear = Number(smeRows[0].yearOfStudy);
     }
   }
 
@@ -1369,24 +1518,35 @@ export async function getStudentsForMarksEntry(params: {
   const whereStud: string[] = ["s.college_id = ?", "s.course_id = ?", "s.branch_id = ?"];
   const paramsStud: unknown[] = [params.collegeId, params.courseId, params.branchId];
 
+  // Filter by year of study
   if (targetYear) {
     whereStud.push("s.current_year = ?");
     paramsStud.push(targetYear);
   }
-  if (targetSemester) {
-    whereStud.push("s.current_semester = ?");
-    paramsStud.push(targetSemester);
-  }
-  if (targetBatch) {
-    whereStud.push("TRIM(s.batch) = ?");
-    paramsStud.push(targetBatch.trim());
-  }
 
+  // Active student status filter (exclude discontinued, cancelled, graduated)
+  whereStud.push(
+    "(s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))"
+  );
+
+  // Section filtering if specified (supports single section or comma-separated merged sections)
   if (params.section && params.section !== "all") {
-    whereStud.push(
-      "(TRIM(COALESCE(s.section, '')) = ? OR TRIM(COALESCE(ss.section_name, '')) = ?)"
-    );
-    paramsStud.push(params.section.trim(), params.section.trim());
+    const secList = params.section
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean);
+    if (secList.length === 1) {
+      whereStud.push(
+        "(TRIM(COALESCE(s.section, '')) = ? OR TRIM(COALESCE(ss.section_name, '')) = ?)"
+      );
+      paramsStud.push(secList[0], secList[0]);
+    } else if (secList.length > 1) {
+      const placeholders = secList.map(() => "?").join(",");
+      whereStud.push(
+        `(TRIM(COALESCE(s.section, '')) IN (${placeholders}) OR TRIM(COALESCE(ss.section_name, '')) IN (${placeholders}))`
+      );
+      paramsStud.push(...secList, ...secList);
+    }
   }
 
   let studentRows = await queryStudent<
@@ -1404,18 +1564,19 @@ export async function getStudentsForMarksEntry(params: {
       s.admission_number,
       s.pin_no,
       s.student_name,
-      COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci) AS section_name
+      COALESCE(MAX(ss.section_name COLLATE utf8mb4_unicode_ci), MAX(s.section COLLATE utf8mb4_unicode_ci)) AS section_name
     FROM students s
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE ${whereStud.join(" AND ")}
+    GROUP BY s.id, s.admission_number, s.pin_no, s.student_name
     ORDER BY COALESCE(s.pin_no, s.admission_number) ASC
-    LIMIT 500
+    LIMIT 1000
     `,
     paramsStud
   );
 
   // Fallback: if no students found with strict year/sem/batch, search by college + course + branch
-  if (studentRows.length === 0 && (targetYear || targetSemester || targetBatch)) {
+  if (studentRows.length === 0 && targetYear) {
     studentRows = await queryStudent<
       (RowDataPacket & {
         id: number;
@@ -1431,18 +1592,30 @@ export async function getStudentsForMarksEntry(params: {
         s.admission_number,
         s.pin_no,
         s.student_name,
-        COALESCE(ss.section_name COLLATE utf8mb4_unicode_ci, s.section COLLATE utf8mb4_unicode_ci) AS section_name
+        COALESCE(MAX(ss.section_name COLLATE utf8mb4_unicode_ci), MAX(s.section COLLATE utf8mb4_unicode_ci)) AS section_name
       FROM students s
       LEFT JOIN student_sections ss ON ss.student_id = s.id
       WHERE s.college_id = ? AND s.course_id = ? AND s.branch_id = ?
+        AND (s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))
+      GROUP BY s.id, s.admission_number, s.pin_no, s.student_name
       ORDER BY COALESCE(s.pin_no, s.admission_number) ASC
-      LIMIT 500
+      LIMIT 1000
       `,
       [params.collegeId, params.courseId, params.branchId]
     );
   }
 
-  const studentList = studentRows.map((st) => {
+  // Deduplicate by student id to ensure no double counts
+  const seenStudentIds = new Set<number>();
+  const uniqueStudentRows: typeof studentRows = [];
+  for (const st of studentRows) {
+    if (!seenStudentIds.has(Number(st.id))) {
+      seenStudentIds.add(Number(st.id));
+      uniqueStudentRows.push(st);
+    }
+  }
+
+  const studentList = uniqueStudentRows.map((st) => {
     const prev = existingEntries.get(st.id);
     return {
       studentDbId: st.id,

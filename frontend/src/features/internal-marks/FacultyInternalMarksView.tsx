@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -90,6 +90,19 @@ export function FacultyInternalMarksView() {
   const [pendingSubmissions, setPendingSubmissions] = useState<SubmissionItem[]>([]);
   const [maxApprovalLevel, setMaxApprovalLevel] = useState<number>(1);
   const [forwardingBusyId, setForwardingBusyId] = useState<number | null>(null);
+
+  const uniqueAssignedSubjects = useMemo(() => {
+    const seen = new Set<string>();
+    const list: AssignedSubject[] = [];
+    for (const sub of assignedSubjects) {
+      const key = `${sub.branchId}-${sub.subjectId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(sub);
+      }
+    }
+    return list;
+  }, [assignedSubjects]);
 
   // Active modal for marks entry
   const [entryModal, setEntryModal] = useState<{
@@ -230,7 +243,7 @@ export function FacultyInternalMarksView() {
           }`}
         >
           <BookOpen className="h-4 w-4" />
-          My Assigned Subjects
+          My Assigned Subjects {uniqueAssignedSubjects.length > 0 ? `(${uniqueAssignedSubjects.length})` : ""}
         </button>
         <button
           type="button"
@@ -257,14 +270,14 @@ export function FacultyInternalMarksView() {
             </div>
           ) : error ? (
             <DataErrorState message={error} />
-          ) : assignedSubjects.length === 0 ? (
+          ) : uniqueAssignedSubjects.length === 0 ? (
             <EmptyState
               title="No assigned subjects found"
               description="No subject assignments found for your faculty profile in the current academic term."
             />
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {assignedSubjects.map((sub) => {
+              {uniqueAssignedSubjects.map((sub) => {
                 const isUploadEnabled = sub.accessStatus === "enabled";
                 const isDraftOrReturn =
                   sub.submissionStatus === "draft" ||

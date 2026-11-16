@@ -67,8 +67,21 @@ export function InternalMarksEntryModal({
   const [marksState, setMarksState] = useState<Record<number, { marks: string; remarks: string }>>({});
   const [validationErrors, setValidationErrors] = useState<Record<number, string>>({});
 
-  const [filterSection, setFilterSection] = useState<string>(section || "all");
+  const initialSection = useMemo(() => {
+    if (!section || section.includes(",") || section === "all") return "all";
+    return section.trim();
+  }, [section]);
+
+  const [filterSection, setFilterSection] = useState<string>(initialSection);
   const [searchQuery, setSearchQuery] = useState<string>("");
+
+  useEffect(() => {
+    if (section && !section.includes(",") && section !== "all") {
+      setFilterSection(section.trim());
+    } else {
+      setFilterSection("all");
+    }
+  }, [section]);
 
   const availableSections = useMemo(() => {
     const secs = new Set<string>();
@@ -83,15 +96,19 @@ export function InternalMarksEntryModal({
   const displayedStudents = useMemo(() => {
     return students.filter((st) => {
       if (filterSection !== "all") {
-        if ((st.sectionName || "").trim().toUpperCase() !== filterSection.trim().toUpperCase()) {
+        const stSec = (st.sectionName || "").trim().toUpperCase();
+        if (filterSection.includes(",")) {
+          const allowed = filterSection.split(",").map((x) => x.trim().toUpperCase());
+          if (!allowed.includes(stSec)) return false;
+        } else if (stSec !== filterSection.trim().toUpperCase()) {
           return false;
         }
       }
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const mRoll = st.rollNumber.toLowerCase().includes(q);
-        const mAdm = st.admissionNumber.toLowerCase().includes(q);
-        const mName = st.studentName.toLowerCase().includes(q);
+        const mRoll = (st.rollNumber || "").toLowerCase().includes(q);
+        const mAdm = (st.admissionNumber || "").toLowerCase().includes(q);
+        const mName = (st.studentName || "").toLowerCase().includes(q);
         if (!mRoll && !mAdm && !mName) return false;
       }
       return true;
@@ -112,8 +129,7 @@ export function InternalMarksEntryModal({
           facultyStaffLinkId: String(facultyStaffLinkId),
         });
         if (year) query.set("year", String(year));
-        if (semester) query.set("semester", String(semester));
-        if (batch) query.set("batch", String(batch));
+        if (section && section !== "all") query.set("section", String(section));
 
         const res = await apiFetch(`/internal-marks/students?${query.toString()}`);
         if (!res.ok) throw new Error("Failed to load student list for marks entry");
@@ -124,10 +140,21 @@ export function InternalMarksEntryModal({
         setSubmissionId(data.submissionId);
         setStatus(data.status || "draft");
         setUploadAccess(data.uploadAccess !== false);
-        setStudents(data.students || []);
+
+        // Deduplicate students by studentDbId to guarantee no double counts
+        const rawStudents: StudentEntry[] = data.students || [];
+        const seenIds = new Set<number>();
+        const uniqueStudents: StudentEntry[] = [];
+        for (const st of rawStudents) {
+          if (!seenIds.has(st.studentDbId)) {
+            seenIds.add(st.studentDbId);
+            uniqueStudents.push(st);
+          }
+        }
+        setStudents(uniqueStudents);
 
         const initialMarks: Record<number, { marks: string; remarks: string }> = {};
-        for (const st of data.students || []) {
+        for (const st of uniqueStudents) {
           initialMarks[st.studentDbId] = {
             marks: st.marksObtained != null ? String(st.marksObtained) : "",
             remarks: st.remarks || "",
