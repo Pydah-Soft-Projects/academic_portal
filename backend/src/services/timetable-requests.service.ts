@@ -123,6 +123,49 @@ export type TimetableSlotChange = {
   facultyChanged: boolean;
 };
 
+export type TimetableRequestGridSlot = {
+  id: number;
+  label: string;
+  startTime: string;
+  endTime: string;
+  timeRange: string;
+  slotType: string;
+  isBreak: boolean;
+};
+
+export type TimetableRequestGridEntry = {
+  subjectCode: string | null;
+  subjectName: string | null;
+  customLabel: string | null;
+  facultyName: string | null;
+  batchLabel: string | null;
+  roomLabel: string | null;
+};
+
+export type TimetableRequestGridCell = {
+  dayOfWeek: string;
+  dayLabel: string;
+  slotId: number;
+  slotLabel: string;
+  timeRange: string;
+  isBreak: boolean;
+  isChanged: boolean;
+  changeType: "modified" | "added" | "removed" | "none";
+  fromSubject?: string;
+  toSubject?: string;
+  fromFaculty?: string;
+  toFaculty?: string;
+  currentEntries: TimetableRequestGridEntry[];
+  prevEntries: TimetableRequestGridEntry[];
+};
+
+export type TimetableRequestGrid = {
+  days: { code: string; label: string }[];
+  slots: TimetableRequestGridSlot[];
+  cellsByDay: Record<string, Record<number, TimetableRequestGridCell>>;
+  totalChangedSlots: number;
+};
+
 const DAY_MAP: Record<string, string> = {
   MON: "Monday",
   TUE: "Tuesday",
@@ -149,7 +192,7 @@ function formatSubjectName(code?: string | null, name?: string | null, customLab
 export async function computeTimetablePlanDiff(
   draftPlanId: number,
   publishedPlanId?: number | null,
-): Promise<TimetableSlotChange[]> {
+): Promise<{ changes: TimetableSlotChange[]; grid: TimetableRequestGrid }> {
   try {
     let prevPlanId = publishedPlanId;
 
@@ -282,10 +325,246 @@ export async function computeTimetablePlanDiff(
       return a.slotLabel.localeCompare(b.slotLabel, undefined, { numeric: true });
     });
 
-    return changes;
+    // Build the complete weekly Timetable Request Grid for visual timetable rendering
+    const planRows = await queryAcademic<(RowDataPacket & { timing_template_id: number | null })[]>(
+      `SELECT timing_template_id FROM ap_timetable_plans WHERE id = ?`,
+      [draftPlanId],
+    ).catch(() => []);
+    const timingTemplateId = planRows[0]?.timing_template_id;
+
+    let rawTemplateSlots: {
+      id: number;
+      label: string;
+      start_time: string | null;
+      end_time: string | null;
+      slot_type: string | null;
+    }[] = [];
+
+    if (timingTemplateId) {
+      rawTemplateSlots = await queryAcademic<(RowDataPacket & {
+        id: number;
+        label: string;
+        start_time: string | null;
+        end_time: string | null;
+        slot_type: string | null;
+      })[]>(
+        `SELECT id, label, start_time, end_time, slot_type
+         FROM ap_timing_template_slots
+         WHERE template_id = ? AND is_active = 1
+         ORDER BY start_time, slot_order, id`,
+        [timingTemplateId],
+      ).catch(() => []);
+    }
+
+    const changeByDayAndSlot = new Map<string, TimetableSlotChange>();
+    for (const c of changes) {
+      changeByDayAndSlot.set(`${c.dayOfWeek}_${c.slotLabel.trim().toUpperCase()}`, c);
+    }
+
+    const seenSlotKeys = new Set<string>();
+    const headerSlots: TimetableRequestGridSlot[] = [];
+
+    const isBreakSlot = (
+      slotType?: string | null,
+      label?: string | null,
+      startTime?: string | null,
+      endTime?: string | null,
+    ) => {
+      const st = (slotType || "").toUpperCase();
+      const lbl = (label || "").toLowerCase();
+      if (st === "BREAK" || st === "LUNCH" || lbl.includes("break") || lbl.includes("lunch")) {
+        return true;
+      }
+      if (startTime && endTime) {
+        const [sh, sm] = startTime.split(":").map(Number);
+        const [eh, em] = endTime.split(":").map(Number);
+        if (!isNaN(sh) && !isNaN(eh)) {
+          const diff = eh * 60 + em - (sh * 60 + sm);
+          if (diff > 0 && diff <= 15) return true;
+        }
+      }
+      return false;
+    };
+
+    for (const ts of rawTemplateSlots) {
+      const sTime = ts.start_time ? String(ts.start_time).slice(0, 5) : "";
+      const eTime = ts.end_time ? String(ts.end_time).slice(0, 5) : "";
+      const k = ts.label ? ts.label.trim().toUpperCase() : `${ts.id}_${sTime}`;
+      if (!seenSlotKeys.has(k)) {
+        seenSlotKeys.add(k);
+        headerSlots.push({
+          id: Number(ts.id),
+          label: ts.label || `Slot ${ts.id}`,
+          startTime: sTime,
+          endTime: eTime,
+          timeRange: sTime && eTime ? `${sTime}–${eTime}` : sTime,
+          slotType: ts.slot_type || "PERIOD",
+          isBreak: isBreakSlot(ts.slot_type, ts.label, sTime, eTime),
+        });
+      }
+    }
+
+    // If template slots not found, fall back to unique slot labels or ids from entries
+    if (headerSlots.length === 0) {
+      const seenLabels = new Set<string>();
+      for (const e of entries) {
+        const sTime = e.start_time ? String(e.start_time).slice(0, 5) : "";
+        const eTime = e.end_time ? String(e.end_time).slice(0, 5) : "";
+        const lbl = e.slot_label || `P${e.slot_id}`;
+        const k = lbl.trim().toUpperCase();
+        if (!seenLabels.has(k)) {
+          seenLabels.add(k);
+          headerSlots.push({
+            id: Number(e.slot_id),
+            label: lbl,
+            startTime: sTime,
+            endTime: eTime,
+            timeRange: sTime && eTime ? `${sTime}–${eTime}` : sTime,
+            slotType: isBreakSlot(null, e.slot_label, sTime, eTime) ? "BREAK" : "PERIOD",
+            isBreak: isBreakSlot(null, e.slot_label, sTime, eTime),
+          });
+        }
+      }
+      headerSlots.sort((a, b) => {
+        if (a.startTime && b.startTime) return a.startTime.localeCompare(b.startTime);
+        return a.id - b.id;
+      });
+    }
+
+    const standardDays = [
+      { code: "MON", label: "Monday" },
+      { code: "TUE", label: "Tuesday" },
+      { code: "WED", label: "Wednesday" },
+      { code: "THU", label: "Thursday" },
+      { code: "FRI", label: "Friday" },
+      { code: "SAT", label: "Saturday" },
+    ];
+    const hasSunday = entries.some((e) => e.day_of_week === "SUN");
+    const gridDays = hasSunday ? [...standardDays, { code: "SUN", label: "Sunday" }] : standardDays;
+
+    const isMatchingSlot = (e: (typeof entries)[0], slot: TimetableRequestGridSlot) => {
+      if (
+        e.slot_label &&
+        slot.label &&
+        e.slot_label.trim().toUpperCase() === slot.label.trim().toUpperCase()
+      ) {
+        return true;
+      }
+      if (
+        e.start_time &&
+        slot.startTime &&
+        String(e.start_time).slice(0, 5) === slot.startTime.slice(0, 5)
+      ) {
+        return true;
+      }
+      return e.slot_id === slot.id;
+    };
+
+    const cellsByDay: Record<string, Record<number, TimetableRequestGridCell>> = {};
+    let totalChangedSlots = 0;
+
+    for (const d of gridDays) {
+      cellsByDay[d.code] = {};
+      for (const slot of headerSlots) {
+        const changeItem = changeByDayAndSlot.get(`${d.code}_${slot.label.trim().toUpperCase()}`);
+
+        const curRows = entries.filter(
+          (e) => e.plan_id === draftPlanId && e.day_of_week === d.code && isMatchingSlot(e, slot),
+        );
+        const prevRows = prevPlanId
+          ? entries.filter(
+              (e) => e.plan_id === prevPlanId && e.day_of_week === d.code && isMatchingSlot(e, slot),
+            )
+          : [];
+
+        const curSub = curRows
+          .map((e) => formatSubjectName(e.subject_code, e.subject_name, e.custom_label))
+          .join(" | ");
+        const prevSub = prevRows
+          .map((e) => formatSubjectName(e.subject_code, e.subject_name, e.custom_label))
+          .join(" | ");
+        const curFac = curRows
+          .map((e) => formatFacultyName(e.faculty_name, e.custom_label))
+          .join(" | ");
+        const prevFac = prevRows
+          .map((e) => formatFacultyName(e.faculty_name, e.custom_label))
+          .join(" | ");
+
+        const isChanged = Boolean(
+          changeItem || (prevPlanId != null && (curSub !== prevSub || curFac !== prevFac)),
+        );
+        if (isChanged) totalChangedSlots++;
+
+        const fromSubject =
+          changeItem?.fromSubject ||
+          (prevSub && prevSub !== "Free / Unassigned" ? prevSub : "") ||
+          "Free / Unassigned";
+        const toSubject =
+          changeItem?.toSubject ||
+          (curSub && curSub !== "Free / Unassigned" ? curSub : "") ||
+          "Free / Unassigned";
+        const fromFaculty =
+          changeItem?.fromFaculty ||
+          (prevFac && prevFac !== "Unassigned" ? prevFac : "") ||
+          "Unassigned";
+        const toFaculty =
+          changeItem?.toFaculty ||
+          (curFac && curFac !== "Unassigned" ? curFac : "") ||
+          "Unassigned";
+        const changeType = changeItem?.changeType || (isChanged ? "modified" : "none");
+
+        cellsByDay[d.code][slot.id] = {
+          dayOfWeek: d.code,
+          dayLabel: d.label,
+          slotId: slot.id,
+          slotLabel: slot.label,
+          timeRange: slot.timeRange,
+          isBreak: slot.isBreak,
+          isChanged,
+          changeType,
+          fromSubject,
+          toSubject,
+          fromFaculty,
+          toFaculty,
+          currentEntries: curRows.map((e) => ({
+            subjectCode: e.subject_code,
+            subjectName: e.subject_name,
+            customLabel: e.custom_label,
+            facultyName: e.faculty_name,
+            batchLabel: e.batch_label,
+            roomLabel: e.room_label,
+          })),
+          prevEntries: prevRows.map((e) => ({
+            subjectCode: e.subject_code,
+            subjectName: e.subject_name,
+            customLabel: e.custom_label,
+            facultyName: e.faculty_name,
+            batchLabel: e.batch_label,
+            roomLabel: e.room_label,
+          })),
+        };
+      }
+    }
+
+    const grid: TimetableRequestGrid = {
+      days: gridDays,
+      slots: headerSlots,
+      cellsByDay,
+      totalChangedSlots,
+    };
+
+    return { changes, grid };
   } catch (err) {
     console.warn("Failed to compute timetable plan diff:", err);
-    return [];
+    return {
+      changes: [],
+      grid: {
+        days: [],
+        slots: [],
+        cellsByDay: {},
+        totalChangedSlots: 0,
+      },
+    };
   }
 }
 
@@ -428,7 +707,7 @@ export async function listTimetableRequests(
   const items = await Promise.all(
     rows.map(async (r) => {
       const brInfo = branchMap.get(Number(r.branch_id));
-      const changes = await computeTimetablePlanDiff(Number(r.plan_id));
+      const { changes, grid } = await computeTimetablePlanDiff(Number(r.plan_id));
       return {
         id: Number(r.id),
         requestId: r.request_id ? Number(r.request_id) : null,
@@ -462,6 +741,7 @@ export async function listTimetableRequests(
         updatedAt: mysqlDateTimeToIso(r.updated_at),
         canApprove,
         changes,
+        grid,
       };
     }),
   );
@@ -528,7 +808,7 @@ export async function createTimetableRequest(
     ? "hod"
     : authz.roleKeys[0] || "staff";
 
-  const changes = await computeTimetablePlanDiff(plan.id);
+  const { changes } = await computeTimetablePlanDiff(plan.id);
   const summaryText =
     input.proposedChangesSummary ||
     (changes.length > 0

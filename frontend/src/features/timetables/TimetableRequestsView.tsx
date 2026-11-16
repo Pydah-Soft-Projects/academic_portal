@@ -5,17 +5,24 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
+  BookOpen,
   Calendar,
   CheckCircle2,
   Clock3,
+  Columns,
   ExternalLink,
   Filter,
   Layers,
+  LayoutGrid,
+  List,
+  Maximize2,
   MessageSquare,
   Search,
   ShieldAlert,
   ShieldCheck,
+  Split,
   User,
+  X,
   XCircle,
 } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -41,6 +48,49 @@ export type TimetableSlotChange = {
   toRoom?: string;
   subjectChanged: boolean;
   facultyChanged: boolean;
+};
+
+export type TimetableRequestGridSlot = {
+  id: number;
+  label: string;
+  startTime: string;
+  endTime: string;
+  timeRange: string;
+  slotType: string;
+  isBreak: boolean;
+};
+
+export type TimetableRequestGridEntry = {
+  subjectCode: string | null;
+  subjectName: string | null;
+  customLabel: string | null;
+  facultyName: string | null;
+  batchLabel: string | null;
+  roomLabel: string | null;
+};
+
+export type TimetableRequestGridCell = {
+  dayOfWeek: string;
+  dayLabel: string;
+  slotId: number;
+  slotLabel: string;
+  timeRange: string;
+  isBreak: boolean;
+  isChanged: boolean;
+  changeType?: "modified" | "added" | "removed" | "none";
+  fromSubject?: string;
+  toSubject?: string;
+  fromFaculty?: string;
+  toFaculty?: string;
+  currentEntries: TimetableRequestGridEntry[];
+  prevEntries: TimetableRequestGridEntry[];
+};
+
+export type TimetableRequestGrid = {
+  days: { code: string; label: string }[];
+  slots: TimetableRequestGridSlot[];
+  cellsByDay: Record<string, Record<number, TimetableRequestGridCell>>;
+  totalChangedSlots: number;
 };
 
 export type TimetableRequestItem = {
@@ -76,6 +126,7 @@ export type TimetableRequestItem = {
   updatedAt: string;
   canApprove: boolean;
   changes?: TimetableSlotChange[];
+  grid?: TimetableRequestGrid;
 };
 
 const REASON_CATEGORY_CONFIG: Record<
@@ -114,6 +165,713 @@ const REASON_CATEGORY_CONFIG: Record<
   },
 };
 
+function getScheduleStructure(req: TimetableRequestItem) {
+  const grid = req.grid;
+  const changes = req.changes || [];
+
+  const days =
+    grid?.days && grid.days.length > 0
+      ? grid.days
+      : [
+          { code: "MON", label: "Monday" },
+          { code: "TUE", label: "Tuesday" },
+          { code: "WED", label: "Wednesday" },
+          { code: "THU", label: "Thursday" },
+          { code: "FRI", label: "Friday" },
+          { code: "SAT", label: "Saturday" },
+        ];
+
+  const slots: TimetableRequestGridSlot[] =
+    grid?.slots && grid.slots.length > 0
+      ? grid.slots
+      : (() => {
+          const seen = new Set<string>();
+          const list: TimetableRequestGridSlot[] = [];
+          for (const c of changes) {
+            if (!seen.has(c.slotLabel)) {
+              seen.add(c.slotLabel);
+              list.push({
+                id: list.length + 1,
+                label: c.slotLabel,
+                startTime: c.timeRange?.split("-")[0]?.trim() || "",
+                endTime: c.timeRange?.split("-")[1]?.trim() || "",
+                timeRange: c.timeRange || "",
+                slotType: "PERIOD",
+                isBreak: false,
+              });
+            }
+          }
+          return list;
+        })();
+
+  const changesMap = new Map<string, TimetableSlotChange>();
+  for (const c of changes) {
+    mapSlotChange(changesMap, c);
+  }
+
+  return { days, slots, changesMap, grid, changes };
+}
+
+function mapSlotChange(map: Map<string, TimetableSlotChange>, c: TimetableSlotChange) {
+  map.set(`${c.dayOfWeek}_${c.slotLabel.trim().toUpperCase()}`, c);
+  map.set(`${c.dayOfWeek}_${c.slotLabel}`, c);
+}
+
+// -------------------------------------------------------------
+// 1. MASTER TIMETABLE SCHEDULE GRID (Original Baseline Schedule)
+// -------------------------------------------------------------
+export function MasterTimetableScheduleGrid({
+  req,
+  compact = false,
+}: {
+  req: TimetableRequestItem;
+  compact?: boolean;
+}) {
+  const { days, slots, changesMap, grid, changes } = useMemo(
+    () => getScheduleStructure(req),
+    [req],
+  );
+
+  if (slots.length === 0 && changes.length === 0) {
+    return (
+      <div className="p-4 text-center text-xs text-slate-500 italic bg-slate-50 rounded-xl border border-slate-200">
+        No schedule slots available for baseline timetable.
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
+      <table className="w-full min-w-[760px] border-collapse text-xs">
+        <thead>
+          <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
+            <th className="py-2 px-2.5 text-left font-bold text-xs uppercase tracking-wider text-slate-700 w-24 border-r border-slate-200 shrink-0 sticky left-0 bg-slate-50 z-10 shadow-2xs">
+              Day
+            </th>
+            {slots.map((slot) => (
+              <th
+                key={slot.id}
+                className={cn(
+                  "py-2 px-1.5 text-center border-r border-slate-200 last:border-r-0",
+                  slot.isBreak ? "bg-slate-100/70 text-slate-500 w-14" : "min-w-[125px]",
+                )}
+              >
+                <div className="font-bold text-navy-900 text-xs">{slot.label}</div>
+                {slot.timeRange ? (
+                  <div className="text-[9.5px] font-mono text-slate-400 font-normal mt-0.5">
+                    {slot.timeRange}
+                  </div>
+                ) : null}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-200">
+          {days.map((day) => (
+            <tr key={day.code} className="hover:bg-slate-50/40 transition-colors">
+              <td className="py-2.5 px-2.5 font-bold text-navy-950 border-r border-slate-200 bg-slate-50/70 sticky left-0 z-10 shadow-2xs text-xs">
+                {day.label}
+              </td>
+              {slots.map((slot) => {
+                if (slot.isBreak) {
+                  return (
+                    <td
+                      key={slot.id}
+                      className="py-1 px-1 text-center border-r border-slate-200 last:border-r-0 bg-slate-100/50 text-slate-400 font-bold text-[9px] select-none"
+                    >
+                      <div className="uppercase tracking-widest">{slot.label}</div>
+                    </td>
+                  );
+                }
+
+                const cell = grid?.cellsByDay?.[day.code]?.[slot.id];
+                const changeItem =
+                  changesMap.get(`${day.code}_${slot.label.trim().toUpperCase()}`) ||
+                  changesMap.get(`${day.code}_${slot.label}`) ||
+                  (slot.startTime
+                    ? changes.find(
+                        (c) =>
+                          c.dayOfWeek === day.code &&
+                          c.timeRange &&
+                          c.timeRange.includes(slot.startTime),
+                      )
+                    : undefined);
+                const isChanged = Boolean(cell?.isChanged || changeItem);
+
+                // Baseline subject & faculty for this slot
+                const baseSubject =
+                  changeItem?.fromSubject && changeItem.fromSubject !== "Free / Unassigned"
+                    ? changeItem.fromSubject
+                    : cell?.fromSubject && cell.fromSubject !== "Free / Unassigned"
+                    ? cell.fromSubject
+                    : cell?.prevEntries?.[0]?.subjectName ||
+                      cell?.prevEntries?.[0]?.customLabel ||
+                      cell?.prevEntries?.[0]?.subjectCode ||
+                      (!isChanged
+                        ? cell?.currentEntries?.[0]?.subjectName ||
+                          cell?.currentEntries?.[0]?.customLabel ||
+                          cell?.currentEntries?.[0]?.subjectCode ||
+                          (cell?.toSubject && cell.toSubject !== "Free / Unassigned" ? cell.toSubject : null)
+                        : null);
+
+                const baseFaculty =
+                  changeItem?.fromFaculty && changeItem.fromFaculty !== "Unassigned"
+                    ? changeItem.fromFaculty
+                    : cell?.fromFaculty && cell.fromFaculty !== "Unassigned"
+                    ? cell.fromFaculty
+                    : cell?.prevEntries?.[0]?.facultyName ||
+                      (!isChanged
+                        ? cell?.currentEntries?.[0]?.facultyName ||
+                          (cell?.toFaculty && cell.toFaculty !== "Unassigned" ? cell.toFaculty : null)
+                        : null);
+
+                const isAssigned = Boolean(baseSubject && baseSubject !== "Free / Unassigned" && baseSubject !== "Free");
+
+                return (
+                  <td
+                    key={slot.id}
+                    className={cn(
+                      "p-1.5 border-r border-slate-200 last:border-r-0",
+                      isChanged ? "bg-amber-50/40" : "bg-white",
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "rounded-xl border p-2 flex flex-col justify-between transition-colors",
+                        compact ? "min-h-[75px]" : "min-h-[86px]",
+                        isChanged
+                          ? "border-amber-300 bg-amber-50/50 shadow-2xs"
+                          : "border-slate-200/90 bg-slate-50/50",
+                      )}
+                    >
+                      {isAssigned ? (
+                        <>
+                          <div>
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              {isChanged ? (
+                                <span className="inline-flex items-center rounded bg-amber-100 text-amber-900 font-bold px-1.5 py-0.2 text-[8px] uppercase tracking-wider border border-amber-300">
+                                  Baseline
+                                </span>
+                              ) : null}
+                              <span className="text-[9.5px] font-mono text-slate-400 font-semibold ml-auto">
+                                {slot.label}
+                              </span>
+                            </div>
+                            <div
+                              className="font-bold text-slate-900 text-xs truncate leading-snug"
+                              title={baseSubject || "Subject"}
+                            >
+                              {baseSubject}
+                            </div>
+                          </div>
+                          {baseFaculty ? (
+                            <div
+                              className="text-[10px] text-slate-600 truncate flex items-center gap-1 mt-1 font-medium"
+                              title={baseFaculty}
+                            >
+                              <User className="h-3 w-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{baseFaculty}</span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-slate-400 text-xs italic min-h-[60px]">
+                          Free
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// 2. PROPOSED TIMETABLE SCHEDULE GRID (Changes with Red Indications)
+// -------------------------------------------------------------
+export function ProposedTimetableScheduleGrid({
+  req,
+  compact = false,
+}: {
+  req: TimetableRequestItem;
+  compact?: boolean;
+}) {
+  const { days, slots, changesMap, grid, changes } = useMemo(
+    () => getScheduleStructure(req),
+    [req],
+  );
+
+  if (slots.length === 0 && changes.length === 0) {
+    return (
+      <div className="p-4 text-center text-xs text-slate-500 italic bg-slate-50 rounded-xl border border-slate-200">
+        No schedule slots available for this request.
+      </div>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
+      <table className="w-full min-w-[760px] border-collapse text-xs">
+        <thead>
+          <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
+            <th className="py-2 px-2.5 text-left font-bold text-xs uppercase tracking-wider text-slate-700 w-24 border-r border-slate-200 shrink-0 sticky left-0 bg-slate-50 z-10 shadow-2xs">
+              Day
+            </th>
+            {slots.map((slot) => (
+              <th
+                key={slot.id}
+                className={cn(
+                  "py-2 px-1.5 text-center border-r border-slate-200 last:border-r-0",
+                  slot.isBreak ? "bg-slate-100/70 text-slate-500 w-14" : "min-w-[125px]",
+                )}
+              >
+                <div className="font-bold text-navy-900 text-xs">{slot.label}</div>
+                {slot.timeRange ? (
+                  <div className="text-[9.5px] font-mono text-slate-400 font-normal mt-0.5">
+                    {slot.timeRange}
+                  </div>
+                ) : null}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-200">
+          {days.map((day) => (
+            <tr key={day.code} className="hover:bg-slate-50/40 transition-colors">
+              <td className="py-2.5 px-2.5 font-bold text-navy-950 border-r border-slate-200 bg-slate-50/70 sticky left-0 z-10 shadow-2xs text-xs">
+                {day.label}
+              </td>
+              {slots.map((slot) => {
+                if (slot.isBreak) {
+                  return (
+                    <td
+                      key={slot.id}
+                      className="py-1 px-1 text-center border-r border-slate-200 last:border-r-0 bg-slate-100/50 text-slate-400 font-bold text-[9px] select-none"
+                    >
+                      <div className="uppercase tracking-widest">{slot.label}</div>
+                    </td>
+                  );
+                }
+
+                const cell = grid?.cellsByDay?.[day.code]?.[slot.id];
+                const changeItem =
+                  changesMap.get(`${day.code}_${slot.label.trim().toUpperCase()}`) ||
+                  changesMap.get(`${day.code}_${slot.label}`) ||
+                  (slot.startTime
+                    ? changes.find(
+                        (c) =>
+                          c.dayOfWeek === day.code &&
+                          c.timeRange &&
+                          c.timeRange.includes(slot.startTime),
+                      )
+                    : undefined);
+                const isChanged = Boolean(cell?.isChanged || changeItem);
+
+                if (isChanged) {
+                  const fromSub =
+                    changeItem?.fromSubject && changeItem.fromSubject !== "Free / Unassigned"
+                      ? changeItem.fromSubject
+                      : cell?.fromSubject && cell.fromSubject !== "Free / Unassigned"
+                      ? cell.fromSubject
+                      : "Free / Unassigned";
+
+                  const toSub =
+                    changeItem?.toSubject && changeItem.toSubject !== "Free / Unassigned"
+                      ? changeItem.toSubject
+                      : cell?.toSubject && cell.toSubject !== "Free / Unassigned"
+                      ? cell.toSubject
+                      : cell?.currentEntries?.[0]?.customLabel ||
+                        cell?.currentEntries?.[0]?.subjectName ||
+                        cell?.currentEntries?.[0]?.subjectCode ||
+                        "Free";
+
+                  const fromFac =
+                    changeItem?.fromFaculty && changeItem.fromFaculty !== "Unassigned"
+                      ? changeItem.fromFaculty
+                      : cell?.fromFaculty && cell.fromFaculty !== "Unassigned"
+                      ? cell.fromFaculty
+                      : null;
+
+                  const toFac =
+                    changeItem?.toFaculty && changeItem.toFaculty !== "Unassigned"
+                      ? changeItem.toFaculty
+                      : cell?.toFaculty && cell.toFaculty !== "Unassigned"
+                      ? cell.toFaculty
+                      : cell?.currentEntries?.[0]?.facultyName || null;
+
+                  // RED INDICATION FOR CHANGED PERIOD
+                  return (
+                    <td
+                      key={slot.id}
+                      className="p-1.5 border-r border-slate-200 last:border-r-0 bg-rose-50/60"
+                    >
+                      <div
+                        className={cn(
+                          "rounded-xl border-2 border-rose-500 bg-white p-2 shadow-2xs ring-1 ring-rose-200 flex flex-col justify-between",
+                          compact ? "min-h-[75px]" : "min-h-[86px]",
+                        )}
+                      >
+                        <div>
+                          {/* Changed Top Badge */}
+                          <div className="flex items-center justify-between gap-1 mb-1">
+                            <span className="inline-flex items-center gap-1 rounded bg-rose-600 text-white font-black px-1.5 py-0.2 text-[8px] uppercase tracking-wider shadow-2xs">
+                              <span className="h-1.5 w-1.5 rounded-full bg-white animate-pulse" />
+                              Changed
+                            </span>
+                            <span className="text-[9.5px] font-mono font-bold text-rose-700">
+                              {slot.label}
+                            </span>
+                          </div>
+
+                          {/* Previous Strikethrough */}
+                          <div
+                            className="line-through text-slate-400 text-[10px] truncate font-medium leading-tight"
+                            title={`Previous: ${fromSub}`}
+                          >
+                            {fromSub}
+                          </div>
+                          {fromFac && (
+                            <div
+                              className="line-through text-slate-400 text-[9.5px] truncate leading-tight"
+                              title={`Previous Faculty: ${fromFac}`}
+                            >
+                              {fromFac}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Proposed Subject & Faculty in Rose / Bold Red */}
+                        <div className="mt-1 pt-1 border-t border-rose-200">
+                          <div
+                            className="font-bold text-xs text-rose-950 truncate leading-snug"
+                            title={`Proposed: ${toSub}`}
+                          >
+                            {toSub}
+                          </div>
+                          {toFac ? (
+                            <div
+                              className="text-[10px] font-bold text-rose-800 truncate flex items-center gap-1 mt-0.5"
+                              title={`Proposed Faculty: ${toFac}`}
+                            >
+                              <User className="h-3 w-3 text-rose-600 shrink-0" />
+                              <span className="truncate">{toFac}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </td>
+                  );
+                }
+
+                // UNCHANGED PERIOD
+                const ent = cell?.currentEntries?.[0];
+                const subTitle =
+                  ent?.customLabel ||
+                  ent?.subjectName ||
+                  ent?.subjectCode ||
+                  (cell?.toSubject && cell.toSubject !== "Free / Unassigned" ? cell.toSubject : null);
+                const facTitle =
+                  ent?.facultyName ||
+                  (cell?.toFaculty && cell.toFaculty !== "Unassigned" ? cell.toFaculty : null);
+                const isAssigned = Boolean(subTitle);
+
+                return (
+                  <td
+                    key={slot.id}
+                    className="p-1.5 border-r border-slate-200 last:border-r-0 bg-white"
+                  >
+                    <div
+                      className={cn(
+                        "rounded-xl border border-slate-200/90 bg-slate-50/50 p-2 flex flex-col justify-between transition-colors",
+                        compact ? "min-h-[75px]" : "min-h-[86px]",
+                      )}
+                    >
+                      {isAssigned ? (
+                        <>
+                          <div>
+                            <div className="flex items-center justify-between gap-1 mb-1">
+                              {ent?.batchLabel ? (
+                                <span className="rounded bg-navy-100 text-navy-800 font-bold px-1.5 py-0.2 text-[8px] uppercase inline-block">
+                                  {ent.batchLabel}
+                                </span>
+                              ) : null}
+                              <span className="text-[9.5px] font-mono text-slate-400 font-semibold ml-auto">
+                                {slot.label}
+                              </span>
+                            </div>
+                            <div
+                              className="font-bold text-slate-800 text-xs truncate leading-snug"
+                              title={subTitle || "Subject"}
+                            >
+                              {subTitle}
+                            </div>
+                          </div>
+                          {facTitle ? (
+                            <div className="text-[10px] text-slate-500 truncate flex items-center gap-1 mt-1">
+                              <User className="h-3 w-3 text-slate-400 shrink-0" />
+                              <span className="truncate">{facTitle}</span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-slate-400 text-xs italic min-h-[60px]">
+                          Free
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// 3. DAY-BY-DAY SPLIT COMPARISON (Master Row vs Proposed Row)
+// -------------------------------------------------------------
+export function DayByDaySplitComparisonGrid({
+  req,
+}: {
+  req: TimetableRequestItem;
+}) {
+  const { days, slots, changesMap, grid, changes } = useMemo(
+    () => getScheduleStructure(req),
+    [req],
+  );
+
+  return (
+    <div className="space-y-4">
+      {days.map((day) => {
+        const dayChanges = changes.filter((c) => c.dayOfWeek === day.code);
+
+        return (
+          <div
+            key={day.code}
+            className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs"
+          >
+            {/* Day Header Banner */}
+            <div className="flex items-center justify-between px-4 py-2.5 bg-slate-50 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-navy-950 text-sm">{day.label}</span>
+                {dayChanges.length > 0 ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2 py-0.5 text-[11px] font-bold text-rose-800">
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-600 animate-pulse" />
+                    {dayChanges.length} Changed {dayChanges.length === 1 ? "Slot" : "Slots"}
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+                    No Changes
+                  </span>
+                )}
+              </div>
+              <span className="text-[11px] text-slate-500 font-medium">
+                Master Baseline vs Proposed Schedule
+              </span>
+            </div>
+
+            {/* Split Day Table: Row 1 = Master Baseline, Row 2 = Proposed Changes */}
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[780px] border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50/70 border-b border-slate-200 text-slate-500 text-[10.5px]">
+                    <th className="py-2 px-3 text-left font-bold uppercase tracking-wider w-32 border-r border-slate-200 sticky left-0 bg-slate-50/90 z-10">
+                      Version
+                    </th>
+                    {slots.map((slot) => (
+                      <th
+                        key={slot.id}
+                        className={cn(
+                          "py-1.5 px-2 text-center border-r border-slate-200 last:border-r-0",
+                          slot.isBreak ? "w-14 bg-slate-100/70" : "min-w-[120px]",
+                        )}
+                      >
+                        <div className="font-bold text-slate-800">{slot.label}</div>
+                        {slot.timeRange ? (
+                          <div className="text-[9.5px] font-mono text-slate-400 font-normal">
+                            {slot.timeRange}
+                          </div>
+                        ) : null}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {/* Row 1: Master Timetable Baseline */}
+                  <tr className="bg-slate-50/40">
+                    <td className="py-2.5 px-3 border-r border-slate-200 font-bold text-slate-700 sticky left-0 bg-slate-100/80 z-10 text-[11px]">
+                      <div className="flex items-center gap-1.5 text-slate-800">
+                        <BookOpen className="h-3.5 w-3.5 text-slate-500" />
+                        <span>Master Baseline</span>
+                      </div>
+                    </td>
+                    {slots.map((slot) => {
+                      if (slot.isBreak) {
+                        return (
+                          <td
+                            key={slot.id}
+                            className="py-1 px-1 text-center border-r border-slate-200 last:border-r-0 bg-slate-100/50 text-slate-400 text-[9px] uppercase tracking-wider"
+                          >
+                            {slot.label}
+                          </td>
+                        );
+                      }
+
+                      const cell = grid?.cellsByDay?.[day.code]?.[slot.id];
+                      const changeItem =
+                        changesMap.get(`${day.code}_${slot.label.trim().toUpperCase()}`) ||
+                        changesMap.get(`${day.code}_${slot.label}`);
+                      const isChanged = Boolean(cell?.isChanged || changeItem);
+
+                      const baseSubject =
+                        changeItem?.fromSubject && changeItem.fromSubject !== "Free / Unassigned"
+                          ? changeItem.fromSubject
+                          : cell?.fromSubject && cell.fromSubject !== "Free / Unassigned"
+                          ? cell.fromSubject
+                          : cell?.prevEntries?.[0]?.subjectName ||
+                            (!isChanged ? cell?.currentEntries?.[0]?.subjectName || cell?.toSubject : null);
+
+                      const baseFaculty =
+                        changeItem?.fromFaculty && changeItem.fromFaculty !== "Unassigned"
+                          ? changeItem.fromFaculty
+                          : cell?.fromFaculty && cell.fromFaculty !== "Unassigned"
+                          ? cell.fromFaculty
+                          : cell?.prevEntries?.[0]?.facultyName ||
+                            (!isChanged ? cell?.currentEntries?.[0]?.facultyName || cell?.toFaculty : null);
+
+                      return (
+                        <td
+                          key={slot.id}
+                          className="p-1.5 border-r border-slate-200 last:border-r-0"
+                        >
+                          <div
+                            className={cn(
+                              "rounded-lg p-2 border min-h-[64px] flex flex-col justify-between",
+                              isChanged
+                                ? "bg-amber-50/60 border-amber-200"
+                                : "bg-white border-slate-200/80",
+                            )}
+                          >
+                            <div className="font-semibold text-slate-800 text-[11px] truncate">
+                              {baseSubject || <span className="text-slate-400 italic font-normal">Free</span>}
+                            </div>
+                            {baseFaculty ? (
+                              <div className="text-[10px] text-slate-500 truncate flex items-center gap-1 mt-1">
+                                <User className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="truncate">{baseFaculty}</span>
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+
+                  {/* Row 2: Proposed Changed Schedule */}
+                  <tr className="bg-white">
+                    <td className="py-2.5 px-3 border-r border-slate-200 font-bold text-rose-900 sticky left-0 bg-rose-50/80 z-10 text-[11px]">
+                      <div className="flex items-center gap-1.5 text-rose-900">
+                        <Calendar className="h-3.5 w-3.5 text-rose-600" />
+                        <span>Proposed</span>
+                      </div>
+                    </td>
+                    {slots.map((slot) => {
+                      if (slot.isBreak) {
+                        return (
+                          <td
+                            key={slot.id}
+                            className="py-1 px-1 text-center border-r border-slate-200 last:border-r-0 bg-slate-100/50 text-slate-400 text-[9px] uppercase tracking-wider"
+                          >
+                            {slot.label}
+                          </td>
+                        );
+                      }
+
+                      const cell = grid?.cellsByDay?.[day.code]?.[slot.id];
+                      const changeItem =
+                        changesMap.get(`${day.code}_${slot.label.trim().toUpperCase()}`) ||
+                        changesMap.get(`${day.code}_${slot.label}`);
+                      const isChanged = Boolean(cell?.isChanged || changeItem);
+
+                      if (isChanged) {
+                        const toSub =
+                          changeItem?.toSubject && changeItem.toSubject !== "Free / Unassigned"
+                            ? changeItem.toSubject
+                            : cell?.toSubject || cell?.currentEntries?.[0]?.subjectName || "Free";
+                        const toFac =
+                          changeItem?.toFaculty && changeItem.toFaculty !== "Unassigned"
+                            ? changeItem.toFaculty
+                            : cell?.toFaculty || cell?.currentEntries?.[0]?.facultyName || null;
+
+                        return (
+                          <td
+                            key={slot.id}
+                            className="p-1.5 border-r border-slate-200 last:border-r-0 bg-rose-50/40"
+                          >
+                            <div className="rounded-lg p-2 border-2 border-rose-500 bg-white shadow-2xs ring-1 ring-rose-200 min-h-[64px] flex flex-col justify-between">
+                              <div className="flex items-center justify-between gap-1 mb-0.5">
+                                <span className="rounded bg-rose-600 text-white font-black px-1.5 py-0.2 text-[7.5px] uppercase tracking-wider">
+                                  Changed
+                                </span>
+                              </div>
+                              <div className="font-bold text-rose-950 text-[11.5px] truncate">
+                                {toSub}
+                              </div>
+                              {toFac ? (
+                                <div className="text-[10px] font-bold text-rose-800 truncate flex items-center gap-1 mt-0.5">
+                                  <User className="h-3 w-3 text-rose-600 shrink-0" />
+                                  <span className="truncate">{toFac}</span>
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
+                        );
+                      }
+
+                      const sub = cell?.currentEntries?.[0]?.subjectName || cell?.toSubject;
+                      const fac = cell?.currentEntries?.[0]?.facultyName || cell?.toFaculty;
+
+                      return (
+                        <td
+                          key={slot.id}
+                          className="p-1.5 border-r border-slate-200 last:border-r-0"
+                        >
+                          <div className="rounded-lg p-2 border border-slate-200/80 bg-slate-50/50 min-h-[64px] flex flex-col justify-between">
+                            <div className="font-semibold text-slate-800 text-[11px] truncate">
+                              {sub || <span className="text-slate-400 italic font-normal">Free</span>}
+                            </div>
+                            {fac ? (
+                              <div className="text-[10px] text-slate-500 truncate flex items-center gap-1 mt-1">
+                                <User className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="truncate">{fac}</span>
+                              </div>
+                            ) : null}
+                          </div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// -------------------------------------------------------------
+// 4. MAIN TIMETABLE REQUESTS VIEW
+// -------------------------------------------------------------
 export function TimetableRequestsView() {
   const router = useRouter();
   const { hasPermission, authorization } = useAuth();
@@ -121,7 +879,6 @@ export function TimetableRequestsView() {
   const isPrincipal = authorization?.roles?.some((r) => r.roleKey === "principal");
   const isSuperAdmin = authorization?.roles?.some((r) => r.roleKey === "super_admin");
   const isVicePrincipal = authorization?.roles?.some((r) => r.roleKey === "vice_principal");
-  const isHod = authorization?.roles?.some((r) => r.roleKey === "hod");
 
   const canApprove =
     isSuperAdmin ||
@@ -136,6 +893,10 @@ export function TimetableRequestsView() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "pending" | "approved" | "rejected">("pending");
+
+  // Detailed Pop-up Modal State
+  const [previewModalRequest, setPreviewModalRequest] = useState<TimetableRequestItem | null>(null);
+  const [modalTab, setModalTab] = useState<"side-by-side" | "day-by-day" | "proposed-only" | "list">("side-by-side");
 
   // Approval / Rejection modal state
   const [actionModal, setActionModal] = useState<{
@@ -210,8 +971,8 @@ export function TimetableRequestsView() {
 
       setSuccessToast(
         actionModal.type === "approve"
-          ? `Request #${actionModal.request.id} approved and published live successfully!`
-          : `Request #${actionModal.request.id} rejected.`,
+          ? `Request REQ-${String(actionModal.request.id).padStart(4, "0")} approved and published live successfully!`
+          : `Request REQ-${String(actionModal.request.id).padStart(4, "0")} rejected.`,
       );
       setTimeout(() => setSuccessToast(null), 6000);
 
@@ -393,6 +1154,7 @@ export function TimetableRequestsView() {
             const cleanSection = req.sectionName
               ? req.sectionName.replace(/^Section\s+/i, "").trim()
               : null;
+            const changesCount = req.changes?.length ?? 0;
 
             return (
               <Card
@@ -407,7 +1169,7 @@ export function TimetableRequestsView() {
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   {/* Left Column: Details */}
                   <div className="space-y-2.5 flex-1 min-w-0">
-                    {/* Primary Line: Course, Branch, Section clearly in a single line with Semester, AY & Status */}
+                    {/* Primary Line: Course, Branch, Section, Semester, AY & Status */}
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-xs font-bold text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">
                         REQ-{String(req.id).padStart(4, "0")}
@@ -450,7 +1212,7 @@ export function TimetableRequestsView() {
                       )}
                     </div>
 
-                    {/* Subline: College, Plan, Requester metadata in a single clean row */}
+                    {/* Subline: College, Plan, Requester metadata */}
                     <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-500">
                       <span className="font-semibold text-slate-700">{req.collegeName}</span>
                       <span>•</span>
@@ -475,7 +1237,7 @@ export function TimetableRequestsView() {
                       ) : null}
                     </div>
 
-                    {/* Reason block: rich, structured category badge & remarks */}
+                    {/* Reason block: category badge & remarks */}
                     <div className="rounded-xl border border-slate-200/90 bg-slate-50/90 p-3 text-xs space-y-1.5 shadow-2xs">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-bold uppercase tracking-wider text-slate-500 text-[10.5px]">
@@ -506,50 +1268,73 @@ export function TimetableRequestsView() {
                       </div>
                     </div>
 
-                    {/* Proposed Changes Breakdown */}
-                    {req.changes && req.changes.length > 0 ? (
-                      <div className="rounded-lg border border-slate-200/90 bg-white p-3 text-xs shadow-2xs">
-                        <div className="flex items-center justify-between font-bold text-slate-800 mb-2">
-                          <span className="flex items-center gap-1.5 text-navy-950">
-                            <Calendar className="h-3.5 w-3.5 text-indigo-600" />
-                            Proposed Timetable Modifications ({req.changes.length})
-                          </span>
-                          <span className="text-[11px] font-medium text-slate-500">Period & Faculty Diff</span>
-                        </div>
-                        <div className="divide-y divide-slate-100 rounded-md border border-slate-100 bg-slate-50/50">
-                          {req.changes.map((ch, idx) => (
-                            <div key={idx} className="p-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-navy-900 bg-white border border-slate-200/80 rounded px-2 py-0.5 text-[11px] shadow-2xs">
-                                  {ch.dayLabel} • {ch.slotLabel}
-                                </span>
-                                {ch.timeRange ? (
-                                  <span className="text-[10.5px] font-mono text-slate-500">({ch.timeRange})</span>
-                                ) : null}
-                              </div>
-                              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                                <span className="text-slate-400 font-medium">Faculty:</span>
-                                <span className="line-through text-slate-400">{ch.fromFaculty}</span>
-                                <ArrowRight className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span className="font-bold text-amber-900 bg-amber-50 rounded px-1.5 py-0.5 border border-amber-200">
-                                  {ch.toFaculty}
-                                </span>
-                                <span className="text-slate-300">•</span>
-                                <span className="text-slate-400 font-medium">Subject:</span>
-                                {ch.subjectChanged ? (
-                                  <>
-                                    <span className="line-through text-slate-400">{ch.fromSubject}</span>
-                                    <ArrowRight className="h-3 w-3 text-slate-400 shrink-0" />
-                                    <span className="font-bold text-emerald-800 bg-emerald-50 rounded px-1.5 py-0.5 border border-emerald-200">
-                                      {ch.toSubject}
-                                    </span>
-                                  </>
-                                ) : (
-                                  <span className="text-slate-700 font-medium">{ch.toSubject}</span>
-                                )}
-                              </div>
+                    {/* COMPACT INLINE UI FOR PROPOSED MODIFICATIONS (Small UI inline instead of large table) */}
+                    {changesCount > 0 ? (
+                      <div className="rounded-xl border border-slate-200/90 bg-white p-3 shadow-2xs hover:border-indigo-300 transition-colors">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                          <div className="flex items-center gap-2.5">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 text-rose-700 shrink-0">
+                              <Calendar className="h-4 w-4" />
                             </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-slate-900 text-xs sm:text-sm">
+                                  Proposed Timetable Modifications
+                                </span>
+                                <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2 py-0.5 text-[11px] font-bold text-rose-800">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-rose-600 animate-pulse" />
+                                  {changesCount} Changed Slots
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Faculty & subject schedule adjustments requested for this section.
+                              </p>
+                            </div>
+                          </div>
+
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => {
+                              setPreviewModalRequest(req);
+                              setModalTab("side-by-side");
+                            }}
+                            className="border-indigo-200 bg-indigo-50/80 text-indigo-900 hover:bg-indigo-100 font-bold text-xs shrink-0 self-start sm:self-center cursor-pointer shadow-2xs"
+                          >
+                            <Columns className="mr-1.5 h-3.5 w-3.5 text-indigo-600" />
+                            Compare Master vs Changed (Side-by-Side)
+                          </Button>
+                        </div>
+
+                        {/* Inline Compact Preview Chips (First 4 changes) */}
+                        <div className="mt-2.5 pt-2.5 border-t border-slate-100 flex flex-wrap items-center gap-1.5">
+                          {req.changes?.slice(0, 4).map((ch, idx) => (
+                            <span
+                              key={idx}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/90 px-2 py-1 text-[11px] text-slate-700 shadow-2xs"
+                            >
+                              <span className="font-bold text-navy-900">{ch.dayOfWeek} {ch.slotLabel}:</span>
+                              <span className="text-slate-400 line-through text-[10px] truncate max-w-[85px]" title={ch.fromSubject}>
+                                {ch.fromSubject}
+                              </span>
+                              <ArrowRight className="h-2.5 w-2.5 text-slate-400 shrink-0" />
+                              <span className="font-bold text-rose-700 truncate max-w-[110px]" title={ch.toSubject}>
+                                {ch.toSubject}
+                              </span>
+                            </span>
                           ))}
+                          {changesCount > 4 ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewModalRequest(req);
+                                setModalTab("side-by-side");
+                              }}
+                              className="text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-lg px-2.5 py-1 border border-indigo-200 transition-colors cursor-pointer"
+                            >
+                              +{changesCount - 4} more · Click for Side-by-Side View
+                            </button>
+                          ) : null}
                         </div>
                       </div>
                     ) : null}
@@ -569,22 +1354,22 @@ export function TimetableRequestsView() {
                     <Button
                       size="sm"
                       variant="secondary"
-                      onClick={() =>
-                        router.push(
-                          `/timetables?collegeId=${req.collegeId}&courseId=${req.courseId}&branchId=${req.branchId}&semester=${req.semesterNumber}&section=${req.sectionName || "all"}&academicYear=${encodeURIComponent(req.academicYearLabel)}`,
-                        )
-                      }
-                      title="Inspect the proposed timetable in the planner"
+                      onClick={() => {
+                        setPreviewModalRequest(req);
+                        setModalTab("side-by-side");
+                      }}
+                      title="Inspect Master vs Changed schedule side-by-side"
+                      className="cursor-pointer"
                     >
-                      <ExternalLink className="mr-1.5 h-3.5 w-3.5 text-slate-500" />
-                      View Timetable
+                      <Columns className="mr-1.5 h-3.5 w-3.5 text-indigo-600" />
+                      View Timetable (Side-by-Side)
                     </Button>
 
                     {isPending && canApprove ? (
                       <div className="flex items-center gap-2">
                         <Button
                           size="sm"
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm"
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm cursor-pointer"
                           onClick={() => {
                             setActionModal({ type: "approve", request: req });
                             setActionComment("");
@@ -597,7 +1382,7 @@ export function TimetableRequestsView() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          className="border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 font-semibold"
+                          className="border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 font-semibold cursor-pointer"
                           onClick={() => {
                             setActionModal({ type: "reject", request: req });
                             setActionComment("");
@@ -639,7 +1424,7 @@ export function TimetableRequestsView() {
               </div>
               <button
                 onClick={() => setActionModal(null)}
-                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 cursor-pointer"
               >
                 ×
               </button>
@@ -696,7 +1481,6 @@ export function TimetableRequestsView() {
                   <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
                     {actionModal.request.changes.map((ch, idx) => (
                       <div key={idx} className="p-3 text-xs hover:bg-slate-50/60 transition flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                        {/* Day & Period Badge */}
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="inline-flex items-center rounded-md bg-navy-50 px-2.5 py-1 font-bold text-navy-900 border border-navy-100 text-[11.5px]">
                             {ch.dayLabel} • {ch.slotLabel}
@@ -708,9 +1492,7 @@ export function TimetableRequestsView() {
                           ) : null}
                         </div>
 
-                        {/* Changes: Faculty and Subject */}
                         <div className="flex-1 min-w-0 space-y-1">
-                          {/* Faculty: From -> To */}
                           <div className="flex flex-wrap items-center gap-1.5 text-xs">
                             <span className="text-slate-400 font-medium">Faculty:</span>
                             <span className="line-through text-slate-400 font-medium">{ch.fromFaculty}</span>
@@ -720,7 +1502,6 @@ export function TimetableRequestsView() {
                             </span>
                           </div>
 
-                          {/* Subject: From -> To (or Subject name) */}
                           <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
                             <span className="text-slate-400 font-medium">Subject:</span>
                             {ch.subjectChanged ? (
@@ -805,7 +1586,373 @@ export function TimetableRequestsView() {
           </div>
         </div>
       ) : null}
+
+      {/* ============================================================== */}
+      {/* DETAILED POP-UP MODAL: MASTER VS CHANGED SIDE-TO-SIDE          */}
+      {/* ============================================================== */}
+      {previewModalRequest ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2 sm:p-4 backdrop-blur-xs animate-in fade-in">
+          <div className="w-full max-w-[96vw] xl:max-w-[1600px] max-h-[94vh] flex flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200/90 bg-white px-5 sm:px-6 py-4 shrink-0 gap-3">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs font-bold text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">
+                    REQ-{String(previewModalRequest.id).padStart(4, "0")}
+                  </span>
+                  <h3 className="font-bold text-navy-950 text-base sm:text-lg">
+                    {previewModalRequest.courseName} — {previewModalRequest.branchName}
+                    {previewModalRequest.sectionName
+                      ? ` — Section ${previewModalRequest.sectionName.replace(/^Section\s+/i, "")}`
+                      : ""}
+                  </h3>
+                  <span className="rounded bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                    Sem {previewModalRequest.semesterNumber}
+                  </span>
+                  <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                    {previewModalRequest.academicYearLabel}
+                    {previewModalRequest.batch ? ` (${previewModalRequest.batch})` : ""}
+                  </span>
+                  {previewModalRequest.versionNo != null ? (
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600 font-medium">
+                      v{previewModalRequest.versionNo}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Submitted by <strong className="text-slate-700">{previewModalRequest.requesterName}</strong> ({previewModalRequest.requesterRoleKey.toUpperCase()}) ·{" "}
+                  {previewModalRequest.collegeName} · Plan #{previewModalRequest.planId}
+                </p>
+              </div>
+
+              {/* View Mode Switcher in Modal */}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex rounded-xl border border-slate-200 bg-slate-100 p-0.5 text-xs shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => setModalTab("side-by-side")}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5",
+                      modalTab === "side-by-side"
+                        ? "bg-white text-navy-950 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900",
+                    )}
+                  >
+                    <Columns className="h-3.5 w-3.5 text-indigo-600" />
+                    <span>Side-by-Side</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setModalTab("day-by-day")}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5",
+                      modalTab === "day-by-day"
+                        ? "bg-white text-navy-950 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900",
+                    )}
+                  >
+                    <Split className="h-3.5 w-3.5 text-amber-600" />
+                    <span>Day-by-Day</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setModalTab("proposed-only")}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5",
+                      modalTab === "proposed-only"
+                        ? "bg-white text-navy-950 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900",
+                    )}
+                  >
+                    <LayoutGrid className="h-3.5 w-3.5 text-rose-600" />
+                    <span>Proposed Grid</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setModalTab("list")}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5",
+                      modalTab === "list"
+                        ? "bg-white text-navy-950 shadow-2xs"
+                        : "text-slate-600 hover:text-slate-900",
+                    )}
+                  >
+                    <List className="h-3.5 w-3.5 text-slate-600" />
+                    <span>Diff List ({previewModalRequest.changes?.length ?? 0})</span>
+                  </button>
+                </div>
+
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    router.push(
+                      `/timetables?collegeId=${previewModalRequest.collegeId}&courseId=${previewModalRequest.courseId}&branchId=${previewModalRequest.branchId}&semester=${previewModalRequest.semesterNumber}&section=${previewModalRequest.sectionName || "all"}&academicYear=${encodeURIComponent(previewModalRequest.academicYearLabel)}`,
+                    )
+                  }
+                  title="Open in Timetable Planner"
+                  className="cursor-pointer"
+                >
+                  <ExternalLink className="mr-1.5 h-3.5 w-3.5 text-slate-500" />
+                  Planner
+                </Button>
+
+                <button
+                  type="button"
+                  onClick={() => setPreviewModalRequest(null)}
+                  className="rounded-xl p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                  title="Close popup"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+              {/* Remarks Banner */}
+              <div className="rounded-xl border border-slate-200 bg-slate-50/90 p-3.5 text-xs space-y-1.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-slate-600 uppercase tracking-wider text-[10.5px]">
+                      Change Request Remarks:
+                    </span>
+                    {previewModalRequest.reasonCategory && REASON_CATEGORY_CONFIG[previewModalRequest.reasonCategory] ? (
+                      <span
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold border",
+                          REASON_CATEGORY_CONFIG[previewModalRequest.reasonCategory].badgeClass,
+                        )}
+                      >
+                        <span>{REASON_CATEGORY_CONFIG[previewModalRequest.reasonCategory].icon}</span>
+                        {REASON_CATEGORY_CONFIG[previewModalRequest.reasonCategory].label}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2.5 py-0.5 text-[11px] font-bold text-rose-800">
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-600 animate-pulse" />
+                    {previewModalRequest.changes?.length ?? 0} Changed Periods
+                  </span>
+                </div>
+                <p className="text-slate-900 font-medium whitespace-pre-line text-xs leading-relaxed">
+                  {previewModalRequest.changeRemarks || previewModalRequest.reason}
+                </p>
+              </div>
+
+              {/* TAB 1: SIDE-BY-SIDE VIEW (MASTER BASELINE VS PROPOSED CHANGES) */}
+              {modalTab === "side-by-side" && (
+                <div className="space-y-4">
+                  {/* Legend Bar */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+                    <div className="flex items-center gap-4 text-slate-600">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded border border-slate-300 bg-white inline-block" />
+                        <span className="font-medium text-slate-700">Unchanged Slot</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded border border-amber-300 bg-amber-100 inline-block" />
+                        <span className="font-medium text-amber-900">Original Baseline (Master)</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="h-3 w-3 rounded border-2 border-rose-500 bg-rose-100 inline-block" />
+                        <span className="font-bold text-rose-700">Changed Slot (Proposed)</span>
+                      </span>
+                    </div>
+
+                    <span className="text-[11px] text-slate-400 italic">
+                      Comparing published master baseline against proposed changes side-to-side
+                    </span>
+                  </div>
+
+                  {/* Dual Grids Side-by-Side */}
+                  <div className="grid grid-cols-1 2xl:grid-cols-2 gap-5">
+                    {/* LEFT PANEL: MASTER TIMETABLE (PUBLISHED BASELINE) */}
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/50 p-3.5 sm:p-4 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-slate-200/80 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-navy-100 text-navy-800">
+                            <BookOpen className="h-4 w-4" />
+                          </span>
+                          <div>
+                            <h4 className="font-bold text-navy-950 text-sm">
+                              Master Timetable (Published Baseline)
+                            </h4>
+                            <p className="text-[11px] text-slate-500">
+                              Currently published live schedule before requested changes
+                            </p>
+                          </div>
+                        </div>
+                        <span className="rounded-full bg-slate-200/80 px-2.5 py-0.5 text-[11px] font-semibold text-slate-700">
+                          Original Baseline
+                        </span>
+                      </div>
+
+                      <MasterTimetableScheduleGrid req={previewModalRequest} compact />
+                    </div>
+
+                    {/* RIGHT PANEL: PROPOSED TIMETABLE (REQUESTED CHANGES) */}
+                    <div className="rounded-2xl border-2 border-rose-300 bg-rose-50/20 p-3.5 sm:p-4 space-y-2.5">
+                      <div className="flex items-center justify-between border-b border-rose-200/80 pb-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-600 text-white">
+                            <Calendar className="h-4 w-4" />
+                          </span>
+                          <div>
+                            <h4 className="font-bold text-rose-950 text-sm">
+                              Proposed Timetable (Requested Changes)
+                            </h4>
+                            <p className="text-[11px] text-rose-700 font-medium">
+                              Modified slots highlighted with red indications
+                            </p>
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 border border-rose-300 px-2.5 py-0.5 text-[11px] font-bold text-rose-800">
+                          <span className="h-1.5 w-1.5 rounded-full bg-rose-600 animate-pulse" />
+                          {previewModalRequest.changes?.length ?? 0} Changed Slots
+                        </span>
+                      </div>
+
+                      <ProposedTimetableScheduleGrid req={previewModalRequest} compact />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: DAY-BY-DAY SPLIT COMPARISON */}
+              {modalTab === "day-by-day" && (
+                <div className="space-y-3">
+                  <div className="text-xs text-slate-600 px-1">
+                    Direct period-by-period comparison for each day: Master Baseline row immediately followed by the Proposed Changed row.
+                  </div>
+                  <DayByDaySplitComparisonGrid req={previewModalRequest} />
+                </div>
+              )}
+
+              {/* TAB 3: PROPOSED GRID ONLY (FULL WIDTH) */}
+              {modalTab === "proposed-only" && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between px-1 text-xs">
+                    <span className="font-bold text-slate-700">Full Proposed Timetable Grid</span>
+                    <span className="text-rose-700 font-bold">Red cells indicate requested modifications</span>
+                  </div>
+                  <ProposedTimetableScheduleGrid req={previewModalRequest} />
+                </div>
+              )}
+
+              {/* TAB 4: DIFF LIST */}
+              {modalTab === "list" && (
+                <div className="rounded-2xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
+                  <div className="border-b border-slate-200 bg-slate-50 px-4 py-3 flex items-center justify-between">
+                    <span className="font-bold text-navy-950 text-xs uppercase tracking-wider">
+                      Slot-by-Slot Modifications ({previewModalRequest.changes?.length ?? 0})
+                    </span>
+                    <span className="text-[11px] text-slate-500 font-medium">From published baseline to proposed</span>
+                  </div>
+                  <div className="divide-y divide-slate-100 max-h-[60vh] overflow-y-auto">
+                    {previewModalRequest.changes?.map((ch, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 text-xs hover:bg-slate-50 transition flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                      >
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="inline-flex items-center rounded-md bg-navy-50 px-2.5 py-1 font-bold text-navy-900 border border-navy-100 text-[11.5px]">
+                            {ch.dayLabel} • {ch.slotLabel}
+                          </span>
+                          {ch.timeRange ? (
+                            <span className="text-[11px] font-mono text-slate-500">
+                              ({ch.timeRange})
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span className="text-slate-400 font-medium">Faculty:</span>
+                            <span className="line-through text-slate-400 font-medium">{ch.fromFaculty}</span>
+                            <ArrowRight className="h-3 w-3 text-slate-400 shrink-0" />
+                            <span className="font-bold text-amber-900 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
+                              {ch.toFaculty}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                            <span className="text-slate-400 font-medium">Subject:</span>
+                            {ch.subjectChanged ? (
+                              <>
+                                <span className="line-through text-slate-400 font-medium">{ch.fromSubject}</span>
+                                <ArrowRight className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span className="font-bold text-emerald-800 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                  {ch.toSubject}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="font-medium text-slate-700">{ch.toSubject}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-t border-slate-200/90 bg-slate-50/90 px-5 sm:px-6 py-3.5 shrink-0 gap-3">
+              <span className="text-xs text-slate-500">
+                Left: Published master baseline. Right: Proposed timetable with changes highlighted in red.
+              </span>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setPreviewModalRequest(null)}
+                >
+                  Close
+                </Button>
+
+                {previewModalRequest.status === "pending" && canApprove ? (
+                  <>
+                    <Button
+                      size="sm"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold shadow-sm cursor-pointer"
+                      onClick={() => {
+                        const target = previewModalRequest;
+                        setPreviewModalRequest(null);
+                        setActionModal({ type: "approve", request: target });
+                        setActionComment("");
+                        setActionError(null);
+                      }}
+                    >
+                      <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
+                      Approve & Publish
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      className="border-rose-300 text-rose-700 hover:bg-rose-50 hover:text-rose-900 font-semibold cursor-pointer"
+                      onClick={() => {
+                        const target = previewModalRequest;
+                        setPreviewModalRequest(null);
+                        setActionModal({ type: "reject", request: target });
+                        setActionComment("");
+                        setActionError(null);
+                      }}
+                    >
+                      <XCircle className="mr-1.5 h-3.5 w-3.5 text-rose-600" />
+                      Reject
+                    </Button>
+                  </>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
-
