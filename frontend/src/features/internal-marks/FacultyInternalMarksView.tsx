@@ -232,29 +232,29 @@ export function FacultyInternalMarksView() {
       />
 
       {/* Tabs */}
-      <div className="flex border-b border-border">
+      <div className="flex border-b border-border overflow-x-auto scrollbar-none whitespace-nowrap gap-1">
         <button
           type="button"
           onClick={() => setActiveTab("my_subjects")}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+          className={`flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium transition shrink-0 ${
             activeTab === "my_subjects"
               ? "border-brand-600 text-brand-600"
               : "border-transparent text-slate-500 hover:text-slate-700"
           }`}
         >
-          <BookOpen className="h-4 w-4" />
+          <BookOpen className="h-4 w-4 shrink-0" />
           My Assigned Subjects {uniqueAssignedSubjects.length > 0 ? `(${uniqueAssignedSubjects.length})` : ""}
         </button>
         <button
           type="button"
           onClick={() => setActiveTab("pending_approvals")}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition ${
+          className={`flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium transition shrink-0 ${
             activeTab === "pending_approvals"
               ? "border-brand-600 text-brand-600"
               : "border-transparent text-slate-500 hover:text-slate-700"
           }`}
         >
-          <Clock className="h-4 w-4" />
+          <Clock className="h-4 w-4 shrink-0" />
           Submissions & Approvals ({pendingSubmissions.length})
         </button>
       </div>
@@ -383,12 +383,12 @@ export function FacultyInternalMarksView() {
       {/* Tab 2: Pending Submissions & Approvals */}
       {activeTab === "pending_approvals" && (
         <Card className="p-4 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-navy-900">Submitted Internal Marks Packages</h3>
               <p className="text-xs text-slate-500">Review internal marks submissions awaiting approval or monitor submission history.</p>
             </div>
-            <Button size="sm" variant="secondary" onClick={() => void loadData()}>
+            <Button size="sm" variant="secondary" onClick={() => void loadData()} className="self-start sm:self-auto">
               Refresh
             </Button>
           </div>
@@ -398,128 +398,241 @@ export function FacultyInternalMarksView() {
           ) : pendingSubmissions.length === 0 ? (
             <EmptyState title="No submissions found" description="No internal marks submissions matching your access scope." />
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-border">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 border-b border-border">
-                  <tr>
-                    <th className="px-4 py-3">Subject & Code</th>
-                    <th className="px-4 py-3">Faculty & Scope</th>
-                    <th className="px-4 py-3">Students</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Submitted At</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border text-xs">
-                  {pendingSubmissions.map((sub) => (
-                    <tr key={sub.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 align-top">
-                        <div className="font-semibold text-navy-900">{sub.subjectName}</div>
-                        <div className="font-mono text-slate-500">{sub.subjectCode}</div>
-                      </td>
+            <>
+              {/* Mobile View: Cards List */}
+              <div className="block md:hidden space-y-3">
+                {pendingSubmissions.map((sub) => (
+                  <div key={sub.id} className="rounded-lg border border-border bg-white p-3.5 space-y-2.5 shadow-2xs">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="font-mono text-[11px] font-semibold uppercase text-brand-700 bg-brand-50 px-2 py-0.5 rounded">
+                          {sub.subjectCode}
+                        </span>
+                        <h4 className="font-semibold text-navy-900 text-sm mt-1">{sub.subjectName}</h4>
+                      </div>
+                      <StatusBadge status={sub.status} />
+                    </div>
 
-                      <td className="px-4 py-3 align-top">
-                        <div className="font-medium text-slate-800">{sub.facultyName}</div>
-                        <div className="text-slate-500">{sub.collegeName} • {sub.branchName}</div>
-                      </td>
+                    <div className="text-xs text-slate-500 space-y-0.5 border-t border-slate-100 pt-2">
+                      <div><span className="font-medium text-slate-700">Faculty:</span> {sub.facultyName}</div>
+                      <div><span className="font-medium text-slate-700">Scope:</span> {sub.collegeName} • {sub.branchName}</div>
+                      <div className="flex items-center justify-between pt-1">
+                        <span className="font-semibold text-slate-800">{sub.studentCount} Students</span>
+                        <span className="text-[11px] text-slate-500">Level {sub.currentApprovalLevel} Approval</span>
+                      </div>
+                      {sub.submittedAt && (
+                        <div className="text-[11px] text-slate-400 pt-0.5">Submitted: {sub.submittedAt}</div>
+                      )}
+                    </div>
 
-                      <td className="px-4 py-3 align-top font-semibold text-slate-800">
-                        {sub.studentCount} Students
-                      </td>
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="flex-1 justify-center h-9"
+                        onClick={() =>
+                          setEntryModal({
+                            open: true,
+                            subject: sub,
+                            readOnly: true,
+                          })
+                        }
+                      >
+                        <Eye className="h-3.5 w-3.5 mr-1" />
+                        View
+                      </Button>
 
-                      <td className="px-4 py-3 align-top">
-                        <StatusBadge status={sub.status} />
-                        <div className="text-[11px] text-slate-500 mt-1">Level {sub.currentApprovalLevel} Approval</div>
-                      </td>
+                      {canEdit && (sub.status === "pending_approval" || sub.status === "approved" || sub.status === "ems_sync_failed") && (
+                        <>
+                          {sub.status === "ems_sync_failed" ? (
+                            <Button
+                              size="sm"
+                              className="flex-1 justify-center bg-amber-600 text-white hover:bg-amber-700 h-9 font-semibold"
+                              disabled={forwardingBusyId === sub.id}
+                              onClick={() => void handleForwardToEms(sub.id)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                              {forwardingBusyId === sub.id ? "Syncing..." : "Retry EMS"}
+                            </Button>
+                          ) : sub.status === "approved" || sub.currentApprovalLevel >= maxApprovalLevel ? (
+                            <Button
+                              size="sm"
+                              className="flex-1 justify-center bg-primary text-white hover:bg-primary-hover h-9 font-semibold"
+                              disabled={forwardingBusyId === sub.id}
+                              onClick={() => void handleForwardToEms(sub.id)}
+                            >
+                              <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                              {forwardingBusyId === sub.id ? "Forwarding..." : "To EMS"}
+                            </Button>
+                          ) : (
+                            <Button
+                              size="sm"
+                              className="flex-1 justify-center bg-green-600 text-white hover:bg-green-700 h-9 font-semibold"
+                              onClick={() =>
+                                setApprovalDialog({
+                                  open: true,
+                                  submissionId: sub.id,
+                                  action: "approve",
+                                  comments: "Approved",
+                                  busy: false,
+                                })
+                              }
+                            >
+                              <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                              Approve
+                            </Button>
+                          )}
 
-                      <td className="px-4 py-3 align-top text-slate-500">
-                        {sub.submittedAt || "—"}
-                      </td>
+                          {sub.status === "pending_approval" && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className="flex-1 justify-center text-amber-700 border-amber-300 hover:bg-amber-50 h-9"
+                              onClick={() =>
+                                setApprovalDialog({
+                                  open: true,
+                                  submissionId: sub.id,
+                                  action: "return",
+                                  comments: "",
+                                  busy: false,
+                                })
+                              }
+                            >
+                              <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                              Return
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
 
-                      <td className="px-4 py-3 align-top text-right space-x-1">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() =>
-                            setEntryModal({
-                              open: true,
-                              subject: sub,
-                              readOnly: true,
-                            })
-                          }
-                        >
-                          <Eye className="h-3.5 w-3.5 mr-1" />
-                          View
-                        </Button>
-
-                        {canEdit && (sub.status === "pending_approval" || sub.status === "approved" || sub.status === "ems_sync_failed") && (
-                          <>
-                            {sub.status === "ems_sync_failed" ? (
-                              <Button
-                                size="sm"
-                                className="bg-amber-600 text-white hover:bg-amber-700"
-                                disabled={forwardingBusyId === sub.id}
-                                onClick={() => void handleForwardToEms(sub.id)}
-                              >
-                                <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                                {forwardingBusyId === sub.id ? "Syncing..." : "Retry Forward to EMS"}
-                              </Button>
-                            ) : sub.status === "approved" || sub.currentApprovalLevel >= maxApprovalLevel ? (
-                              <Button
-                                size="sm"
-                                className="bg-primary text-white hover:bg-primary-hover"
-                                disabled={forwardingBusyId === sub.id}
-                                onClick={() => void handleForwardToEms(sub.id)}
-                              >
-                                <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                                {forwardingBusyId === sub.id ? "Forwarding..." : "Forward to EMS"}
-                              </Button>
-                            ) : (
-                              <Button
-                                size="sm"
-                                className="bg-green-600 text-white hover:bg-green-700"
-                                onClick={() =>
-                                  setApprovalDialog({
-                                    open: true,
-                                    submissionId: sub.id,
-                                    action: "approve",
-                                    comments: "Approved",
-                                    busy: false,
-                                  })
-                                }
-                              >
-                                <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                                Approve
-                              </Button>
-                            )}
-
-                            {sub.status === "pending_approval" && (
-                              <Button
-                                size="sm"
-                                variant="secondary"
-                                className="text-amber-700 border-amber-300 hover:bg-amber-50"
-                                onClick={() =>
-                                  setApprovalDialog({
-                                    open: true,
-                                    submissionId: sub.id,
-                                    action: "return",
-                                    comments: "",
-                                    busy: false,
-                                  })
-                                }
-                              >
-                                <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                                Return
-                              </Button>
-                            )}
-                          </>
-                        )}
-                      </td>
+              {/* Desktop View: Full Data Table */}
+              <div className="hidden md:block overflow-x-auto rounded-lg border border-border">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 border-b border-border">
+                    <tr>
+                      <th className="px-4 py-3">Subject & Code</th>
+                      <th className="px-4 py-3">Faculty & Scope</th>
+                      <th className="px-4 py-3">Students</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Submitted At</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody className="divide-y divide-border text-xs">
+                    {pendingSubmissions.map((sub) => (
+                      <tr key={sub.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 align-top">
+                          <div className="font-semibold text-navy-900">{sub.subjectName}</div>
+                          <div className="font-mono text-slate-500">{sub.subjectCode}</div>
+                        </td>
+
+                        <td className="px-4 py-3 align-top">
+                          <div className="font-medium text-slate-800">{sub.facultyName}</div>
+                          <div className="text-slate-500">{sub.collegeName} • {sub.branchName}</div>
+                        </td>
+
+                        <td className="px-4 py-3 align-top font-semibold text-slate-800">
+                          {sub.studentCount} Students
+                        </td>
+
+                        <td className="px-4 py-3 align-top">
+                          <StatusBadge status={sub.status} />
+                          <div className="text-[11px] text-slate-500 mt-1">Level {sub.currentApprovalLevel} Approval</div>
+                        </td>
+
+                        <td className="px-4 py-3 align-top text-slate-500">
+                          {sub.submittedAt || "—"}
+                        </td>
+
+                        <td className="px-4 py-3 align-top text-right space-x-1">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() =>
+                              setEntryModal({
+                                open: true,
+                                subject: sub,
+                                readOnly: true,
+                              })
+                            }
+                          >
+                            <Eye className="h-3.5 w-3.5 mr-1" />
+                            View
+                          </Button>
+
+                          {canEdit && (sub.status === "pending_approval" || sub.status === "approved" || sub.status === "ems_sync_failed") && (
+                            <>
+                              {sub.status === "ems_sync_failed" ? (
+                                <Button
+                                  size="sm"
+                                  className="bg-amber-600 text-white hover:bg-amber-700"
+                                  disabled={forwardingBusyId === sub.id}
+                                  onClick={() => void handleForwardToEms(sub.id)}
+                                >
+                                  <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                                  {forwardingBusyId === sub.id ? "Syncing..." : "Retry Forward to EMS"}
+                                </Button>
+                              ) : sub.status === "approved" || sub.currentApprovalLevel >= maxApprovalLevel ? (
+                                <Button
+                                  size="sm"
+                                  className="bg-primary text-white hover:bg-primary-hover"
+                                  disabled={forwardingBusyId === sub.id}
+                                  onClick={() => void handleForwardToEms(sub.id)}
+                                >
+                                  <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                  {forwardingBusyId === sub.id ? "Forwarding..." : "Forward to EMS"}
+                                </Button>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  className="bg-green-600 text-white hover:bg-green-700"
+                                  onClick={() =>
+                                    setApprovalDialog({
+                                      open: true,
+                                      submissionId: sub.id,
+                                      action: "approve",
+                                      comments: "Approved",
+                                      busy: false,
+                                    })
+                                  }
+                                >
+                                  <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                  Approve
+                                </Button>
+                              )}
+
+                              {sub.status === "pending_approval" && (
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  className="text-amber-700 border-amber-300 hover:bg-amber-50"
+                                  onClick={() =>
+                                    setApprovalDialog({
+                                      open: true,
+                                      submissionId: sub.id,
+                                      action: "return",
+                                      comments: "",
+                                      busy: false,
+                                    })
+                                  }
+                                >
+                                  <RotateCcw className="h-3.5 w-3.5 mr-1" />
+                                  Return
+                                </Button>
+                              )}
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </Card>
       )}
@@ -538,6 +651,8 @@ export function FacultyInternalMarksView() {
           }
           subjectCode={entryModal.subject.subjectCode}
           subjectName={entryModal.subject.subjectName}
+          courseName={"courseName" in entryModal.subject ? entryModal.subject.courseName : undefined}
+          branchName={"branchName" in entryModal.subject ? entryModal.subject.branchName : undefined}
           year={"year" in entryModal.subject ? entryModal.subject.year : undefined}
           semester={"semester" in entryModal.subject ? entryModal.subject.semester : undefined}
           batch={"batch" in entryModal.subject ? entryModal.subject.batch : undefined}

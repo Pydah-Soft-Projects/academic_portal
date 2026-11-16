@@ -27,6 +27,8 @@ type Props = {
   facultyStaffLinkId: number;
   subjectCode: string;
   subjectName: string;
+  courseName?: string | null;
+  branchName?: string | null;
   year?: number | null;
   semester?: number | null;
   batch?: string | null;
@@ -44,6 +46,8 @@ export function InternalMarksEntryModal({
   facultyStaffLinkId,
   subjectCode,
   subjectName,
+  courseName,
+  branchName,
   year,
   semester,
   batch,
@@ -114,6 +118,13 @@ export function InternalMarksEntryModal({
       return true;
     });
   }, [students, filterSection, searchQuery]);
+
+  const enteredCount = useMemo(() => {
+    return displayedStudents.filter((st) => {
+      const m = marksState[st.studentDbId]?.marks;
+      return m !== "" && m != null;
+    }).length;
+  }, [displayedStudents, marksState]);
 
   // Fetch students & current marks
   useEffect(() => {
@@ -304,38 +315,54 @@ export function InternalMarksEntryModal({
 
   return (
     <Modal
-      title={`Internal Marks Entry — ${subjectName} (${subjectCode})`}
+      title={`${subjectName} (${subjectCode})`}
       onClose={onClose}
       wide
     >
-      <div className="space-y-4">
+      <div className="space-y-2.5 sm:space-y-4">
         {!uploadAccess && (
-          <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-900 font-medium">
+          <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 p-2.5 sm:p-3 text-[11px] sm:text-xs text-amber-900 font-medium">
             <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
             <span>Internal marks posting is currently disabled/locked for this subject by administration. Marks can only be viewed in read-only mode.</span>
           </div>
         )}
-        {/* Header bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-3 border border-border">
-          <div>
-            <div className="text-xs text-slate-500 font-semibold uppercase">Subject Details</div>
-            <div className="font-semibold text-navy-900 text-sm">
-              {subjectName} <span className="text-xs font-mono text-slate-500">({subjectCode})</span>
-            </div>
+
+        {/* Top Scope & Metadata Bar: Course, Branch, Year, Sem, Section, Max Marks, Status */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 border border-border text-[11px] sm:text-xs">
+          <div className="flex flex-wrap items-center gap-1.5 text-slate-700">
+            {(courseName || branchName) && (
+              <span className="font-bold text-navy-900">
+                {[courseName, branchName].filter(Boolean).join(" • ")}
+              </span>
+            )}
+            {(year || semester) && (
+              <>
+                {(courseName || branchName) && <span className="text-slate-300">•</span>}
+                <span className="font-semibold text-slate-600">
+                  {[year ? `Year ${year}` : "", semester ? `Sem ${semester}` : ""].filter(Boolean).join(", ")}
+                </span>
+              </>
+            )}
+            <span className="text-slate-300">•</span>
+            <span className="font-bold text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px]">
+              Section {section || (availableSections.length > 0 ? Array.from(availableSections).join(", ") : "A")}
+            </span>
           </div>
-          <div className="flex items-center gap-4 text-xs">
-            <div>
+
+          <div className="flex items-center justify-between sm:justify-end gap-3 border-t sm:border-t-0 pt-1.5 sm:pt-0 border-slate-200">
+            <div className="flex items-center gap-1.5">
               <span className="text-slate-500 font-medium">Max Marks:</span>
               <input
                 type="number"
+                inputMode="decimal"
                 disabled={!isEditable}
-                className="ml-1.5 w-16 rounded border border-border p-1 text-center font-bold text-slate-800 outline-none focus:border-brand-600"
+                className="w-12 sm:w-14 rounded border border-border px-1.5 py-0.5 text-center text-xs sm:text-sm font-bold text-slate-800 outline-none focus:border-brand-600 bg-white"
                 value={maxMarks}
                 onChange={(e) => setMaxMarks(Number(e.target.value) || 30)}
               />
             </div>
-            <div>
-              <span className="text-slate-500 font-medium mr-1.5">Status:</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-slate-500 font-medium hidden sm:inline">Status:</span>
               <StatusBadge status={status} />
             </div>
           </div>
@@ -362,28 +389,28 @@ export function InternalMarksEntryModal({
             No students found for this subject and branch scope.
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2 sm:space-y-3">
             {/* Search and Section Filter Controls */}
-            <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-lg border border-border bg-slate-50 px-3 py-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-lg border border-border bg-slate-50 p-2 sm:px-3 sm:py-2 text-[11px] sm:text-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2 w-full sm:w-auto">
+                <div className="relative w-full sm:w-56">
                   <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Search by Roll / PIN / Name..."
+                    placeholder="Search Roll / Name..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="h-8 w-56 rounded border border-border bg-white pl-8 pr-2.5 text-xs text-slate-800 outline-none focus:border-brand-600"
+                    className="h-8 w-full rounded border border-border bg-white pl-8 pr-2.5 text-[11px] sm:text-xs text-slate-800 outline-none focus:border-brand-600"
                   />
                 </div>
 
                 {availableSections.length > 0 && (
-                  <div className="flex items-center gap-1.5">
-                    <Filter className="h-3.5 w-3.5 text-slate-400" />
+                  <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                    <Filter className="h-3.5 w-3.5 text-slate-400 shrink-0" />
                     <select
                       value={filterSection}
                       onChange={(e) => setFilterSection(e.target.value)}
-                      className="h-8 rounded border border-border bg-white px-2 text-xs font-semibold text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                      className="h-8 w-full sm:w-auto rounded border border-border bg-white px-2 text-[11px] sm:text-xs font-semibold text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
                     >
                       <option value="all">All Sections ({students.length})</option>
                       {availableSections.map((sec) => {
@@ -401,105 +428,183 @@ export function InternalMarksEntryModal({
                 )}
               </div>
 
-              <div className="text-slate-500 font-medium text-[11px] sm:text-xs">
-                Showing <span className="font-bold text-slate-800">{displayedStudents.length}</span> of <span className="font-bold text-slate-800">{students.length}</span> students
+              <div className="flex items-center justify-between sm:justify-end text-slate-500 font-medium text-[10px] sm:text-xs">
+                <div>
+                  Showing <span className="font-bold text-slate-800">{displayedStudents.length}</span> of <span className="font-bold text-slate-800">{students.length}</span>
+                </div>
                 {availableSections.length > 1 && (
-                  <span className="ml-1 text-[11px] text-brand-700 font-semibold bg-brand-50 px-1.5 py-0.5 rounded">
-                    Merged Sections: {availableSections.join(", ")}
+                  <span className="ml-2 text-[9px] sm:text-[10px] text-brand-700 font-semibold bg-brand-50 px-1.5 py-0.5 rounded">
+                    Merged: {availableSections.join(", ")}
                   </span>
                 )}
               </div>
             </div>
 
             {displayedStudents.length === 0 ? (
-              <div className="py-8 text-center text-sm text-slate-500 border border-border rounded-lg bg-white">
+              <div className="py-6 sm:py-8 text-center text-xs sm:text-sm text-slate-500 border border-border rounded-lg bg-white">
                 No students match your search query or section filter.
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-lg border border-border">
-                <table className="w-full text-left text-sm">
-                  <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 border-b border-border">
-                    <tr>
-                      <th className="px-3 py-2.5">#</th>
-                      <th className="px-3 py-2.5">Roll / PIN Number</th>
-                      <th className="px-3 py-2.5">Student Name</th>
-                      <th className="px-3 py-2.5">Section</th>
-                      <th className="px-3 py-2.5 w-32">Internal Marks (Max: {maxMarks})</th>
-                      <th className="px-3 py-2.5">Remarks</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border text-xs">
-                    {displayedStudents.map((st, idx) => {
-                      const state = marksState[st.studentDbId] || { marks: "", remarks: "" };
-                      const errText = validationErrors[st.studentDbId];
+              <>
+                {/* Mobile View: Inline Student Rows (Compact & Continuous List) */}
+                <div className="block md:hidden rounded-lg border border-border bg-white divide-y divide-border overflow-hidden shadow-2xs">
+                  {displayedStudents.map((st, idx) => {
+                    const state = marksState[st.studentDbId] || { marks: "", remarks: "" };
+                    const errText = validationErrors[st.studentDbId];
+                    const isFilled = state.marks !== "" && state.marks != null;
 
-                      return (
-                        <tr key={st.studentDbId} className="hover:bg-slate-50">
-                          <td className="px-3 py-2 text-slate-400 font-mono">{idx + 1}</td>
-                          <td className="px-3 py-2 font-mono font-semibold text-slate-900">
-                            {st.rollNumber}
-                          </td>
-                          <td className="px-3 py-2 font-medium text-slate-800">{st.studentName}</td>
-                          <td className="px-3 py-2">
-                            <span className="font-semibold text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded text-[11px]">
-                              {st.sectionName || "A"}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2">
-                            <input
-                              type="number"
-                              step="0.5"
-                              min="0"
-                              max={maxMarks}
-                              disabled={!isEditable}
-                              placeholder="0.0"
-                              className={`w-24 rounded border px-2 py-1 text-center font-bold outline-none focus:border-brand-600 ${
-                                errText
-                                  ? "border-red-500 bg-red-50 text-red-900"
-                                  : "border-border bg-white text-slate-900"
-                              }`}
-                              value={state.marks}
-                              onChange={(e) => handleMarkChange(st.studentDbId, e.target.value)}
-                            />
-                            {errText && (
-                              <div className="mt-0.5 text-[10px] text-critical font-medium">{errText}</div>
-                            )}
-                          </td>
-                          <td className="px-3 py-2">
-                            <input
-                              type="text"
-                              disabled={!isEditable}
-                              placeholder="Optional remarks"
-                              className="w-full rounded border border-border bg-white px-2 py-1 text-xs outline-none focus:border-brand-600"
-                              value={state.remarks}
-                              onChange={(e) =>
-                                setMarksState((prev) => ({
-                                  ...prev,
-                                  [st.studentDbId]: { ...prev[st.studentDbId], remarks: e.target.value },
-                                }))
-                              }
-                            />
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                    return (
+                      <div
+                        key={st.studentDbId}
+                        className={`p-2 transition ${
+                          errText
+                            ? "bg-red-50/60"
+                            : isFilled
+                            ? "bg-emerald-50/20"
+                            : "hover:bg-slate-50"
+                        }`}
+                      >
+                        {/* Inline Row: Student Info on Left, Marks Input on Right */}
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-mono text-[10px] text-slate-400 font-medium shrink-0">#{idx + 1}</span>
+                              <span className="font-mono font-bold text-[11px] sm:text-xs text-navy-900 bg-slate-100 px-1.5 py-0.5 rounded truncate">
+                                {st.rollNumber}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 font-semibold text-slate-800 text-[11px] sm:text-xs truncate" title={st.studentName}>
+                              {st.studentName}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {/* Marks Input */}
+                            <div className="relative">
+                              <input
+                                type="number"
+                                step="0.5"
+                                min="0"
+                                max={maxMarks}
+                                inputMode="decimal"
+                                disabled={!isEditable}
+                                placeholder="0.0"
+                                className={`h-8 w-20 rounded border text-center font-bold text-xs sm:text-sm outline-none transition focus:ring-1 focus:ring-brand-500 ${
+                                  errText
+                                    ? "border-red-500 bg-red-50 text-red-900"
+                                    : isFilled
+                                    ? "border-emerald-400 bg-white text-emerald-900 font-black"
+                                    : "border-border bg-white text-slate-900"
+                                }`}
+                                value={state.marks}
+                                onChange={(e) => handleMarkChange(st.studentDbId, e.target.value)}
+                              />
+                              <span className="absolute -top-1.5 right-1 bg-white px-0.5 text-[8px] sm:text-[9px] font-semibold text-slate-400">
+                                /{maxMarks}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Error Message */}
+                        {errText && (
+                          <div className="mt-1 text-[10px] text-critical font-medium text-right">{errText}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Desktop View: Full Data Table */}
+                <div className="hidden md:block overflow-x-auto rounded-lg border border-border">
+                  <table className="w-full text-left text-sm">
+                    <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500 border-b border-border">
+                      <tr>
+                        <th className="px-3 py-2.5">#</th>
+                        <th className="px-3 py-2.5">Roll / PIN Number</th>
+                        <th className="px-3 py-2.5">Student Name</th>
+                        <th className="px-3 py-2.5">Section</th>
+                        <th className="px-3 py-2.5 w-32">Internal Marks (Max: {maxMarks})</th>
+                        <th className="px-3 py-2.5">Remarks</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border text-xs">
+                      {displayedStudents.map((st, idx) => {
+                        const state = marksState[st.studentDbId] || { marks: "", remarks: "" };
+                        const errText = validationErrors[st.studentDbId];
+
+                        return (
+                          <tr key={st.studentDbId} className="hover:bg-slate-50">
+                            <td className="px-3 py-2 text-slate-400 font-mono">{idx + 1}</td>
+                            <td className="px-3 py-2 font-mono font-semibold text-slate-900">
+                              {st.rollNumber}
+                            </td>
+                            <td className="px-3 py-2 font-medium text-slate-800">{st.studentName}</td>
+                            <td className="px-3 py-2">
+                              <span className="font-semibold text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded text-[11px]">
+                                {st.sectionName || "A"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                step="0.5"
+                                min="0"
+                                max={maxMarks}
+                                inputMode="decimal"
+                                disabled={!isEditable}
+                                placeholder="0.0"
+                                className={`w-24 rounded border px-2 py-1 text-center font-bold outline-none focus:border-brand-600 ${
+                                  errText
+                                    ? "border-red-500 bg-red-50 text-red-900"
+                                    : "border-border bg-white text-slate-900"
+                                }`}
+                                value={state.marks}
+                                onChange={(e) => handleMarkChange(st.studentDbId, e.target.value)}
+                              />
+                              {errText && (
+                                <div className="mt-0.5 text-[10px] text-critical font-medium">{errText}</div>
+                              )}
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="text"
+                                disabled={!isEditable}
+                                placeholder="Optional remarks"
+                                className="w-full rounded border border-border bg-white px-2 py-1 text-xs outline-none focus:border-brand-600"
+                                value={state.remarks}
+                                onChange={(e) =>
+                                  setMarksState((prev) => ({
+                                    ...prev,
+                                    [st.studentDbId]: { ...prev[st.studentDbId], remarks: e.target.value },
+                                  }))
+                                }
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         )}
 
-        {/* Footer Actions */}
-        <div className="flex items-center justify-between border-t border-border pt-4">
-          <div className="text-xs text-slate-500">
-            Total Students: <span className="font-semibold text-slate-800">{students.length}</span>
-            {displayedStudents.length !== students.length && (
-              <span> (Filtered: <span className="font-semibold text-brand-700">{displayedStudents.length}</span>)</span>
-            )}
+        {/* Footer Actions - Sticky on mobile for quick saving */}
+        <div className="sticky -bottom-3 sm:-bottom-4 -mx-3 sm:-mx-5 px-3 sm:px-5 py-2.5 sm:py-3 bg-white/95 backdrop-blur-xs border-t border-border shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3">
+          <div className="flex items-center justify-between sm:justify-start gap-2.5 text-[11px] sm:text-xs text-slate-500">
+            <div>
+              Total: <span className="font-bold text-slate-800">{students.length}</span>
+            </div>
+            <div className="flex items-center gap-1 font-medium text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 text-[10px] sm:text-xs">
+              <span>Entered:</span>
+              <span className="font-bold">{enteredCount} / {displayedStudents.length}</span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="secondary" onClick={onClose}>
+          <div className="flex items-center gap-1.5 sm:gap-2 w-full sm:w-auto">
+            <Button variant="secondary" onClick={onClose} className="flex-1 sm:flex-none justify-center h-8 sm:h-9 text-xs">
               Close
             </Button>
             {isEditable && (
@@ -508,17 +613,18 @@ export function InternalMarksEntryModal({
                   disabled={saving || submitting}
                   variant="secondary"
                   onClick={() => void handleSaveDraft()}
+                  className="flex-1 sm:flex-none justify-center h-8 sm:h-9 text-xs px-2.5 sm:px-3"
                 >
-                  <Save className="h-4 w-4 mr-1.5" />
-                  {saving ? "Saving Draft..." : "Save Draft"}
+                  <Save className="h-3.5 w-3.5 mr-1" />
+                  {saving ? "Saving..." : "Save Draft"}
                 </Button>
                 <Button
                   disabled={saving || submitting}
                   onClick={() => void handleSubmitForApproval()}
-                  className="bg-brand-600 text-white hover:bg-brand-700"
+                  className="flex-1 sm:flex-none justify-center bg-brand-600 text-white hover:bg-brand-700 h-8 sm:h-9 text-xs font-semibold px-2.5 sm:px-3"
                 >
-                  <Send className="h-4 w-4 mr-1.5" />
-                  {submitting ? "Submitting..." : "Submit for Approval"}
+                  <Send className="h-3.5 w-3.5 mr-1" />
+                  {submitting ? "Submitting..." : "Submit"}
                 </Button>
               </>
             )}
