@@ -178,6 +178,8 @@ export function InternalMarksEntryModal({
           facultyStaffLinkId: String(facultyStaffLinkId),
         });
         if (year) query.set("year", String(year));
+        if (semester) query.set("semester", String(semester));
+        if (batch) query.set("batch", String(batch));
         if (section && section !== "all") query.set("section", String(section));
 
         const res = await apiFetch(`/internal-marks/students?${query.toString()}`);
@@ -285,6 +287,8 @@ export function InternalMarksEntryModal({
           subjectId,
           facultyStaffLinkId,
           maxMarks,
+          semesterNumber: semester ?? null,
+          batch: batch ?? null,
           entries: entriesPayload,
         }),
       });

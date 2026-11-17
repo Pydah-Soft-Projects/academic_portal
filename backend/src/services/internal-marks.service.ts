@@ -1180,7 +1180,7 @@ export async function getFacultyAssignedSubjects(
       MAX(s.type) AS type,
       MAX(s.internalMarks) AS internalMarks,
       MAX(sme.semester) AS semester,
-      MAX(sme.yearOfStudy) AS yearOfStudy,
+      COALESCE(MAX(sme.yearOfStudy), MAX(s.yearOfStudy)) AS yearOfStudy,
       MAX(sme.batch) AS batch
     FROM subject_mapping_entries sme
     INNER JOIN subjects s ON s.id = sme.subjectId
@@ -1299,9 +1299,9 @@ export async function getFacultyAssignedSubjects(
     const missingBranchIds = [...new Set(unmappedAssignments.map((a) => Number(a.branch_id)))];
 
     try {
-      const [subRows, branchRows] = await Promise.all([
-        queryExam<(RowDataPacket & { id: number; code: string; name: string; type: string; internalMarks: number | null })[]>(
-          `SELECT id, code, name, type, internalMarks FROM subjects WHERE id IN (${missingSubjectIds.map(() => "?").join(",")})`,
+      const [subRows, branchRows, planMetaRows] = await Promise.all([
+        queryExam<(RowDataPacket & { id: number; code: string; name: string; type: string; yearOfStudy: number | null; semester: number | null; internalMarks: number | null })[]>(
+          `SELECT id, code, name, type, yearOfStudy, semester, internalMarks FROM subjects WHERE id IN (${missingSubjectIds.map(() => "?").join(",")})`,
           missingSubjectIds
         ),
         queryStudent<
@@ -1327,6 +1327,21 @@ export async function getFacultyAssignedSubjects(
           WHERE cb.id IN (${missingBranchIds.map(() => "?").join(",")})`,
           missingBranchIds
         ),
+        queryAcademic<
+          (RowDataPacket & {
+            subject_id: number;
+            branch_id: number;
+            year_of_study: number | null;
+            semester_number: number | null;
+            batch: string | null;
+          })[]
+        >(
+          `SELECT DISTINCT te.subject_id, tp.branch_id, tp.year_of_study, tp.semester_number, tp.batch
+           FROM ap_timetable_entries te
+           INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
+           WHERE te.faculty_staff_link_id = ? AND te.subject_id IN (${missingSubjectIds.map(() => "?").join(",")})`,
+          [staffLinkId, ...missingSubjectIds]
+        ),
       ]);
 
       const subMap = new Map(subRows.map((s) => [s.id, s]));
@@ -1340,6 +1355,12 @@ export async function getFacultyAssignedSubjects(
         const sObj = subMap.get(Number(a.subject_id));
         const bObj = branchMap.get(Number(a.branch_id));
         if (!sObj || !bObj) continue;
+
+        const planMeta = planMetaRows.find(
+          (p) =>
+            Number(p.subject_id) === Number(a.subject_id) &&
+            Number(p.branch_id) === Number(a.branch_id)
+        );
 
         const relatedAssignments = assignments.filter(
           (x) =>
@@ -1374,6 +1395,10 @@ export async function getFacultyAssignedSubjects(
           finalMaxMarks = defaultMaxMarks;
         }
 
+        const resolvedYear = planMeta?.year_of_study ?? sObj.yearOfStudy ?? null;
+        const resolvedSem = planMeta?.semester_number ?? sObj.semester ?? null;
+        const resolvedBatch = planMeta?.batch || "";
+
         results.push({
           collegeId: bObj.collegeId,
           collegeName: bObj.collegeName || "College",
@@ -1385,9 +1410,9 @@ export async function getFacultyAssignedSubjects(
           subjectCode: sObj.code,
           subjectName: sObj.name,
           subjectType: sObj.type,
-          semester: null,
-          year: null,
-          batch: "",
+          semester: resolvedSem,
+          year: resolvedYear,
+          batch: resolvedBatch,
           sections: uniqueSections,
           sectionName: uniqueSections.join(", "),
           accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
@@ -1499,18 +1524,58 @@ export async function getStudentsForMarksEntry(params: {
     }
   }
 
-  // Resolve target year from subject mapping if not explicitly passed
+  // Resolve target year from subject mapping, subjects table, or timetable plans if not explicitly passed
   let targetYear = params.year;
 
   if (!targetYear) {
     const smeRows = await queryExam<
       (RowDataPacket & { yearOfStudy: number | null })[]
     >(
-      `SELECT yearOfStudy FROM subject_mapping_entries WHERE collegeId = ? AND courseId = ? AND branchId = ? AND subjectId = ? LIMIT 1`,
+      `SELECT yearOfStudy FROM subject_mapping_entries WHERE collegeId = ? AND courseId = ? AND branchId = ? AND subjectId = ? AND yearOfStudy IS NOT NULL LIMIT 1`,
       [params.collegeId, params.courseId, params.branchId, params.subjectId]
     );
     if (smeRows[0]?.yearOfStudy) {
       targetYear = Number(smeRows[0].yearOfStudy);
+    }
+  }
+
+  if (!targetYear) {
+    const smeSubRows = await queryExam<
+      (RowDataPacket & { yearOfStudy: number | null })[]
+    >(
+      `SELECT yearOfStudy FROM subject_mapping_entries WHERE subjectId = ? AND yearOfStudy IS NOT NULL LIMIT 1`,
+      [params.subjectId]
+    );
+    if (smeSubRows[0]?.yearOfStudy) {
+      targetYear = Number(smeSubRows[0].yearOfStudy);
+    }
+  }
+
+  if (!targetYear) {
+    const subRows = await queryExam<
+      (RowDataPacket & { yearOfStudy: number | null })[]
+    >(
+      `SELECT yearOfStudy FROM subjects WHERE id = ? LIMIT 1`,
+      [params.subjectId]
+    );
+    if (subRows[0]?.yearOfStudy) {
+      targetYear = Number(subRows[0].yearOfStudy);
+    }
+  }
+
+  if (!targetYear) {
+    const planRows = await queryAcademic<
+      (RowDataPacket & { year_of_study: number | null })[]
+    >(
+      `SELECT tp.year_of_study
+       FROM ap_timetable_entries te
+       INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
+       WHERE te.subject_id = ? AND (tp.branch_id = ? OR tp.branch_id IS NULL)
+       ORDER BY tp.id DESC LIMIT 1`,
+      [params.subjectId, params.branchId]
+    );
+    if (planRows[0]?.year_of_study) {
+      targetYear = Number(planRows[0].year_of_study);
     }
   }
 
@@ -1581,7 +1646,7 @@ export async function getStudentsForMarksEntry(params: {
     paramsStud
   );
 
-  // Fallback: if no students found with strict year/sem/batch, search by college + course + branch
+  // Fallback: if no students found with strict section/status, search by college + course + branch + targetYear
   if (studentRows.length === 0 && targetYear) {
     studentRows = await queryStudent<
       (RowDataPacket & {
@@ -1601,7 +1666,7 @@ export async function getStudentsForMarksEntry(params: {
         COALESCE(MAX(ss.section_name COLLATE utf8mb4_unicode_ci), MAX(s.section COLLATE utf8mb4_unicode_ci)) AS section_name
       FROM students s
       LEFT JOIN student_sections ss ON ss.student_id = s.id
-      WHERE s.college_id = ? AND s.course_id = ? AND s.branch_id = ?
+      WHERE s.college_id = ? AND s.course_id = ? AND s.branch_id = ? AND s.current_year = ?
         AND (s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))
       GROUP BY s.id, s.admission_number, s.pin_no, s.student_name
       ORDER BY
@@ -1613,7 +1678,7 @@ export async function getStudentsForMarksEntry(params: {
         TRIM(s.admission_number) ASC
       LIMIT 1000
       `,
-      [params.collegeId, params.courseId, params.branchId]
+      [params.collegeId, params.courseId, params.branchId, targetYear]
     );
   }
 
