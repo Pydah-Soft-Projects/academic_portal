@@ -84,7 +84,7 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
   const semester = filters.semester ?? 1;
   const section = filters.section && filters.section !== "all" ? filters.section.trim() : "";
   const batch = filters.batch && filters.batch !== "all" ? filters.batch.trim() : "";
-  const academicYear = filters.academicYear || "2025-2026";
+  const academicYear = filters.academicYear || "2026-2027";
   const monthLabel = filters.month && filters.month !== "all" ? filters.month : "Cumulative";
 
   // Calculate relative & absolute semester (e.g. Year 4 Sem 1 is Sem 7 in JNTU)
@@ -358,7 +358,8 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
 
   if (collegeId && courseId && branchId) {
     try {
-      const savedRows = await queryAcademic<
+      // 1st attempt: Query saved entries matching college, course, branch, year_of_study, semester, section, and academic_year
+      let savedRows = await queryAcademic<
         (RowDataPacket & {
           student_db_id: number;
           subject_id: number;
@@ -376,12 +377,43 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
         WHERE college_id = ?
           AND course_id = ?
           AND branch_id = ?
-          AND academic_year = ?
-          AND semester = ?
+          AND (year_of_study = ? OR year_of_study = 0 OR ? = 0)
+          AND (semester = ? OR semester = ?)
           AND (section_name = ? OR section_name = '' OR ? = '')
+          AND (academic_year = ? OR ? = '')
+        ORDER BY updated_at DESC
         `,
-        [collegeId, courseId, branchId, academicYear, semester, section, section],
+        [collegeId, courseId, branchId, year, year, semester, absSemester, section, section, academicYear, academicYear],
       );
+
+      // 2nd attempt: If no rows found with strict academic_year, fetch any saved register for this cohort so saved data always shows
+      if (savedRows.length === 0) {
+        savedRows = await queryAcademic<
+          (RowDataPacket & {
+            student_db_id: number;
+            subject_id: number;
+            classes_held: number;
+            classes_present: number;
+          })[]
+        >(
+          `
+          SELECT
+            student_db_id,
+            subject_id,
+            classes_held,
+            classes_present
+          FROM ap_subject_attendance_register
+          WHERE college_id = ?
+            AND course_id = ?
+            AND branch_id = ?
+            AND (year_of_study = ? OR year_of_study = 0 OR ? = 0)
+            AND (semester = ? OR semester = ?)
+            AND (section_name = ? OR section_name = '' OR ? = '')
+          ORDER BY updated_at DESC
+          `,
+          [collegeId, courseId, branchId, year, year, semester, absSemester, section, section],
+        );
+      }
 
       if (savedRows.length > 0) {
         hasSavedEntries = true;
@@ -496,7 +528,7 @@ export async function saveSubjectAttendanceData(payload: SaveSubjectAttendancePa
     collegeId,
     courseId,
     branchId,
-    academicYear,
+    academicYear = "2026-2027",
     year,
     semester,
     section = "",

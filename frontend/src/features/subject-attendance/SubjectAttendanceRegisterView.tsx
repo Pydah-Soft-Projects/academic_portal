@@ -87,7 +87,7 @@ export function SubjectAttendanceRegisterView() {
   const semester = filters.semester !== "all" ? filters.semester : 1;
   const section = filters.section !== "all" ? filters.section : "";
   const batch = filters.batch !== "all" ? filters.batch : "";
-  const academicYear = filters.academicYear || "2025-2026";
+  const academicYear = filters.academicYear && filters.academicYear !== "all" ? filters.academicYear : "2026-2027";
 
   const selectedCollege = masters?.colleges?.find((c) => String(c.id) === String(collegeId));
   const collegeName = selectedCollege?.name || "Pydah College of Engineering";
@@ -524,6 +524,20 @@ export function SubjectAttendanceRegisterView() {
         <PageHeader
           title="Subject-Wise Attendance Register"
           description="Enter classes held and classes present. The system automatically calculates subject percentages and the overall aggregate percentage."
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSave}
+                disabled={saving}
+                className="gap-1.5 text-xs font-bold shadow-md h-9 px-4 bg-brand-600 hover:bg-brand-700 text-white shrink-0"
+              >
+                <Save className="h-4 w-4" />
+                <span>{saving ? "Saving..." : dirty ? "Save Register *" : "Save Register"}</span>
+              </Button>
+            </div>
+          }
         />
       </div>
 
@@ -682,16 +696,25 @@ export function SubjectAttendanceRegisterView() {
             </div>
           </div>
 
-          {/* Right: Actions in a Single Line */}
+          {/* Right: Actions */}
           <div className="flex items-center gap-1.5 shrink-0">
-            <Link
-              href="/settings/attendance-thresholds"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-2xs h-8 shrink-0 transition"
-              title="Configure Attendance Percentage Setups and Thresholds"
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleSave}
+              disabled={saving}
+              className="gap-1.5 text-xs font-bold shadow-xs h-8 px-3 shrink-0 bg-brand-600 hover:bg-brand-700 text-white"
             >
-              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-600" />
-              <span className="hidden xl:inline">% Setup</span>
-            </Link>
+              <Save className="h-3.5 w-3.5" />
+              <span>{saving ? "Saving..." : dirty ? "Save Register *" : "Save Register"}</span>
+            </Button>
+
+            {dirty && (
+              <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-1 rounded-md border border-amber-200 shrink-0">
+                <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                Unsaved edits
+              </span>
+            )}
 
             <Button
               variant="secondary"
@@ -727,23 +750,14 @@ export function SubjectAttendanceRegisterView() {
               <span>Print / PDF</span>
             </Button>
 
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={handleSave}
-              disabled={saving}
-              className="gap-1.5 text-xs font-semibold shadow-xs h-8 px-3 shrink-0"
+            <Link
+              href="/settings/attendance-thresholds"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 shadow-2xs h-8 shrink-0 transition"
+              title="Configure Attendance Percentage Setups and Thresholds"
             >
-              <Save className="h-3.5 w-3.5" />
-              <span>{saving ? "Saving..." : dirty ? "Save Register *" : "Save Register"}</span>
-            </Button>
-
-            {dirty && (
-              <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600 bg-amber-50 px-2 py-1 rounded-md border border-amber-200 shrink-0">
-                <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                Unsaved edits
-              </span>
-            )}
+              <SlidersHorizontal className="h-3.5 w-3.5 text-slate-600" />
+              <span className="hidden xl:inline">% Setup</span>
+            </Link>
           </div>
         </div>
 
@@ -1494,6 +1508,26 @@ export function SubjectAttendanceRegisterView() {
               </Button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Sticky Floating Save Bar for All Users when Edits Exist */}
+      {dirty && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 bg-slate-900/95 text-white px-5 py-2.5 rounded-full shadow-2xl backdrop-blur-md border border-slate-700 animate-in fade-in slide-in-from-bottom-4 print:hidden">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="h-2.5 w-2.5 rounded-full bg-amber-400 animate-pulse" />
+            <span className="font-semibold text-amber-200">Unsaved attendance edits</span>
+          </div>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={handleSave}
+            disabled={saving}
+            className="h-8 text-xs font-bold px-4 bg-brand-500 hover:bg-brand-600 text-white rounded-full shadow-md"
+          >
+            <Save className="h-3.5 w-3.5 mr-1.5" />
+            <span>{saving ? "Saving..." : "Save Register Now"}</span>
+          </Button>
         </div>
       )}
     </div>

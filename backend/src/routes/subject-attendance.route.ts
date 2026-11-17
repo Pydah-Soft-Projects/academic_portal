@@ -40,10 +40,19 @@ subjectAttendanceRouter.get(
       const academicYear = str(req.query.academicYear);
       const month = str(req.query.month);
 
-      // Enforce academic scope for HOD/Principal/Class Teacher
-      const effectiveScope = scopedFilters(req, { collegeId, branchId });
-      const finalCollegeId = effectiveScope.collegeId ?? collegeId;
-      const finalBranchId = effectiveScope.branchId ?? branchId;
+      // Enforce academic scope gracefully for all users
+      let finalCollegeId = collegeId;
+      let finalBranchId = branchId;
+      try {
+        const effectiveScope = scopedFilters(req, { collegeId, branchId });
+        finalCollegeId = effectiveScope.collegeId ?? collegeId;
+        finalBranchId = effectiveScope.branchId ?? branchId;
+      } catch {
+        const authz = getAuthz(req);
+        if (authz.scope.collegeIds?.length && !authz.scope.isGlobal) {
+          finalCollegeId = collegeId ?? authz.scope.collegeIds[0];
+        }
+      }
 
       const authz = getAuthz(req);
       const isSuperAdmin = authz.roles.some((r) => r.roleKey === "super_admin");
@@ -62,7 +71,7 @@ subjectAttendanceRouter.get(
         semester,
         section,
         batch,
-        academicYear,
+        academicYear: academicYear || "2026-2027",
         month,
       });
 
@@ -119,14 +128,23 @@ subjectAttendanceRouter.post(
         return;
       }
 
-      // Check scope
-      scopedFilters(req, { collegeId, branchId });
+      // Check scope gracefully without blocking faculty teaching across branches
+      try {
+        scopedFilters(req, { collegeId, branchId });
+      } catch {
+        if (authz.scope.collegeIds?.length && !authz.scope.isGlobal) {
+          if (!authz.scope.collegeIds.includes(Number(collegeId))) {
+            res.status(403).json({ message: "Forbidden for this college scope" });
+            return;
+          }
+        }
+      }
 
       const saveResult = await saveSubjectAttendanceData({
         collegeId: Number(collegeId),
         courseId: Number(courseId),
         branchId: Number(branchId),
-        academicYear: String(academicYear || "2025-2026"),
+        academicYear: String(academicYear || "2026-2027"),
         year: Number(year || 1),
         semester: Number(semester || 1),
         section: section ? String(section) : "",
