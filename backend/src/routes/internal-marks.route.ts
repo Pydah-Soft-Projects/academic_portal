@@ -233,6 +233,29 @@ internalMarksRouter.get(
   requirePermission("internal_marks.view"),
   async (req: AuthedRequest, res, next) => {
     try {
+      const authz = getAuthz(req);
+      const isLeadership =
+        authz.scope.isGlobal ||
+        authz.roleKeys.some((k) =>
+          [
+            "super_admin",
+            "superadmin",
+            "admin",
+            "principal",
+            "vice_principal",
+            "vice-principal",
+            "hod",
+          ].includes(k.toLowerCase())
+        );
+
+      if (!isLeadership) {
+        res.status(403).json({
+          message:
+            "The Pending List & Notifications report is only accessible to Principal, Vice Principal, HOD, and Administrators.",
+        });
+        return;
+      }
+
       const collegeId = num(req.query.collegeId);
       const courseId = num(req.query.courseId);
       const branchId = num(req.query.branchId);
@@ -245,8 +268,10 @@ internalMarksRouter.get(
 
       const result = await getInternalMarksPendingReport({
         collegeId: scoped.collegeId ?? collegeId,
+        collegeIds: scoped.collegeIds,
         courseId,
         branchId: scoped.branchId ?? branchId,
+        branchIds: scoped.branchIds,
         year,
         semester,
         examId,
@@ -463,6 +488,28 @@ internalMarksRouter.get(
   requirePermission("internal_marks.view"),
   async (req: AuthedRequest, res, next) => {
     try {
+      const authz = getAuthz(req);
+      const canAccessApprovals =
+        authz.scope.isGlobal ||
+        authz.roleKeys.some((k) =>
+          [
+            "super_admin",
+            "superadmin",
+            "admin",
+            "principal",
+            "vice_principal",
+            "vice-principal",
+          ].includes(k.toLowerCase())
+        );
+
+      if (!canAccessApprovals) {
+        res.status(403).json({
+          message:
+            "Submissions & Approvals is only accessible to Principal, Vice Principal, and Administrators.",
+        });
+        return;
+      }
+
       const collegeId = num(req.query.collegeId);
       const courseId = num(req.query.courseId);
       const branchId = num(req.query.branchId);
@@ -500,6 +547,28 @@ internalMarksRouter.post(
     try {
       if (!req.authUser) {
         res.status(401).json({ message: "Authentication required" });
+        return;
+      }
+
+      const authz = getAuthz(req);
+      const canAccessApprovals =
+        authz.scope.isGlobal ||
+        authz.roleKeys.some((k) =>
+          [
+            "super_admin",
+            "superadmin",
+            "admin",
+            "principal",
+            "vice_principal",
+            "vice-principal",
+          ].includes(k.toLowerCase())
+        );
+
+      if (!canAccessApprovals) {
+        res.status(403).json({
+          message:
+            "Approving, returning, or rejecting submissions is restricted to Principal, Vice Principal, and Administrators.",
+        });
         return;
       }
 
@@ -553,6 +622,28 @@ internalMarksRouter.post(
     try {
       if (!req.authUser) {
         res.status(401).json({ message: "Authentication required" });
+        return;
+      }
+
+      const authz = getAuthz(req);
+      const canAccessApprovals =
+        authz.scope.isGlobal ||
+        authz.roleKeys.some((k) =>
+          [
+            "super_admin",
+            "superadmin",
+            "admin",
+            "principal",
+            "vice_principal",
+            "vice-principal",
+          ].includes(k.toLowerCase())
+        );
+
+      if (!canAccessApprovals) {
+        res.status(403).json({
+          message:
+            "Forwarding marks to EMS is restricted to Principal, Vice Principal, and Administrators.",
+        });
         return;
       }
 

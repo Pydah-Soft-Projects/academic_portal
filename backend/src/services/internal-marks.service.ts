@@ -422,8 +422,10 @@ export async function resolveFacultySubjectAccess(
 /** Superadmin & HOD Hierarchy Listing */
 export async function getSubjectFacultyHierarchy(filters: {
   collegeId?: number;
+  collegeIds?: number[];
   courseId?: number;
   branchId?: number;
+  branchIds?: number[];
   subjectId?: number;
   facultyId?: number;
   year?: number;
@@ -509,6 +511,9 @@ export async function getSubjectFacultyHierarchy(filters: {
   if (filters.collegeId) {
     whereExam.push("sme.collegeId = ?");
     paramsExam.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    whereExam.push(`sme.collegeId IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    paramsExam.push(...filters.collegeIds);
   }
   if (filters.courseId) {
     whereExam.push("sme.courseId = ?");
@@ -517,6 +522,9 @@ export async function getSubjectFacultyHierarchy(filters: {
   if (filters.branchId) {
     whereExam.push("sme.branchId = ?");
     paramsExam.push(filters.branchId);
+  } else if (filters.branchIds && filters.branchIds.length > 0) {
+    whereExam.push(`sme.branchId IN (${filters.branchIds.map(() => "?").join(",")})`);
+    paramsExam.push(...filters.branchIds);
   }
   if (filters.subjectId) {
     whereExam.push("s.id = ?");
@@ -1697,9 +1705,11 @@ export async function getStudentsForMarksEntry(params: {
   const subjectMeta = subRows[0] || { code: "", name: "Subject", internalMarks: null };
 
   const normSec = normalizeSectionParam(params.section);
+  const rawSec = params.section ? params.section.trim() : normSec;
+  const isSecAOrSingle = !normSec || normSec === "A";
 
   // 3. Check existing submission
-  // Check exact section match, or if section was passed as "A" / single section, also match submissions where section_name is NULL (for unsectioned branches like DAIM)
+  // Check exact section match, or if section was passed as "A" / single section, also match submissions where section_name is NULL (for unsectioned branches like DAIM or legacy submissions)
   const subRowsDb = await queryAcademic<
     (RowDataPacket & {
       id: number;
@@ -1717,11 +1727,11 @@ export async function getStudentsForMarksEntry(params: {
       AND (
         (? IS NOT NULL AND (section_name = ? OR section_name = ?))
         OR (? IS NULL AND section_name IS NULL)
-        OR section_name IS NULL
+        ${isSecAOrSingle ? "OR section_name IS NULL" : ""}
       )
     ORDER BY 
       CASE 
-        WHEN ? IS NOT NULL AND section_name = ? THEN 0
+        WHEN ? IS NOT NULL AND (section_name = ? OR section_name = ?) THEN 0
         WHEN ? IS NULL AND section_name IS NULL THEN 0
         WHEN section_name IS NULL THEN 1
         ELSE 2
@@ -1736,10 +1746,11 @@ export async function getStudentsForMarksEntry(params: {
       params.subjectId,
       normSec,
       normSec,
-      params.section ? params.section.trim() : normSec,
+      rawSec,
       normSec,
       normSec,
       normSec,
+      rawSec,
       normSec,
     ]
   );
@@ -1747,6 +1758,23 @@ export async function getStudentsForMarksEntry(params: {
   let submissionId: number | null = subRowsDb[0] ? Number(subRowsDb[0].id) : null;
   let status: InternalMarksStatus = subRowsDb[0] ? subRowsDb[0].status : "draft";
   let examId: number | null = subRowsDb[0]?.exam_id ? Number(subRowsDb[0].exam_id) : null;
+
+  // If no direct submission was found for this section (e.g. Section C), check if there is a legacy unsectioned submission
+  // so we can pre-populate any marks already entered for these students without adopting the legacy submission ID/status
+  let legacySubmissionId: number | null = null;
+  if (!submissionId && normSec) {
+    const legRows = await queryAcademic<
+      (RowDataPacket & { id: number })[]
+    >(
+      `SELECT id FROM ap_internal_marks_submissions
+       WHERE college_id = ? AND course_id = ? AND branch_id = ? AND subject_id = ? AND section_name IS NULL
+       ORDER BY id DESC LIMIT 1`,
+      [params.collegeId, params.courseId, params.branchId, params.subjectId]
+    );
+    if (legRows[0]) {
+      legacySubmissionId = Number(legRows[0].id);
+    }
+  }
 
   const defaultMaxMarks =
     subjectMeta.internalMarks != null && Number(subjectMeta.internalMarks) > 0
@@ -1765,14 +1793,15 @@ export async function getStudentsForMarksEntry(params: {
     }
   }
 
-  // 4. Fetch existing entries if submission exists
+  // 4. Fetch existing entries if submission exists (or from legacy submission)
+  const subIdForEntries = submissionId || legacySubmissionId;
   let existingEntries = new Map<number, { marks: number | null; remarks: string | null }>();
-  if (submissionId) {
+  if (subIdForEntries) {
     const entryRows = await queryAcademic<
       (RowDataPacket & { student_db_id: number; marks_obtained: number | null; remarks: string | null })[]
     >(
       `SELECT student_db_id, marks_obtained, remarks FROM ap_internal_marks_entries WHERE submission_id = ?`,
-      [submissionId]
+      [subIdForEntries]
     );
     for (const er of entryRows) {
       existingEntries.set(Number(er.student_db_id), {
@@ -1935,6 +1964,7 @@ export async function getStudentsForMarksEntry(params: {
   }
 
   // If a submission exists, make sure any student records saved in ap_internal_marks_entries are included!
+  // ONLY include students who actually belong to the filtered section!
   if (submissionId) {
     const entryRowsAll = await queryAcademic<
       (RowDataPacket & {
@@ -1951,16 +1981,61 @@ export async function getStudentsForMarksEntry(params: {
     );
 
     const existingStudentIds = new Set(studentRows.map((s) => Number(s.id)));
-    for (const er of entryRowsAll) {
-      if (!existingStudentIds.has(Number(er.student_db_id))) {
-        studentRows.push({
-          id: Number(er.student_db_id),
-          admission_number: er.admission_number || er.roll_number || "",
-          pin_no: er.roll_number || er.admission_number || null,
-          student_name: er.student_name || "Unknown",
-          section_name: normSec || null,
-        } as any);
-        existingStudentIds.add(Number(er.student_db_id));
+    const missingIds = entryRowsAll
+      .map((er) => Number(er.student_db_id))
+      .filter((id) => !existingStudentIds.has(id));
+
+    if (missingIds.length > 0) {
+      const extraStudents = await queryStudent<
+        (RowDataPacket & {
+          id: number;
+          admission_number: string;
+          pin_no: string | null;
+          student_name: string | null;
+          section: string | null;
+          section_name: string | null;
+        })[]
+      >(
+        `
+        SELECT s.id, s.admission_number, s.pin_no, s.student_name, s.section,
+               COALESCE(TRIM(ss.section_name), TRIM(s.section)) AS section_name
+        FROM students s
+        LEFT JOIN student_sections ss ON ss.student_id = s.id
+        WHERE s.id IN (${missingIds.map(() => "?").join(",")})
+        `,
+        missingIds
+      ).catch(() => []);
+
+      const studentSecMap = new Map<number, { sec: string | null; name: string; adm: string; pin: string | null }>();
+      for (const es of extraStudents) {
+        studentSecMap.set(Number(es.id), {
+          sec: normalizeSectionParam(es.section_name || es.section),
+          name: es.student_name || "Unknown",
+          adm: es.admission_number || "",
+          pin: es.pin_no || null,
+        });
+      }
+
+      for (const er of entryRowsAll) {
+        const sId = Number(er.student_db_id);
+        if (!existingStudentIds.has(sId)) {
+          const info = studentSecMap.get(sId);
+          const studentActualSec = info ? info.sec : null;
+
+          // Never leak students from another section into the requested section roster!
+          if (normSec && studentActualSec && studentActualSec !== normSec) {
+            continue;
+          }
+
+          studentRows.push({
+            id: sId,
+            admission_number: info?.adm || er.admission_number || er.roll_number || "",
+            pin_no: info?.pin || er.roll_number || er.admission_number || null,
+            student_name: info?.name || er.student_name || "Unknown",
+            section_name: studentActualSec || normSec || null,
+          } as any);
+          existingStudentIds.add(sId);
+        }
       }
     }
   }
@@ -1975,7 +2050,15 @@ export async function getStudentsForMarksEntry(params: {
     }
   }
 
-  const studentList = uniqueStudentRows.map((st) => {
+  // Strictly enforce section boundaries on the returned student roster
+  const scopedStudentRows = normSec
+    ? uniqueStudentRows.filter((st) => {
+        const sSec = normalizeSectionParam(st.section_name);
+        return !sSec || sSec === normSec;
+      })
+    : uniqueStudentRows;
+
+  const studentList = scopedStudentRows.map((st) => {
     const prev = existingEntries.get(st.id);
     const validPin =
       st.pin_no &&
@@ -3152,8 +3235,10 @@ export type PendingReportSubjectItem = {
   year: number | null;
   semester: number | null;
   sections: string[];
+  studentCount?: number;
   sectionBreakdown: Array<{
     sectionName: string;
+    studentCount?: number;
     assignedFaculty: Array<{
       staffLinkId: number;
       displayName: string;
@@ -3196,8 +3281,10 @@ export type PendingReportSubjectItem = {
 
 export async function getInternalMarksPendingReport(filters: {
   collegeId?: number;
+  collegeIds?: number[];
   courseId?: number;
   branchId?: number;
+  branchIds?: number[];
   year?: number;
   semester?: number;
   examId?: number;
@@ -3281,6 +3368,9 @@ export async function getInternalMarksPendingReport(filters: {
   if (filters.collegeId) {
     whereExam.push("sme.collegeId = ?");
     paramsExam.push(filters.collegeId);
+  } else if (filters.collegeIds && filters.collegeIds.length > 0) {
+    whereExam.push(`sme.collegeId IN (${filters.collegeIds.map(() => "?").join(",")})`);
+    paramsExam.push(...filters.collegeIds);
   }
   if (filters.courseId) {
     whereExam.push("sme.courseId = ?");
@@ -3289,6 +3379,9 @@ export async function getInternalMarksPendingReport(filters: {
   if (filters.branchId) {
     whereExam.push("sme.branchId = ?");
     paramsExam.push(filters.branchId);
+  } else if (filters.branchIds && filters.branchIds.length > 0) {
+    whereExam.push(`sme.branchId IN (${filters.branchIds.map(() => "?").join(",")})`);
+    paramsExam.push(...filters.branchIds);
   }
   if (filters.year) {
     whereExam.push("sme.yearOfStudy = ?");
@@ -3497,6 +3590,50 @@ export async function getInternalMarksPendingReport(filters: {
     entryCountRows.map((e) => [Number(e.submission_id), Number(e.cnt)])
   );
 
+  // 4b. Query student counts per branch, year, and section from student database
+  const allReportBranchIds = [...new Set(subjectRows.map((s) => Number(s.branchId)).filter(Boolean))];
+  const studentCountRows = allReportBranchIds.length > 0
+    ? await queryStudent<
+        (RowDataPacket & {
+          branch_id: number;
+          current_year: number | null;
+          section_name: string;
+          count: number;
+        })[]
+      >(
+        `
+        SELECT
+          s.branch_id,
+          s.current_year,
+          COALESCE(TRIM(ss.section_name), TRIM(s.section), '') AS section_name,
+          COUNT(DISTINCT s.id) AS count
+        FROM students s
+        LEFT JOIN student_sections ss ON ss.student_id = s.id
+        WHERE s.branch_id IN (${allReportBranchIds.map(() => "?").join(",")})
+          AND (s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))
+        GROUP BY s.branch_id, s.current_year, COALESCE(TRIM(ss.section_name), TRIM(s.section), '')
+        `,
+        allReportBranchIds
+      ).catch(() => [])
+    : [];
+
+  const sectionCountMap = new Map<string, number>();
+  const branchYearCountMap = new Map<string, number>();
+
+  for (const scr of studentCountRows) {
+    const bId = Number(scr.branch_id);
+    const yr = scr.current_year != null ? Number(scr.current_year) : 0;
+    const sec = scr.section_name ? scr.section_name.trim().toUpperCase() : "";
+    const cnt = Number(scr.count);
+
+    if (sec) {
+      const k = `${bId}-${yr}-${sec}`;
+      sectionCountMap.set(k, (sectionCountMap.get(k) || 0) + cnt);
+    }
+    const byKey = `${bId}-${yr}`;
+    branchYearCountMap.set(byKey, (branchYearCountMap.get(byKey) || 0) + cnt);
+  }
+
   // 5. Assemble items
   const allItems: PendingReportSubjectItem[] = [];
 
@@ -3571,6 +3708,9 @@ export async function getInternalMarksPendingReport(filters: {
     const mergedSec = Array.from(new Set([...knownSections, ...facultySections])).sort();
     const finalSections = mergedSec.length > 0 ? mergedSec : ["A"];
 
+    const resolvedYear = s.year != null ? Number(s.year) : 0;
+    let totalStudentsForSubject = 0;
+
     const sectionBreakdown = finalSections.map((sec) => {
       const secFacultyRows = subjectFacultyRows.filter(
         (f) => !f.section_name || String(f.section_name).trim().toUpperCase() === sec
@@ -3604,8 +3744,15 @@ export async function getInternalMarksPendingReport(filters: {
           subForSec.status
         );
 
+      let secStudentCount = sectionCountMap.get(`${s.branchId}-${resolvedYear}-${sec.toUpperCase()}`) || 0;
+      if (!secStudentCount && finalSections.length === 1) {
+        secStudentCount = branchYearCountMap.get(`${s.branchId}-${resolvedYear}`) || 0;
+      }
+      totalStudentsForSubject += secStudentCount;
+
       return {
         sectionName: sec,
+        studentCount: secStudentCount,
         assignedFaculty: finalFac,
         postingStatus: (isSecPosted ? "posted" : "pending") as "pending" | "posted",
         submission: subForSec
@@ -3621,6 +3768,10 @@ export async function getInternalMarksPendingReport(filters: {
       };
     });
 
+    if (totalStudentsForSubject === 0) {
+      totalStudentsForSubject = branchYearCountMap.get(`${s.branchId}-${resolvedYear}`) || 0;
+    }
+
     allItems.push({
       collegeId: Number(s.collegeId),
       collegeName: s.collegeName || "Unknown College",
@@ -3635,6 +3786,7 @@ export async function getInternalMarksPendingReport(filters: {
       year: s.year != null ? Number(s.year) : null,
       semester: s.semester != null ? Number(s.semester) : null,
       sections: finalSections,
+      studentCount: totalStudentsForSubject,
       sectionBreakdown,
       assignedFaculty: assignedFac,
       postingStatus,
@@ -3674,6 +3826,11 @@ export async function getInternalMarksPendingReport(filters: {
     n.progressPercent = n.subjectCount > 0 ? Math.round((n.postedCount / n.subjectCount) * 100) : 0;
   }
 
+  const relevantNotifications =
+    filters.branchId || (filters.branchIds && filters.branchIds.length > 0)
+      ? notifications.filter((n) => (n.subjectCount ?? 0) > 0)
+      : notifications;
+
   return {
     summary: {
       totalSubjects,
@@ -3681,7 +3838,7 @@ export async function getInternalMarksPendingReport(filters: {
       pendingCount,
       completionPercentage,
     },
-    notifications,
+    notifications: relevantNotifications,
     subjects: allItems,
   };
 }

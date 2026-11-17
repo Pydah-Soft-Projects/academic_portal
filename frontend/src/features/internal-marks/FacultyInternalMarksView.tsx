@@ -113,8 +113,35 @@ type SubmissionItem = {
 };
 
 export function FacultyInternalMarksView() {
-  const { hasPermission } = useAuth();
+  const { hasPermission, authorization, user } = useAuth();
   const canEdit = hasPermission("internal_marks.edit");
+
+  const userRoleKeys = useMemo(() => {
+    return (authorization?.roles || []).map((r) => r.roleKey.toLowerCase());
+  }, [authorization]);
+
+  const isSuperAdmin = Boolean(
+    authorization?.scope.isGlobal ||
+    userRoleKeys.some((k) => ["super_admin", "superadmin", "admin"].includes(k))
+  );
+  const isPrincipal = userRoleKeys.includes("principal");
+  const isVicePrincipal = userRoleKeys.includes("vice_principal") || userRoleKeys.includes("vice-principal");
+  const isHod = userRoleKeys.includes("hod");
+
+  // Only Principal, Vice Principal, HOD, and Superadmin can view the Pending List & Notifications report
+  const canViewPendingReport = isSuperAdmin || isPrincipal || isVicePrincipal || isHod;
+
+  // Submissions & Approvals is ONLY visible to Principal, Vice Principal, and Super Admins
+  const canViewApprovals = isSuperAdmin || isPrincipal || isVicePrincipal;
+
+  // Determine user's active leadership scope label
+  const leadershipScopeLabel = useMemo(() => {
+    if (isSuperAdmin) return "All Institutions (Global Oversight)";
+    if (isPrincipal) return "College Oversight (Principal)";
+    if (isVicePrincipal) return "College Oversight (Vice Principal)";
+    if (isHod) return "Department Oversight (HOD)";
+    return null;
+  }, [isSuperAdmin, isPrincipal, isVicePrincipal, isHod]);
 
   const [activeTab, setActiveTab] = useState<"my_subjects" | "pending_approvals" | "pending_report">("my_subjects");
   const [loading, setLoading] = useState(true);
@@ -170,8 +197,10 @@ export function FacultyInternalMarksView() {
       year: number | null;
       semester: number | null;
       sections?: string[];
+      studentCount?: number;
       sectionBreakdown?: Array<{
         sectionName: string;
+        studentCount?: number;
         assignedFaculty: Array<{
           staffLinkId: number;
           displayName: string;
@@ -216,14 +245,19 @@ export function FacultyInternalMarksView() {
   const [reportFilterExamId, setReportFilterExamId] = useState<string>("all");
   const [reportFilterStatus, setReportFilterStatus] = useState<"all" | "pending" | "posted">("all");
   const [reportSearchQuery, setReportSearchQuery] = useState<string>("");
+  const [reportFilterCourse, setReportFilterCourse] = useState<string>("all");
   const [reportFilterBranch, setReportFilterBranch] = useState<string>("all");
   const [reportFilterYear, setReportFilterYear] = useState<string>("all");
+  const [reportFilterSem, setReportFilterSem] = useState<string>("all");
 
   // Dedicated Exam Drilldown View state
   const [selectedExamDetailId, setSelectedExamDetailId] = useState<number | null>(null);
   const [examDrilldownSearch, setExamDrilldownSearch] = useState<string>("");
   const [examDrilldownStatus, setExamDrilldownStatus] = useState<"all" | "pending" | "posted">("all");
+  const [examDrilldownCourse, setExamDrilldownCourse] = useState<string>("all");
   const [examDrilldownBranch, setExamDrilldownBranch] = useState<string>("all");
+  const [examDrilldownYear, setExamDrilldownYear] = useState<string>("all");
+  const [examDrilldownSem, setExamDrilldownSem] = useState<string>("all");
   const [expandedSubjectKeys, setExpandedSubjectKeys] = useState<Set<string>>(new Set());
 
   // Filter and search state for My Assigned Subjects
@@ -295,6 +329,10 @@ export function FacultyInternalMarksView() {
           setAvailableExams(body.notifications);
         }
       } else if (activeTab === "pending_approvals") {
+        if (!canViewApprovals) {
+          setActiveTab("my_subjects");
+          return;
+        }
         const [subRes, cfgRes] = await Promise.all([
           apiFetch("/internal-marks/submissions"),
           apiFetch("/internal-marks/approval-configs"),
@@ -312,6 +350,10 @@ export function FacultyInternalMarksView() {
           }
         }
       } else if (activeTab === "pending_report") {
+        if (!canViewPendingReport) {
+          setActiveTab("my_subjects");
+          return;
+        }
         const res = await apiFetch("/internal-marks/pending-report");
         if (!res.ok) throw new Error("Failed to load pending report and notifications");
         const body = await res.json();
@@ -332,17 +374,22 @@ export function FacultyInternalMarksView() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get("tab");
-      if (tabParam === "pending_report" || tabParam === "pending_approvals" || tabParam === "my_subjects") {
-        setActiveTab(tabParam as any);
+      if (tabParam === "pending_report" && canViewPendingReport) {
+        setActiveTab("pending_report");
+      } else if (tabParam === "pending_approvals" && canViewApprovals) {
+        setActiveTab("pending_approvals");
+      } else if (tabParam === "my_subjects") {
+        setActiveTab("my_subjects");
       }
       const examParam = params.get("examId");
       if (examParam) {
         setSelectedExamDetailId(Number(examParam));
       }
     }
-  }, []);
+  }, [canViewPendingReport, canViewApprovals]);
 
   useEffect(() => {
+    if (!canViewPendingReport) return;
     // Background fetch summary for the pending report tab badge on initial load
     apiFetch("/internal-marks/pending-report")
       .then((res) => (res.ok ? res.json() : null))
@@ -350,7 +397,7 @@ export function FacultyInternalMarksView() {
         if (data) setReportData(data);
       })
       .catch(() => {});
-  }, []);
+  }, [canViewPendingReport]);
 
   const filteredReportSubjects = useMemo(() => {
     if (!reportData) return [];
@@ -364,10 +411,16 @@ export function FacultyInternalMarksView() {
       if (reportFilterStatus !== "all" && sub.postingStatus !== reportFilterStatus) {
         return false;
       }
+      if (reportFilterCourse !== "all" && String(sub.courseId) !== reportFilterCourse) {
+        return false;
+      }
       if (reportFilterBranch !== "all" && String(sub.branchId) !== reportFilterBranch) {
         return false;
       }
       if (reportFilterYear !== "all" && String(sub.year) !== reportFilterYear) {
+        return false;
+      }
+      if (reportFilterSem !== "all" && String(sub.semester) !== reportFilterSem) {
         return false;
       }
       if (!reportSearchQuery) return true;
@@ -388,21 +441,93 @@ export function FacultyInternalMarksView() {
     reportData,
     reportFilterExamId,
     reportFilterStatus,
+    reportFilterCourse,
     reportFilterBranch,
     reportFilterYear,
+    reportFilterSem,
     reportSearchQuery,
   ]);
+
+  const reportAvailableCourses = useMemo(() => {
+    if (!reportData) return [];
+    const map = new Map<number, string>();
+    for (const s of reportData.subjects) {
+      if (s.courseId && !map.has(s.courseId)) {
+        map.set(s.courseId, s.courseName);
+      }
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [reportData]);
 
   const reportAvailableBranches = useMemo(() => {
     if (!reportData) return [];
     const map = new Map<number, string>();
     for (const s of reportData.subjects) {
+      if (reportFilterCourse !== "all" && String(s.courseId) !== reportFilterCourse) continue;
       if (!map.has(s.branchId)) {
         map.set(s.branchId, s.branchName);
       }
     }
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [reportData, reportFilterCourse]);
+
+  const reportAvailableYears = useMemo(() => {
+    if (!reportData) return [];
+    const set = new Set<number>();
+    for (const s of reportData.subjects) {
+      if (s.year != null) set.add(s.year);
+    }
+    return Array.from(set).sort((a, b) => a - b);
   }, [reportData]);
+
+  const reportAvailableSemesters = useMemo(() => {
+    if (!reportData) return [];
+    const set = new Set<number>();
+    for (const s of reportData.subjects) {
+      if (s.semester != null) set.add(s.semester);
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  }, [reportData]);
+
+  const filteredReportNotifications = useMemo(() => {
+    if (!reportData) return [];
+    return reportData.notifications.filter((n) => {
+      if (reportFilterCourse !== "all") {
+        const cObj = reportAvailableCourses.find((c) => String(c.id) === reportFilterCourse);
+        if (cObj && n.course) {
+          const normN = n.course.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+          const normC = cObj.name.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (normN !== normC) return false;
+        }
+      }
+      if (reportFilterBranch !== "all") {
+        const bObj = reportAvailableBranches.find((b) => String(b.id) === reportFilterBranch);
+        if (bObj && n.branch) {
+          const targetBranches = n.branch
+            .split(",")
+            .map((b) => b.trim().toLowerCase().replace(/[^a-z0-9]/g, ""))
+            .filter(Boolean);
+          const normB = bObj.name.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+          if (!targetBranches.some((tb) => tb === normB)) return false;
+        }
+      }
+      if (reportFilterYear !== "all" && n.yearOfStudy != null && String(n.yearOfStudy) !== reportFilterYear) {
+        return false;
+      }
+      if (reportFilterSem !== "all" && n.semester != null && String(n.semester) !== reportFilterSem) {
+        return false;
+      }
+      return true;
+    });
+  }, [
+    reportData,
+    reportFilterCourse,
+    reportFilterBranch,
+    reportFilterYear,
+    reportFilterSem,
+    reportAvailableCourses,
+    reportAvailableBranches,
+  ]);
 
   // Exam Drilldown Memos & Grouping
   const selectedExam = useMemo(() => {
@@ -443,14 +568,41 @@ export function FacultyInternalMarksView() {
     });
   }, [reportData, selectedExamDetailId, selectedExam]);
 
+  const examCourses = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const s of examMatchingSubjects) {
+      if (s.courseId && !map.has(s.courseId)) {
+        map.set(s.courseId, s.courseName);
+      }
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [examMatchingSubjects]);
+
   const examBranches = useMemo(() => {
     const map = new Map<number, string>();
     for (const s of examMatchingSubjects) {
+      if (examDrilldownCourse !== "all" && String(s.courseId) !== examDrilldownCourse) continue;
       if (!map.has(s.branchId)) {
         map.set(s.branchId, s.branchName);
       }
     }
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [examMatchingSubjects, examDrilldownCourse]);
+
+  const examYears = useMemo(() => {
+    const set = new Set<number>();
+    for (const s of examMatchingSubjects) {
+      if (s.year != null) set.add(s.year);
+    }
+    return Array.from(set).sort((a, b) => a - b);
+  }, [examMatchingSubjects]);
+
+  const examSemesters = useMemo(() => {
+    const set = new Set<number>();
+    for (const s of examMatchingSubjects) {
+      if (s.semester != null) set.add(s.semester);
+    }
+    return Array.from(set).sort((a, b) => a - b);
   }, [examMatchingSubjects]);
 
   const examPostedCount = useMemo(() => {
@@ -472,11 +624,20 @@ export function FacultyInternalMarksView() {
       if (examDrilldownStatus !== "all" && sub.postingStatus !== examDrilldownStatus) {
         return false;
       }
+      if (examDrilldownCourse !== "all" && String(sub.courseId) !== examDrilldownCourse) {
+        return false;
+      }
       if (examDrilldownBranch !== "all" && String(sub.branchId) !== examDrilldownBranch) {
         return false;
       }
+      if (examDrilldownYear !== "all" && String(sub.year) !== examDrilldownYear) {
+        return false;
+      }
+      if (examDrilldownSem !== "all" && String(sub.semester) !== examDrilldownSem) {
+        return false;
+      }
       if (!examDrilldownSearch) return true;
-      const q = examDrilldownSearch.toLowerCase();
+      const q = examDrilldownSearch.toLowerCase().trim();
       const matchSubject =
         sub.subjectName.toLowerCase().includes(q) ||
         sub.subjectCode.toLowerCase().includes(q) ||
@@ -489,7 +650,15 @@ export function FacultyInternalMarksView() {
       );
       return matchSubject || matchFaculty;
     });
-  }, [examMatchingSubjects, examDrilldownStatus, examDrilldownBranch, examDrilldownSearch]);
+  }, [
+    examMatchingSubjects,
+    examDrilldownStatus,
+    examDrilldownCourse,
+    examDrilldownBranch,
+    examDrilldownYear,
+    examDrilldownSem,
+    examDrilldownSearch,
+  ]);
 
   function toggleSubjectExpand(key: string) {
     setExpandedSubjectKeys((prev) => {
@@ -514,6 +683,7 @@ export function FacultyInternalMarksView() {
 
   type SubjectBreakdownItem = {
     sectionName: string;
+    studentCount?: number;
     assignedFaculty: Array<{
       staffLinkId: number;
       displayName: string;
@@ -538,6 +708,7 @@ export function FacultyInternalMarksView() {
     const sectionsList = sub.sections && sub.sections.length > 0 ? sub.sections : ["A"];
     return sectionsList.map((secName) => ({
       sectionName: secName,
+      studentCount: sub.studentCount,
       assignedFaculty: sub.assignedFaculty,
       postingStatus: sub.postingStatus,
       submission: sub.submission,
@@ -688,35 +859,39 @@ export function FacultyInternalMarksView() {
           <BookOpen className="h-4 w-4 shrink-0" />
           My Assigned Subjects {uniqueAssignedSubjects.length > 0 ? `(${uniqueAssignedSubjects.length})` : ""}
         </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("pending_approvals")}
-          className={`flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium transition shrink-0 ${
-            activeTab === "pending_approvals"
-              ? "border-brand-600 text-brand-600"
-              : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
-        >
-          <Clock className="h-4 w-4 shrink-0" />
-          Submissions & Approvals ({pendingSubmissions.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("pending_report")}
-          className={`flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium transition shrink-0 ${
-            activeTab === "pending_report"
-              ? "border-brand-600 text-brand-600"
-              : "border-transparent text-slate-500 hover:text-slate-700"
-          }`}
-        >
-          <Bell className="h-4 w-4 shrink-0" />
-          Pending List & Notifications
-          {reportData?.summary ? (
-            <span className="ml-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-bold">
-              {reportData.summary.pendingCount} Pending
-            </span>
-          ) : null}
-        </button>
+        {canViewApprovals && (
+          <button
+            type="button"
+            onClick={() => setActiveTab("pending_approvals")}
+            className={`flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium transition shrink-0 ${
+              activeTab === "pending_approvals"
+                ? "border-brand-600 text-brand-600"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <Clock className="h-4 w-4 shrink-0" />
+            Submissions & Approvals ({pendingSubmissions.length})
+          </button>
+        )}
+        {canViewPendingReport && (
+          <button
+            type="button"
+            onClick={() => setActiveTab("pending_report")}
+            className={`flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2.5 text-xs sm:text-sm font-medium transition shrink-0 ${
+              activeTab === "pending_report"
+                ? "border-brand-600 text-brand-600"
+                : "border-transparent text-slate-500 hover:text-slate-700"
+            }`}
+          >
+            <Bell className="h-4 w-4 shrink-0" />
+            Pending List & Notifications
+            {reportData?.summary ? (
+              <span className="ml-1 rounded-full bg-amber-100 text-amber-800 px-2 py-0.5 text-[10px] font-bold">
+                {reportData.summary.pendingCount} Pending
+              </span>
+            ) : null}
+          </button>
+        )}
       </div>
 
       {/* Tab 1: My Assigned Subjects */}
@@ -1260,10 +1435,18 @@ export function FacultyInternalMarksView() {
           {selectedExamDetailId === null && (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-border shadow-2xs">
               <div>
-                <h3 className="text-base font-semibold text-navy-900 flex items-center gap-2">
-                  <Bell className="h-5 w-5 text-brand-600" />
-                  Exam Notifications & Pending Marks Report
-                </h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-semibold text-navy-900 flex items-center gap-2">
+                    <Bell className="h-5 w-5 text-brand-600" />
+                    Exam Notifications & Pending Marks Report
+                  </h3>
+                  {leadershipScopeLabel && (
+                    <span className="inline-flex items-center gap-1 font-bold text-xs text-brand-800 bg-brand-50 border border-brand-200 px-2.5 py-0.5 rounded-full">
+                      <School className="h-3.5 w-3.5 text-brand-600" />
+                      {leadershipScopeLabel}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Track released exam notifications, exam start and end dates, submission deadlines, and monitor which faculty members have posted vs pending internal marks.
                 </p>
@@ -1389,6 +1572,25 @@ export function FacultyInternalMarksView() {
                       </button>
                     </div>
 
+                    {/* Course Filter dropdown */}
+                    {examCourses.length > 1 && (
+                      <select
+                        value={examDrilldownCourse}
+                        onChange={(e) => {
+                          setExamDrilldownCourse(e.target.value);
+                          setExamDrilldownBranch("all");
+                        }}
+                        className="h-8 rounded border border-border bg-white px-2 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                      >
+                        <option value="all">All Courses ({examCourses.length})</option>
+                        {examCourses.map((c) => (
+                          <option key={c.id} value={String(c.id)}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
                     {/* Branch Filter dropdown */}
                     {examBranches.length > 1 && (
                       <select
@@ -1400,6 +1602,38 @@ export function FacultyInternalMarksView() {
                         {examBranches.map((b) => (
                           <option key={b.id} value={String(b.id)}>
                             {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
+                    {/* Year Filter dropdown */}
+                    {examYears.length > 1 && (
+                      <select
+                        value={examDrilldownYear}
+                        onChange={(e) => setExamDrilldownYear(e.target.value)}
+                        className="h-8 rounded border border-border bg-white px-2 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                      >
+                        <option value="all">All Years</option>
+                        {examYears.map((yr) => (
+                          <option key={yr} value={String(yr)}>
+                            Year {yr}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
+                    {/* Semester Filter dropdown */}
+                    {examSemesters.length > 1 && (
+                      <select
+                        value={examDrilldownSem}
+                        onChange={(e) => setExamDrilldownSem(e.target.value)}
+                        className="h-8 rounded border border-border bg-white px-2 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                      >
+                        <option value="all">All Sems</option>
+                        {examSemesters.map((sem) => (
+                          <option key={sem} value={String(sem)}>
+                            Sem {sem}
                           </option>
                         ))}
                       </select>
@@ -1461,7 +1695,7 @@ export function FacultyInternalMarksView() {
                           <th className="px-3 py-2.5 w-8"></th>
                           <th className="px-3 py-2.5 w-10">#</th>
                           <th className="px-3.5 py-2.5 min-w-[220px]">Subject & Code</th>
-                          <th className="px-3.5 py-2.5">Branch & Term</th>
+                          <th className="px-3.5 py-2.5">Course, Branch & Term</th>
                           <th className="px-3.5 py-2.5">Type</th>
                           <th className="px-3.5 py-2.5">Sections Breakdown</th>
                           <th className="px-3.5 py-2.5">Assigned Faculty</th>
@@ -1499,8 +1733,13 @@ export function FacultyInternalMarksView() {
                                   <div className="font-mono text-slate-500 text-[11px]">{sub.subjectCode}</div>
                                 </td>
                                 <td className="px-3.5 py-3 align-top">
-                                  <div className="font-bold text-slate-800">{sub.branchName}</div>
-                                  <div className="text-[11px] text-slate-500">
+                                  <div className="font-bold text-slate-800 flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-bold text-[10px] text-brand-700 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded">
+                                      {sub.courseName}
+                                    </span>
+                                    <span className="text-navy-900 font-bold">{sub.branchName}</span>
+                                  </div>
+                                  <div className="text-[11px] text-slate-500 font-medium mt-0.5">
                                     Year {sub.year || "-"}, Sem {sub.semester || "-"}
                                   </div>
                                 </td>
@@ -1514,18 +1753,28 @@ export function FacultyInternalMarksView() {
                                     {breakdown.map((sec) => (
                                       <span
                                         key={sec.sectionName}
-                                        className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold border ${
+                                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold border ${
                                           sec.postingStatus === "posted"
                                             ? "bg-emerald-50 text-emerald-800 border-emerald-200"
                                             : sec.submission?.status === "draft"
                                             ? "bg-blue-50 text-blue-800 border-blue-200"
                                             : "bg-amber-50 text-amber-800 border-amber-200"
                                         }`}
+                                        title={`Section ${sec.sectionName}: ${sec.studentCount ?? 0} students`}
                                       >
-                                        Sec {sec.sectionName}
+                                        <span>Sec {sec.sectionName}</span>
+                                        <span className="text-[9px] font-mono font-bold px-1 py-0.2 rounded bg-black/5 text-slate-700">
+                                          {sec.studentCount ?? 0}
+                                        </span>
                                       </span>
                                     ))}
                                   </div>
+                                  {sub.studentCount != null && sub.studentCount > 0 && (
+                                    <div className="text-[10px] text-slate-500 font-medium mt-1 flex items-center gap-1">
+                                      <Users className="h-3 w-3 text-slate-400" />
+                                      <span>Total: <strong className="text-slate-800">{sub.studentCount}</strong> students</span>
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="px-3.5 py-3 align-top">
                                   {sub.assignedFaculty.length > 0 ? (
@@ -1602,9 +1851,14 @@ export function FacultyInternalMarksView() {
                                               className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/50 transition"
                                             >
                                               <div className="flex items-start sm:items-center gap-3">
-                                                <span className="inline-flex items-center justify-center font-bold text-xs bg-brand-50 text-brand-800 border border-brand-200 rounded px-2.5 py-1 min-w-[80px]">
-                                                  Section {sec.sectionName}
-                                                </span>
+                                                <div className="flex flex-col items-center">
+                                                  <span className="inline-flex items-center justify-center font-bold text-xs bg-brand-50 text-brand-800 border border-brand-200 rounded px-2.5 py-1 min-w-[80px]">
+                                                    Section {sec.sectionName}
+                                                  </span>
+                                                  <span className="text-[10px] font-bold text-brand-700 bg-brand-50/50 px-1.5 py-0.2 rounded border border-brand-100 mt-1">
+                                                    {sec.studentCount ?? 0} Students
+                                                  </span>
+                                                </div>
 
                                                 <div>
                                                   <div className="font-semibold text-slate-800 text-xs">
@@ -1655,6 +1909,9 @@ export function FacultyInternalMarksView() {
                                                     ) : (
                                                       <span className="text-amber-700 font-medium flex items-center gap-1">
                                                         <Clock className="h-3 w-3" /> Marks Not Posted Yet
+                                                        {sec.studentCount != null && sec.studentCount > 0 ? (
+                                                          <span className="text-slate-500 font-normal">({sec.studentCount} enrolled students)</span>
+                                                        ) : null}
                                                       </span>
                                                     )}
                                                   </div>
@@ -1711,6 +1968,9 @@ export function FacultyInternalMarksView() {
                                 <span className="font-mono font-bold text-xs text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded">
                                   {sub.subjectCode}
                                 </span>
+                                <span className="text-[10px] font-semibold text-brand-800 bg-brand-50 border border-brand-200 px-1.5 py-0.5 rounded">
+                                  {sub.courseName}
+                                </span>
                                 <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">
                                   {sub.branchName} • Y{sub.year || "-"} S{sub.semester || "-"}
                                 </span>
@@ -1741,13 +2001,14 @@ export function FacultyInternalMarksView() {
                               {breakdown.map((sec) => (
                                 <span
                                   key={sec.sectionName}
-                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${
                                     sec.postingStatus === "posted"
                                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                                       : "bg-amber-50 text-amber-700 border-amber-200"
                                   }`}
                                 >
-                                  {sec.sectionName}
+                                  <span>{sec.sectionName}</span>
+                                  <span className="text-[9px] opacity-75">({sec.studentCount ?? 0})</span>
                                 </span>
                               ))}
                             </div>
@@ -1775,9 +2036,14 @@ export function FacultyInternalMarksView() {
                                     className="bg-white p-2.5 rounded border border-border space-y-1.5"
                                   >
                                     <div className="flex items-center justify-between">
-                                      <span className="font-bold text-xs bg-brand-50 text-brand-800 border border-brand-200 rounded px-2 py-0.5">
-                                        Section {sec.sectionName}
-                                      </span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-bold text-xs bg-brand-50 text-brand-800 border border-brand-200 rounded px-2 py-0.5">
+                                          Section {sec.sectionName}
+                                        </span>
+                                        <span className="text-[10px] font-bold text-brand-700 bg-brand-50/50 px-1.5 py-0.2 rounded border border-brand-100">
+                                          {sec.studentCount ?? 0} Students
+                                        </span>
+                                      </div>
                                       <span
                                         className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${
                                           isSecPosted ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
@@ -1883,7 +2149,7 @@ export function FacultyInternalMarksView() {
                   <div>
                     <h4 className="text-sm font-bold text-navy-900 flex items-center gap-1.5">
                       <Calendar className="h-4 w-4 text-brand-600" />
-                      Internal Exam Notifications ({reportData.notifications.length})
+                      Internal Exam Notifications ({filteredReportNotifications.length})
                     </h4>
                     <p className="text-[11px] text-slate-500">
                       Summary table of published mid & internal examinations. Click any exam to filter the subject-wise table below.
@@ -1900,9 +2166,95 @@ export function FacultyInternalMarksView() {
                   )}
                 </div>
 
-                {reportData.notifications.length === 0 ? (
+                {/* Course, Branch, Year, Semester Filter Bar */}
+                <div className="flex flex-wrap items-center gap-2 p-3 bg-white rounded-lg border border-border shadow-2xs">
+                  {/* Course Filter */}
+                  <select
+                    value={reportFilterCourse}
+                    onChange={(e) => {
+                      setReportFilterCourse(e.target.value);
+                      setReportFilterBranch("all");
+                    }}
+                    className="h-8 rounded border border-border bg-white px-2.5 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                  >
+                    <option value="all">All Courses ({reportAvailableCourses.length})</option>
+                    {reportAvailableCourses.map((c) => (
+                      <option key={c.id} value={String(c.id)}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Branch Filter */}
+                  <select
+                    value={reportFilterBranch}
+                    onChange={(e) => setReportFilterBranch(e.target.value)}
+                    className="h-8 rounded border border-border bg-white px-2.5 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                  >
+                    <option value="all">All Branches ({reportAvailableBranches.length})</option>
+                    {reportAvailableBranches.map((b) => (
+                      <option key={b.id} value={String(b.id)}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Year Filter */}
+                  <select
+                    value={reportFilterYear}
+                    onChange={(e) => setReportFilterYear(e.target.value)}
+                    className="h-8 rounded border border-border bg-white px-2.5 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                  >
+                    <option value="all">All Years</option>
+                    {reportAvailableYears.map((yr) => (
+                      <option key={yr} value={String(yr)}>
+                        Year {yr}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Semester Filter */}
+                  <select
+                    value={reportFilterSem}
+                    onChange={(e) => setReportFilterSem(e.target.value)}
+                    className="h-8 rounded border border-border bg-white px-2.5 text-xs font-medium text-slate-800 outline-none focus:border-brand-600 cursor-pointer"
+                  >
+                    <option value="all">All Semesters</option>
+                    {reportAvailableSemesters.map((sem) => (
+                      <option key={sem} value={String(sem)}>
+                        Sem {sem}
+                      </option>
+                    ))}
+                  </select>
+
+                  {(reportFilterCourse !== "all" ||
+                    reportFilterBranch !== "all" ||
+                    reportFilterYear !== "all" ||
+                    reportFilterSem !== "all") && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => {
+                        setReportFilterCourse("all");
+                        setReportFilterBranch("all");
+                        setReportFilterYear("all");
+                        setReportFilterSem("all");
+                      }}
+                      className="h-8 text-xs font-semibold text-slate-600 hover:text-slate-900"
+                    >
+                      Reset Filters
+                    </Button>
+                  )}
+
+                  <div className="ml-auto text-slate-500 text-[11px] font-medium">
+                    Showing <span className="font-bold text-slate-800">{filteredReportNotifications.length}</span> of{" "}
+                    <span className="font-bold text-slate-800">{reportData.notifications.length}</span> exams
+                  </div>
+                </div>
+
+                {filteredReportNotifications.length === 0 ? (
                   <Card className="p-4 text-center text-xs text-slate-500">
-                    No active published internal exam notifications found in the Examination Portal.
+                    No active published internal exam notifications found matching the selected filters.
                   </Card>
                 ) : (
                   <>
@@ -1921,7 +2273,7 @@ export function FacultyInternalMarksView() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                          {reportData.notifications.map((notif, idx) => {
+                          {filteredReportNotifications.map((notif, idx) => {
                             const isSelected = reportFilterExamId === String(notif.id);
                             return (
                               <tr
@@ -2005,7 +2357,7 @@ export function FacultyInternalMarksView() {
 
                     {/* Mobile Exam-Wise Compact Table/List */}
                     <div className="block md:hidden rounded-lg border border-border bg-white divide-y divide-border overflow-hidden shadow-2xs">
-                      {reportData.notifications.map((notif, idx) => (
+                      {filteredReportNotifications.map((notif, idx) => (
                         <div
                           key={notif.id}
                           className="p-2.5 transition hover:bg-brand-50/40 cursor-pointer"
