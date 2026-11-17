@@ -358,35 +358,74 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
 
   if (collegeId && courseId && branchId) {
     try {
-      // 1st attempt: Query saved entries matching college, course, branch, year_of_study, semester, section, and academic_year
-      let savedRows = await queryAcademic<
-        (RowDataPacket & {
-          student_db_id: number;
-          subject_id: number;
-          classes_held: number;
-          classes_present: number;
-        })[]
-      >(
-        `
-        SELECT
-          student_db_id,
-          subject_id,
-          classes_held,
-          classes_present
-        FROM ap_subject_attendance_register
-        WHERE college_id = ?
-          AND course_id = ?
-          AND branch_id = ?
-          AND (year_of_study = ? OR year_of_study = 0 OR ? = 0)
-          AND (semester = ? OR semester = ?)
-          AND (section_name = ? OR section_name = '' OR ? = '')
-          AND (academic_year = ? OR ? = '')
-        ORDER BY updated_at DESC
-        `,
-        [collegeId, courseId, branchId, year, year, semester, absSemester, section, section, academicYear, academicYear],
-      );
+      const studentIds = students.map((s) => s.studentDbId).filter(Boolean);
+      let savedRows: (RowDataPacket & {
+        student_db_id: number;
+        subject_id: number;
+        classes_held: number;
+        classes_present: number;
+      })[] = [];
 
-      // 2nd attempt: If no rows found with strict academic_year, fetch any saved register for this cohort so saved data always shows
+      // 1st attempt: If students are loaded, query saved entries for these exact students
+      if (studentIds.length > 0) {
+        const placeholders = studentIds.map(() => "?").join(",");
+        savedRows = await queryAcademic<
+          (RowDataPacket & {
+            student_db_id: number;
+            subject_id: number;
+            classes_held: number;
+            classes_present: number;
+          })[]
+        >(
+          `
+          SELECT
+            student_db_id,
+            subject_id,
+            classes_held,
+            classes_present
+          FROM ap_subject_attendance_register
+          WHERE college_id = ?
+            AND course_id = ?
+            AND branch_id = ?
+            AND student_db_id IN (${placeholders})
+            AND (semester = ? OR semester = ?)
+          ORDER BY updated_at DESC
+          `,
+          [collegeId, courseId, branchId, ...studentIds, semester, absSemester],
+        );
+      }
+
+      // 2nd attempt: Cohort query by year/semester/section if studentIds query returned nothing
+      if (savedRows.length === 0) {
+        savedRows = await queryAcademic<
+          (RowDataPacket & {
+            student_db_id: number;
+            subject_id: number;
+            classes_held: number;
+            classes_present: number;
+          })[]
+        >(
+          `
+          SELECT
+            student_db_id,
+            subject_id,
+            classes_held,
+            classes_present
+          FROM ap_subject_attendance_register
+          WHERE college_id = ?
+            AND course_id = ?
+            AND branch_id = ?
+            AND (year_of_study = ? OR year_of_study = 0 OR ? = 0)
+            AND (semester = ? OR semester = ?)
+            AND (section_name = ? OR section_name = '' OR ? = '')
+            AND (academic_year = ? OR ? = '')
+          ORDER BY updated_at DESC
+          `,
+          [collegeId, courseId, branchId, year, year, semester, absSemester, section, section, academicYear, academicYear],
+        );
+      }
+
+      // 3rd attempt: If no rows found with strict academic_year, fetch any saved register for this cohort
       if (savedRows.length === 0) {
         savedRows = await queryAcademic<
           (RowDataPacket & {
@@ -417,7 +456,15 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
 
       if (savedRows.length > 0) {
         hasSavedEntries = true;
+        const seen = new Set<string>();
         for (const r of savedRows) {
+          const entryKey = `${r.student_db_id}_${r.subject_id}`;
+          if (seen.has(entryKey)) {
+            // savedRows is sorted by updated_at DESC, so the first occurrence is the latest!
+            continue;
+          }
+          seen.add(entryKey);
+
           entries.push({
             studentDbId: r.student_db_id,
             subjectId: r.subject_id,
@@ -515,6 +562,9 @@ export type SaveSubjectAttendancePayload = {
     admissionNumber: string;
     pinNo?: string | null;
     studentName?: string | null;
+    sectionName?: string | null;
+    currentYear?: number | null;
+    currentSemester?: number | null;
     subjectId: number;
     classesHeld: number;
     classesPresent: number;
@@ -551,15 +601,19 @@ export async function saveSubjectAttendanceData(payload: SaveSubjectAttendancePa
     const values: unknown[] = [];
 
     for (const e of chunk) {
+      const entryYear = Number(e.currentYear || year || 1);
+      const entrySem = Number(e.currentSemester || semester || 1);
+      const entrySection = String(e.sectionName || section || "");
+
       valuePlaceholders.push("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       values.push(
         collegeId,
         courseId,
         branchId,
         academicYear,
-        year,
-        semester,
-        section,
+        entryYear,
+        entrySem,
+        entrySection,
         batch,
         month,
         e.studentDbId,
@@ -595,6 +649,8 @@ export async function saveSubjectAttendanceData(payload: SaveSubjectAttendancePa
       )
       VALUES ${valuePlaceholders.join(", ")}
       ON DUPLICATE KEY UPDATE
+        year_of_study = VALUES(year_of_study),
+        batch = VALUES(batch),
         pin_no = VALUES(pin_no),
         student_name = VALUES(student_name),
         classes_held = VALUES(classes_held),
@@ -610,13 +666,11 @@ export async function saveSubjectAttendanceData(payload: SaveSubjectAttendancePa
   try {
     await executeAcademic(
       `
-      INSERT INTO ap_audit_logs (actor_user_id, action, entity_type, entity_id, college_id, branch_id, details_json)
-      VALUES (?, 'subject_attendance.save', 'ap_subject_attendance_register', NULL, ?, ?, ?)
+      INSERT INTO ap_audit_logs (actor_user_id, action, entity_type, entity_id, new_value_json)
+      VALUES (?, 'subject_attendance.save', 'ap_subject_attendance_register', NULL, ?)
       `,
       [
         userId || 1,
-        collegeId,
-        branchId,
         JSON.stringify({
           collegeId,
           courseId,

@@ -337,6 +337,8 @@ internalMarksRouter.post(
         facultyStaffLinkId,
         batch,
         semesterNumber,
+        section,
+        examId,
         maxMarks,
         entries,
       } = req.body;
@@ -375,6 +377,8 @@ internalMarksRouter.post(
         facultyStaffLinkId: Number(facultyStaffLinkId),
         batch: str(batch),
         semesterNumber: num(semesterNumber),
+        section: str(section),
+        examId: num(examId),
         maxMarks: Number(maxMarks) || 30,
         entries,
       });

@@ -1136,12 +1136,85 @@ export async function getFacultyAssignedSubjects(
     FROM ap_timetable_entries te
     INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
     WHERE te.faculty_staff_link_id = ? AND te.subject_id IS NOT NULL
+      AND (tp.status IS NULL OR tp.status NOT IN ('superseded', 'archived', 'cancelled'))
     `,
     [staffLinkId, staffLinkId]
   );
 
   if (assignments.length === 0) {
-    return { staffLinkId, subjects: [] };
+    return { staffLinkId, subjects: [], notifications: [] };
+  }
+
+  // Fetch active / published internal exam notifications from exam database
+  const activeExams = await queryExam<
+    (RowDataPacket & {
+      id: number;
+      name: string;
+      type: string;
+      college: string | null;
+      course: string | null;
+      branch: string | null;
+      batch: string | null;
+      yearOfStudy: number | null;
+      semester: number | null;
+      examinationStartDate: string | null;
+      examinationEndDate: string | null;
+      applicationEndDate: string | null;
+      status: string;
+    })[]
+  >(
+    `
+    SELECT id, name, type, college, course, branch, batch, yearOfStudy, semester,
+           examinationStartDate, examinationEndDate, applicationEndDate, status
+    FROM exams
+    WHERE (examCategory = 'INTERNAL' OR (examCategory IS NULL AND (name LIKE '%Mid%' OR name LIKE '%Internal%')))
+      AND status IN ('published', 'approved', 'draft')
+    ORDER BY id DESC
+    `
+  ).catch(() => []);
+
+  function getMatchingExam(
+    courseName: string | null,
+    branchName: string | null,
+    year: number | null,
+    sem: number | null
+  ) {
+    if (!activeExams || activeExams.length === 0) return null;
+    const match = activeExams.find((e) => {
+      if (year != null && e.yearOfStudy != null && Number(e.yearOfStudy) !== Number(year)) {
+        return false;
+      }
+      if (sem != null && e.semester != null && Number(e.semester) !== Number(sem)) {
+        return false;
+      }
+      if (courseName && e.course) {
+        const c1 = courseName.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const c2 = e.course.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (!c1.includes(c2) && !c2.includes(c1)) return false;
+      }
+      if (branchName && e.branch) {
+        const b1 = branchName.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const branches = e.branch.toLowerCase().split(",").map((b) => b.replace(/[^a-z0-9]/g, "").trim());
+        const matchesBranch = branches.some((b) => b.length > 0 && (b1.includes(b) || b.includes(b1)));
+        if (!matchesBranch && branches.length > 0 && e.branch.trim() !== "") return false;
+      }
+      return true;
+    });
+    if (!match) return null;
+
+    const start = match.examinationStartDate ? String(match.examinationStartDate).split("T")[0] : null;
+    const end = match.examinationEndDate ? String(match.examinationEndDate).split("T")[0] : null;
+    const dates = start && end ? `${start} - ${end}` : start || end || "";
+    const deadline = match.applicationEndDate ? String(match.applicationEndDate).split("T")[0] : null;
+
+    return {
+      id: Number(match.id),
+      name: match.name,
+      type: match.type,
+      examDates: dates,
+      deadline,
+      status: match.status,
+    };
   }
 
   // Fetch subject details from exam database
@@ -1200,6 +1273,7 @@ export async function getFacultyAssignedSubjects(
       id: number;
       subject_id: number;
       branch_id: number;
+      section_name: string | null;
       status: InternalMarksStatus;
       current_approval_level: number;
       max_marks: number;
@@ -1207,7 +1281,7 @@ export async function getFacultyAssignedSubjects(
     })[]
   >(
     `
-    SELECT id, subject_id, branch_id, status, current_approval_level, max_marks, updated_at
+    SELECT id, subject_id, branch_id, section_name, status, current_approval_level, max_marks, updated_at
     FROM ap_internal_marks_submissions
     WHERE faculty_staff_link_id = ?
     `,
@@ -1249,51 +1323,73 @@ export async function getFacultyAssignedSubjects(
       staffLinkId
     );
 
-    const sub = submissions.find(
-      (s) =>
-        Number(s.subject_id) === Number(item.subjectId) &&
-        Number(s.branch_id) === Number(item.branchId)
-    );
-
     const defaultMaxMarks =
       item.internalMarks != null && Number(item.internalMarks) > 0
         ? Number(item.internalMarks)
         : 30;
-    let finalMaxMarks = sub ? Number(sub.max_marks) : defaultMaxMarks;
-    if (sub && (sub.status === "draft" || sub.status === "returned") && defaultMaxMarks !== 30 && finalMaxMarks === 30) {
-      finalMaxMarks = defaultMaxMarks;
-    }
 
-    results.push({
-      collegeId: item.collegeId,
-      collegeName: item.collegeName || "College",
-      courseId: item.courseId,
-      courseName: item.courseName || "Course",
-      branchId: item.branchId,
-      branchName: item.branchName || "Branch",
-      subjectId: item.subjectId,
-      subjectCode: item.code,
-      subjectName: item.name,
-      subjectType: item.type,
-      semester: item.semester,
-      year: item.yearOfStudy,
-      batch: item.batch || "",
-      sections: uniqueSections,
-      sectionName: uniqueSections.join(", "),
-      accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
-      accessLevel: acc.accessLevel,
-      submissionId: sub ? Number(sub.id) : null,
-      submissionStatus: sub ? sub.status : ("draft" as const),
-      currentApprovalLevel: sub ? Number(sub.current_approval_level) : 0,
-      maxMarks: finalMaxMarks,
-      lastUpdated: sub ? String(sub.updated_at) : null,
-    });
+    const examNotification = getMatchingExam(
+      item.courseName,
+      item.branchName,
+      item.yearOfStudy,
+      item.semester
+    );
+
+    // Each section is presented INDIVIDUALLY so faculty can view and post marks per section
+    const sectionsToIterate: (string | null)[] = uniqueSections.length > 0 ? uniqueSections : [null];
+
+    for (const sec of sectionsToIterate) {
+      const sub = submissions.find(
+        (s) =>
+          Number(s.subject_id) === Number(item.subjectId) &&
+          Number(s.branch_id) === Number(item.branchId) &&
+          ((!s.section_name && !sec) || s.section_name === sec)
+      );
+
+      let finalMaxMarks = sub ? Number(sub.max_marks) : defaultMaxMarks;
+      if (sub && (sub.status === "draft" || sub.status === "returned") && defaultMaxMarks !== 30 && finalMaxMarks === 30) {
+        finalMaxMarks = defaultMaxMarks;
+      }
+
+      results.push({
+        collegeId: item.collegeId,
+        collegeName: item.collegeName || "College",
+        courseId: item.courseId,
+        courseName: item.courseName || "Course",
+        branchId: item.branchId,
+        branchName: item.branchName || "Branch",
+        subjectId: item.subjectId,
+        subjectCode: item.code,
+        subjectName: item.name,
+        subjectType: item.type,
+        semester: item.semester,
+        year: item.yearOfStudy,
+        batch: item.batch || "",
+        sections: sec ? [sec] : [],
+        sectionName: sec || undefined,
+        examNotification,
+        accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
+        accessLevel: acc.accessLevel,
+        submissionId: sub ? Number(sub.id) : null,
+        submissionStatus: sub ? sub.status : ("draft" as const),
+        currentApprovalLevel: sub ? Number(sub.current_approval_level) : 0,
+        maxMarks: finalMaxMarks,
+        lastUpdated: sub ? String(sub.updated_at) : null,
+      });
+    }
   }
 
+  const mappedSubjectIds = new Set(examSubjects.map((s) => Number(s.subjectId)));
+
   // Fallback for any assigned subjects not present in subject_mapping_entries
-  const unmappedAssignments = assignments.filter(
-    (a) => !processedPairs.has(`${a.subject_id}-${a.branch_id}`)
-  );
+  // Exclude subjects that already belong to other mapped branches to avoid cross-branch duplicates from combined timetables
+  const unmappedAssignments = assignments.filter((a) => {
+    if (mappedSubjectIds.has(Number(a.subject_id))) {
+      return false;
+    }
+    return !processedPairs.has(`${a.subject_id}-${a.branch_id}`);
+  });
+
   if (unmappedAssignments.length > 0) {
     const missingSubjectIds = [...new Set(unmappedAssignments.map((a) => Number(a.subject_id)))];
     const missingBranchIds = [...new Set(unmappedAssignments.map((a) => Number(a.branch_id)))];
@@ -1339,7 +1435,8 @@ export async function getFacultyAssignedSubjects(
           `SELECT DISTINCT te.subject_id, tp.branch_id, tp.year_of_study, tp.semester_number, tp.batch
            FROM ap_timetable_entries te
            INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
-           WHERE te.faculty_staff_link_id = ? AND te.subject_id IN (${missingSubjectIds.map(() => "?").join(",")})`,
+           WHERE te.faculty_staff_link_id = ? AND te.subject_id IN (${missingSubjectIds.map(() => "?").join(",")})
+             AND (tp.status IS NULL OR tp.status NOT IN ('superseded', 'archived', 'cancelled'))`,
           [staffLinkId, ...missingSubjectIds]
         ),
       ]);
@@ -1380,56 +1477,89 @@ export async function getFacultyAssignedSubjects(
           staffLinkId
         );
 
-        const sub = submissions.find(
-          (s) =>
-            Number(s.subject_id) === Number(sObj.id) &&
-            Number(s.branch_id) === Number(bObj.branchId)
-        );
-
         const defaultMaxMarks =
           sObj.internalMarks != null && Number(sObj.internalMarks) > 0
             ? Number(sObj.internalMarks)
             : 30;
-        let finalMaxMarks = sub ? Number(sub.max_marks) : defaultMaxMarks;
-        if (sub && (sub.status === "draft" || sub.status === "returned") && defaultMaxMarks !== 30 && finalMaxMarks === 30) {
-          finalMaxMarks = defaultMaxMarks;
-        }
 
         const resolvedYear = planMeta?.year_of_study ?? sObj.yearOfStudy ?? null;
         const resolvedSem = planMeta?.semester_number ?? sObj.semester ?? null;
         const resolvedBatch = planMeta?.batch || "";
 
-        results.push({
-          collegeId: bObj.collegeId,
-          collegeName: bObj.collegeName || "College",
-          courseId: bObj.courseId,
-          courseName: bObj.courseName || "Course",
-          branchId: bObj.branchId,
-          branchName: bObj.branchName || "Branch",
-          subjectId: sObj.id,
-          subjectCode: sObj.code,
-          subjectName: sObj.name,
-          subjectType: sObj.type,
-          semester: resolvedSem,
-          year: resolvedYear,
-          batch: resolvedBatch,
-          sections: uniqueSections,
-          sectionName: uniqueSections.join(", "),
-          accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
-          accessLevel: acc.accessLevel,
-          submissionId: sub ? Number(sub.id) : null,
-          submissionStatus: sub ? sub.status : ("draft" as const),
-          currentApprovalLevel: sub ? Number(sub.current_approval_level) : 0,
-          maxMarks: finalMaxMarks,
-          lastUpdated: sub ? String(sub.updated_at) : null,
-        });
+        const examNotification = getMatchingExam(
+          bObj.courseName,
+          bObj.branchName,
+          resolvedYear,
+          resolvedSem
+        );
+
+        const sectionsToIterate: (string | null)[] = uniqueSections.length > 0 ? uniqueSections : [null];
+
+        for (const sec of sectionsToIterate) {
+          const sub = submissions.find(
+            (s) =>
+              Number(s.subject_id) === Number(sObj.id) &&
+              Number(s.branch_id) === Number(bObj.branchId) &&
+              ((!s.section_name && !sec) || s.section_name === sec)
+          );
+
+          let finalMaxMarks = sub ? Number(sub.max_marks) : defaultMaxMarks;
+          if (sub && (sub.status === "draft" || sub.status === "returned") && defaultMaxMarks !== 30 && finalMaxMarks === 30) {
+            finalMaxMarks = defaultMaxMarks;
+          }
+
+          results.push({
+            collegeId: bObj.collegeId,
+            collegeName: bObj.collegeName || "College",
+            courseId: bObj.courseId,
+            courseName: bObj.courseName || "Course",
+            branchId: bObj.branchId,
+            branchName: bObj.branchName || "Branch",
+            subjectId: sObj.id,
+            subjectCode: sObj.code,
+            subjectName: sObj.name,
+            subjectType: sObj.type,
+            semester: resolvedSem,
+            year: resolvedYear,
+            batch: resolvedBatch,
+            sections: sec ? [sec] : [],
+            sectionName: sec || undefined,
+            examNotification,
+            accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
+            accessLevel: acc.accessLevel,
+            submissionId: sub ? Number(sub.id) : null,
+            submissionStatus: sub ? sub.status : ("draft" as const),
+            currentApprovalLevel: sub ? Number(sub.current_approval_level) : 0,
+            maxMarks: finalMaxMarks,
+            lastUpdated: sub ? String(sub.updated_at) : null,
+          });
+        }
       }
     } catch {
       // Ignore unmapped fallback query failures
     }
   }
 
-  return { staffLinkId, subjects: results };
+  return {
+    staffLinkId,
+    subjects: results,
+    notifications: (activeExams || []).map((e) => {
+      const start = e.examinationStartDate ? String(e.examinationStartDate).split("T")[0] : null;
+      const end = e.examinationEndDate ? String(e.examinationEndDate).split("T")[0] : null;
+      return {
+        id: Number(e.id),
+        name: e.name,
+        type: e.type,
+        course: e.course,
+        branch: e.branch,
+        yearOfStudy: e.yearOfStudy != null ? Number(e.yearOfStudy) : null,
+        semester: e.semester != null ? Number(e.semester) : null,
+        examDates: start && end ? `${start} - ${end}` : start || end || "",
+        deadline: e.applicationEndDate ? String(e.applicationEndDate).split("T")[0] : null,
+        status: e.status,
+      };
+    }),
+  };
 }
 
 /** Fetch students and existing internal marks for entry */
@@ -1470,12 +1600,15 @@ export async function getStudentsForMarksEntry(params: {
       status: InternalMarksStatus;
       max_marks: number;
       current_approval_level: number;
+      exam_id: number | null;
     })[]
   >(
     `
-    SELECT id, status, max_marks, current_approval_level
+    SELECT id, status, max_marks, current_approval_level, exam_id
     FROM ap_internal_marks_submissions
     WHERE college_id = ? AND course_id = ? AND branch_id = ? AND subject_id = ? AND faculty_staff_link_id = ?
+      AND (section_name = ? OR (section_name IS NULL AND ? IS NULL))
+    ORDER BY id DESC
     LIMIT 1
     `,
     [
@@ -1484,11 +1617,14 @@ export async function getStudentsForMarksEntry(params: {
       params.branchId,
       params.subjectId,
       params.facultyStaffLinkId,
+      params.section || null,
+      params.section || null,
     ]
   );
 
   let submissionId: number | null = subRowsDb[0] ? Number(subRowsDb[0].id) : null;
   let status: InternalMarksStatus = subRowsDb[0] ? subRowsDb[0].status : "draft";
+  let examId: number | null = subRowsDb[0]?.exam_id ? Number(subRowsDb[0].exam_id) : null;
 
   const defaultMaxMarks =
     subjectMeta.internalMarks != null && Number(subjectMeta.internalMarks) > 0
@@ -1731,6 +1867,76 @@ export async function getStudentsForMarksEntry(params: {
     ...new Set(studentList.map((s) => s.sectionName).filter(Boolean)),
   ].sort();
 
+  // Match active exam notification for modal header
+  const activeExams = await queryExam<
+    (RowDataPacket & {
+      id: number;
+      name: string;
+      type: string;
+      college: string | null;
+      course: string | null;
+      branch: string | null;
+      yearOfStudy: number | null;
+      semester: number | null;
+      examinationStartDate: string | null;
+      examinationEndDate: string | null;
+      applicationEndDate: string | null;
+      status: string;
+    })[]
+  >(
+    `SELECT id, name, type, college, course, branch, yearOfStudy, semester,
+            examinationStartDate, examinationEndDate, applicationEndDate, status
+     FROM exams
+     WHERE (examCategory = 'INTERNAL' OR (examCategory IS NULL AND (name LIKE '%Mid%' OR name LIKE '%Internal%')))
+       AND status IN ('published', 'approved', 'draft')
+     ORDER BY id DESC`
+  ).catch(() => []);
+
+  const branchMeta = await queryStudent<
+    (RowDataPacket & { courseName: string; branchName: string })[]
+  >(
+    `SELECT c.name as courseName, cb.name as branchName
+     FROM course_branches cb
+     JOIN courses c ON c.id = cb.course_id
+     WHERE cb.id = ? LIMIT 1`,
+    [params.branchId]
+  ).catch(() => []);
+
+  const courseName = branchMeta[0]?.courseName || "";
+  const branchName = branchMeta[0]?.branchName || "";
+
+  const matchedExam = (activeExams || []).find((e) => {
+    if (examId != null && Number(e.id) === examId) return true;
+    if (targetYear != null && e.yearOfStudy != null && Number(e.yearOfStudy) !== Number(targetYear)) return false;
+    if (params.semester != null && e.semester != null && Number(e.semester) !== Number(params.semester)) return false;
+    if (courseName && e.course) {
+      const c1 = courseName.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const c2 = e.course.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (!c1.includes(c2) && !c2.includes(c1)) return false;
+    }
+    if (branchName && e.branch) {
+      const b1 = branchName.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const branches = e.branch.toLowerCase().split(",").map((b) => b.replace(/[^a-z0-9]/g, "").trim());
+      const matches = branches.some((b) => b.length > 0 && (b1.includes(b) || b.includes(b1)));
+      if (!matches && branches.length > 0 && e.branch.trim() !== "") return false;
+    }
+    return true;
+  });
+
+  const start = matchedExam?.examinationStartDate ? String(matchedExam.examinationStartDate).split("T")[0] : null;
+  const end = matchedExam?.examinationEndDate ? String(matchedExam.examinationEndDate).split("T")[0] : null;
+  const examDates = start && end ? `${start} - ${end}` : start || end || "";
+  const examNotification = matchedExam
+    ? {
+        id: Number(matchedExam.id),
+        name: matchedExam.name,
+        type: matchedExam.type,
+        examDates,
+        deadline: matchedExam.applicationEndDate ? String(matchedExam.applicationEndDate).split("T")[0] : null,
+        status: matchedExam.status,
+      }
+    : null;
+
   return {
     subjectId: params.subjectId,
     subjectCode: subjectMeta.code,
@@ -1742,6 +1948,8 @@ export async function getStudentsForMarksEntry(params: {
     uploadAccess: acc.isEnabled,
     accessLevel: acc.accessLevel,
     submissionId,
+    examId: examId ?? (examNotification ? examNotification.id : null),
+    examNotification,
     status,
     maxMarks,
     sections: uniqueSections,
@@ -1761,6 +1969,8 @@ export async function saveMarksDraft(
     academicYearLabel?: string;
     semesterNumber?: number;
     batch?: string;
+    section?: string;
+    examId?: number;
     maxMarks: number;
     entries: Array<{
       studentDbId: number;
@@ -1789,13 +1999,15 @@ export async function saveMarksDraft(
     );
   }
 
-  // 1. Ensure submission record exists
+  // 1. Ensure submission record exists (scoped by section and subject)
   const existingSub = await queryAcademic<
     (RowDataPacket & { id: number; status: InternalMarksStatus })[]
   >(
     `
     SELECT id, status FROM ap_internal_marks_submissions
     WHERE college_id = ? AND course_id = ? AND branch_id = ? AND subject_id = ? AND faculty_staff_link_id = ?
+      AND (section_name = ? OR (section_name IS NULL AND ? IS NULL))
+    ORDER BY id DESC
     LIMIT 1
     `,
     [
@@ -1804,6 +2016,8 @@ export async function saveMarksDraft(
       data.branchId,
       data.subjectId,
       data.facultyStaffLinkId,
+      data.section || null,
+      data.section || null,
     ]
   );
 
@@ -1817,15 +2031,20 @@ export async function saveMarksDraft(
       throw Object.assign(new Error("Cannot modify marks after approval"), { status: 400 });
     }
     await executeAcademic(
-      `UPDATE ap_internal_marks_submissions SET max_marks = ?, updated_at = NOW() WHERE id = ?`,
-      [data.maxMarks, submissionId]
+      `UPDATE ap_internal_marks_submissions
+       SET max_marks = ?,
+           exam_id = COALESCE(?, exam_id),
+           section_name = COALESCE(?, section_name),
+           updated_at = NOW()
+       WHERE id = ?`,
+      [data.maxMarks, data.examId ?? null, data.section ?? null, submissionId]
     );
   } else {
     const res = await executeAcademic(
       `
       INSERT INTO ap_internal_marks_submissions
-        (college_id, course_id, branch_id, subject_id, faculty_staff_link_id, academic_year_label, semester_number, batch, max_marks, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft')
+        (college_id, course_id, branch_id, subject_id, faculty_staff_link_id, academic_year_label, semester_number, batch, section_name, max_marks, status, exam_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?)
       `,
       [
         data.collegeId,
@@ -1836,7 +2055,9 @@ export async function saveMarksDraft(
         data.academicYearLabel ?? "2025-2026",
         data.semesterNumber ?? null,
         data.batch ?? null,
+        data.section ?? null,
         data.maxMarks,
+        data.examId ?? null,
       ]
     );
     submissionId = res.insertId;

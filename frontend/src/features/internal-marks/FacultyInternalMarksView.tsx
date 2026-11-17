@@ -56,6 +56,14 @@ type AssignedSubject = {
   batch: string;
   sections?: string[];
   sectionName?: string;
+  examNotification?: {
+    id: number;
+    name: string;
+    type?: string;
+    examDates: string;
+    deadline?: string | null;
+    status?: string;
+  } | null;
   accessStatus: "enabled" | "disabled";
   accessLevel: "college" | "course" | "branch" | "individual" | "none";
   submissionId: number | null;
@@ -215,11 +223,16 @@ export function FacultyInternalMarksView() {
   const [examDrilldownBranch, setExamDrilldownBranch] = useState<string>("all");
   const [expandedSubjectKeys, setExpandedSubjectKeys] = useState<Set<string>>(new Set());
 
+  // Filter and search state for My Assigned Subjects
+  const [assignedNotificationFilter, setAssignedNotificationFilter] = useState<string>("all");
+  const [assignedSearchQuery, setAssignedSearchQuery] = useState<string>("");
+  const [availableExams, setAvailableExams] = useState<Array<{ id: number; name: string; examDates: string }>>([]);
+
   const uniqueAssignedSubjects = useMemo(() => {
     const seen = new Set<string>();
     const list: AssignedSubject[] = [];
     for (const sub of assignedSubjects) {
-      const key = `${sub.branchId}-${sub.subjectId}`;
+      const key = `${sub.branchId}-${sub.subjectId}-${sub.sectionName || ""}`;
       if (!seen.has(key)) {
         seen.add(key);
         list.push(sub);
@@ -227,6 +240,27 @@ export function FacultyInternalMarksView() {
     }
     return list;
   }, [assignedSubjects]);
+
+  const filteredAssignedSubjects = useMemo(() => {
+    return uniqueAssignedSubjects.filter((sub) => {
+      if (assignedNotificationFilter !== "all") {
+        if (!sub.examNotification || String(sub.examNotification.id) !== assignedNotificationFilter) {
+          return false;
+        }
+      }
+      if (assignedSearchQuery.trim()) {
+        const q = assignedSearchQuery.toLowerCase().trim();
+        const mCode = (sub.subjectCode || "").toLowerCase().includes(q);
+        const mName = (sub.subjectName || "").toLowerCase().includes(q);
+        const mBranch = (sub.branchName || "").toLowerCase().includes(q);
+        const mCourse = (sub.courseName || "").toLowerCase().includes(q);
+        const mSec = (sub.sectionName || "").toLowerCase().includes(q);
+        const mExam = (sub.examNotification?.name || "").toLowerCase().includes(q);
+        if (!mCode && !mName && !mBranch && !mCourse && !mSec && !mExam) return false;
+      }
+      return true;
+    });
+  }, [uniqueAssignedSubjects, assignedNotificationFilter, assignedSearchQuery]);
 
   // Active modal for marks entry
   const [entryModal, setEntryModal] = useState<{
@@ -254,6 +288,9 @@ export function FacultyInternalMarksView() {
         const body = await res.json();
         setStaffLinkId(body.staffLinkId);
         setAssignedSubjects(body.subjects || []);
+        if (body.notifications) {
+          setAvailableExams(body.notifications);
+        }
       } else if (activeTab === "pending_approvals") {
         const [subRes, cfgRes] = await Promise.all([
           apiFetch("/internal-marks/submissions"),
@@ -696,114 +733,248 @@ export function FacultyInternalMarksView() {
               description="No subject assignments found for your faculty profile in the current academic term."
             />
           ) : (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {uniqueAssignedSubjects.map((sub) => {
-                const isUploadEnabled = sub.accessStatus === "enabled";
-                const isDraftOrReturn =
-                  sub.submissionStatus === "draft" ||
-                  sub.submissionStatus === "returned" ||
-                  sub.submissionStatus === "rejected";
+            <div className="space-y-4">
+              {/* Filter & Notification Header Bar */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-border shadow-2xs">
+                <div className="flex flex-wrap items-center gap-2 flex-1">
+                  <div className="relative flex-1 min-w-[200px] max-w-sm">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search subject code, name, section..."
+                      value={assignedSearchQuery}
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAssignedSearchQuery(e.target.value)}
+                      className="w-full pl-8 pr-3 py-1.5 text-xs rounded-md border border-border outline-none focus:border-brand-600 bg-white h-9"
+                    />
+                  </div>
 
-                return (
-                  <Card key={`${sub.branchId}-${sub.subjectId}`} className="flex flex-col justify-between p-4 space-y-4 hover:border-brand-300 transition shadow-xs">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-mono text-xs font-semibold uppercase text-brand-700 bg-brand-50 px-2 py-0.5 rounded">
-                            {sub.subjectCode}
-                          </span>
-                          <span className="font-semibold text-xs text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded">
-                            {sub.branchName}
-                          </span>
-                        </div>
-                        <StatusBadge status={sub.submissionStatus} />
-                      </div>
-
-                      <h3 className="font-semibold text-navy-900 text-base leading-snug">
-                        {sub.subjectName}
-                      </h3>
-
-                      <div className="text-xs text-slate-500 space-y-0.5">
-                        <div><span className="font-medium text-slate-700">College:</span> {sub.collegeName}</div>
-                        <div><span className="font-medium text-slate-700">Course & Branch:</span> {sub.courseName} • {sub.branchName}</div>
-                        {sub.year && sub.semester ? (
-                          <div><span className="font-medium text-slate-700">Year / Sem:</span> Year {sub.year}, Sem {sub.semester}</div>
-                        ) : null}
-                        {sub.sections && sub.sections.length > 0 ? (
-                          <div>
-                            <span className="font-medium text-slate-700">Sections:</span>{" "}
-                            <span className="font-semibold text-brand-700">
-                              {sub.sections.join(", ")}
-                              {sub.sections.length > 1 ? " (Merged / Multi-Section)" : ""}
-                            </span>
-                          </div>
-                        ) : null}
-                      </div>
-
-                      <div className="flex items-center justify-between pt-2 text-xs border-t border-border">
-                        <span className="text-slate-500">Upload Access:</span>
-                        {isUploadEnabled ? (
-                          <span className="inline-flex items-center gap-1 font-semibold text-green-700">
-                            <CheckCircle className="h-3.5 w-3.5" />
-                            Enabled ({sub.accessLevel})
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 font-semibold text-red-600">
-                            <Lock className="h-3.5 w-3.5" />
-                            Disabled
-                          </span>
-                        )}
-                      </div>
+                  {availableExams.length > 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-slate-500 font-medium hidden md:inline">Notification:</span>
+                      <select
+                        value={assignedNotificationFilter}
+                        onChange={(e) => setAssignedNotificationFilter(e.target.value)}
+                        className="rounded-md border border-border px-3 py-1.5 text-xs text-slate-700 bg-white shadow-2xs outline-none focus:border-brand-600 font-medium"
+                      >
+                        <option value="all">All Exam Notifications ({uniqueAssignedSubjects.length})</option>
+                        {availableExams.map((ex) => (
+                          <option key={ex.id} value={String(ex.id)}>
+                            {ex.name} {ex.examDates ? `(${ex.examDates})` : ""}
+                          </option>
+                        ))}
+                      </select>
                     </div>
+                  )}
+                </div>
 
-                    <div className="pt-2">
-                      {isUploadEnabled ? (
-                        canEdit && isDraftOrReturn ? (
-                          <Button
-                            className="w-full justify-center bg-brand-600 text-white hover:bg-brand-700"
-                            onClick={() =>
-                              setEntryModal({
-                                open: true,
-                                subject: sub,
-                                readOnly: false,
-                              })
-                            }
-                          >
-                            <Edit3 className="h-4 w-4 mr-1.5" />
-                            {sub.submissionStatus === "returned"
-                              ? "Correct & Resubmit Marks"
-                              : "Enter Marks"}
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="secondary"
-                            className="w-full justify-center"
-                            onClick={() =>
-                              setEntryModal({
-                                open: true,
-                                subject: sub,
-                                readOnly: true,
-                              })
-                            }
-                          >
-                            <Eye className="h-4 w-4 mr-1.5" />
-                            View Marks
-                          </Button>
-                        )
-                      ) : (
-                        <div className="flex items-center justify-center gap-1.5 rounded-md bg-slate-100 py-2 text-xs font-semibold text-slate-500">
-                          <Lock className="h-3.5 w-3.5" />
-                          No Upload Access
-                        </div>
-                      )}
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          )}
+                <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
+                  <span className="rounded-full bg-slate-100 text-slate-700 px-2.5 py-1 text-[11px] font-semibold">
+                    {filteredAssignedSubjects.length} of {uniqueAssignedSubjects.length} Subjects
+                  </span>
+                </div>
+              </div>
+
+              {filteredAssignedSubjects.length === 0 ? (
+                <EmptyState
+                  title="No matching subjects found"
+                  description="No assigned subjects match your current search query or exam notification filter."
+                />
+              ) : (
+                <Card className="overflow-hidden border border-border shadow-xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="bg-slate-50/80 border-b border-border text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                        <tr>
+                          <th className="px-3 py-3 w-10 text-center">#</th>
+                          <th className="px-4 py-3 min-w-[220px]">Exam Notification</th>
+                          <th className="px-4 py-3 min-w-[220px]">Subject & Code</th>
+                          <th className="px-4 py-3 min-w-[170px]">Course & Scope</th>
+                          <th className="px-3.5 py-3 text-center min-w-[110px]">Section</th>
+                          <th className="px-3.5 py-3 min-w-[130px]">Upload Access</th>
+                          <th className="px-3.5 py-3 min-w-[100px]">Status</th>
+                          <th className="px-4 py-3 text-right min-w-[140px]">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border bg-white">
+                        {filteredAssignedSubjects.map((sub, idx) => {
+                          const isUploadEnabled = sub.accessStatus === "enabled";
+                          const isDraftOrReturn =
+                            sub.submissionStatus === "draft" ||
+                            sub.submissionStatus === "returned" ||
+                            sub.submissionStatus === "rejected";
+
+                          return (
+                            <tr
+                              key={`${sub.branchId}-${sub.subjectId}-${sub.sectionName || ""}`}
+                              className="hover:bg-slate-50/70 transition-colors"
+                            >
+                              <td className="px-3 py-3.5 text-center font-medium text-slate-400 text-xs">
+                                {idx + 1}
+                              </td>
+
+                              {/* Col 1: Exam Notification */}
+                              <td className="px-4 py-3.5 align-middle">
+                                {sub.examNotification ? (
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <FileText className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                                      <span className="font-bold text-navy-900 text-xs leading-tight">
+                                        {sub.examNotification.name}
+                                      </span>
+                                      <span className="font-semibold text-[10px] uppercase bg-indigo-100 text-indigo-800 px-1.5 py-0.2 rounded border border-indigo-200">
+                                        {sub.examNotification.type || "INTERNAL"}
+                                      </span>
+                                    </div>
+                                    {sub.examNotification.examDates && (
+                                      <div className="text-[11px] text-slate-500 font-medium">
+                                        <span className="text-slate-400">Dates:</span> {sub.examNotification.examDates}
+                                      </div>
+                                    )}
+                                    {sub.examNotification.deadline && (
+                                      <div className="text-[10px] text-amber-700 font-medium">
+                                        Deadline: {sub.examNotification.deadline}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <div className="inline-flex items-center gap-1.5 text-slate-500 bg-slate-50 border border-slate-200 px-2 py-1 rounded text-[11px]">
+                                    <Bell className="h-3 w-3 text-slate-400" />
+                                    Regular Term Assessment
+                                  </div>
+                                )}
+                              </td>
+
+                              {/* Col 2: Subject & Code */}
+                              <td className="px-4 py-3.5 align-middle">
+                                <div className="space-y-1">
+                                  <div className="font-semibold text-navy-900 text-xs leading-snug">
+                                    {sub.subjectName}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-mono text-[11px] font-semibold text-brand-700 bg-brand-50 px-1.5 py-0.5 rounded border border-brand-200">
+                                      {sub.subjectCode}
+                                    </span>
+                                    {sub.subjectType && (
+                                      <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 uppercase font-medium">
+                                        {sub.subjectType}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+
+                              {/* Col 3: Course & Scope */}
+                              <td className="px-4 py-3.5 align-middle">
+                                <div className="space-y-0.5 text-xs text-slate-600">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[11px]">
+                                      {sub.branchName}
+                                    </span>
+                                    <span className="text-slate-700 font-medium">
+                                      {sub.courseName}
+                                    </span>
+                                  </div>
+                                  {sub.year && sub.semester ? (
+                                    <div className="text-[11px] text-slate-500">
+                                      Year {sub.year}, Sem {sub.semester}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              </td>
+
+                              {/* Col 4: Section */}
+                              <td className="px-3.5 py-3.5 align-middle text-center">
+                                {sub.sectionName ? (
+                                  <span className="inline-block font-bold text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded">
+                                    Section {sub.sectionName}
+                                  </span>
+                                ) : sub.sections && sub.sections.length > 0 ? (
+                                  <span className="inline-block font-bold text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
+                                    Section {sub.sections.join(", ")}
+                                  </span>
+                                ) : (
+                                  <span className="text-[11px] text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                                    All / Single
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Col 5: Upload Access */}
+                              <td className="px-3.5 py-3.5 align-middle">
+                                {isUploadEnabled ? (
+                                  <span className="inline-flex items-center gap-1 font-semibold text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200 px-2 py-1 rounded">
+                                    <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+                                    Enabled ({sub.accessLevel})
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 font-semibold text-xs text-red-600 bg-red-50/70 border border-red-200 px-2 py-1 rounded">
+                                    <Lock className="h-3.5 w-3.5 text-red-500" />
+                                    Disabled
+                                  </span>
+                                )}
+                              </td>
+
+                              {/* Col 6: Status */}
+                              <td className="px-3.5 py-3.5 align-middle">
+                                <StatusBadge status={sub.submissionStatus} />
+                              </td>
+
+                              {/* Col 7: Actions */}
+                              <td className="px-4 py-3.5 align-middle text-right">
+                                {isUploadEnabled ? (
+                                  canEdit && isDraftOrReturn ? (
+                                    <Button
+                                      size="sm"
+                                      className="bg-brand-600 text-white hover:bg-brand-700 font-medium text-xs shadow-xs"
+                                      onClick={() =>
+                                        setEntryModal({
+                                          open: true,
+                                          subject: sub,
+                                          readOnly: false,
+                                        })
+                                      }
+                                    >
+                                      <Edit3 className="h-3.5 w-3.5 mr-1" />
+                                      {sub.submissionStatus === "returned"
+                                        ? "Correct & Resubmit"
+                                        : "Enter Marks"}
+                                    </Button>
+                                  ) : (
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      className="font-medium text-xs"
+                                      onClick={() =>
+                                        setEntryModal({
+                                          open: true,
+                                          subject: sub,
+                                          readOnly: true,
+                                        })
+                                      }
+                                    >
+                                      <Eye className="h-3.5 w-3.5 mr-1" />
+                                      View Marks
+                                    </Button>
+                                  )
+                                ) : (
+                                  <div className="inline-flex items-center gap-1 text-slate-400 text-xs font-medium">
+                                    <Lock className="h-3 w-3" />
+                                    No Access
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
         </div>
       )}
+    </div>
+  )}
 
       {/* Tab 2: Pending Submissions & Approvals */}
       {activeTab === "pending_approvals" && (
@@ -1887,6 +2058,7 @@ export function FacultyInternalMarksView() {
           semester={"semester" in entryModal.subject ? entryModal.subject.semester : undefined}
           batch={"batch" in entryModal.subject ? entryModal.subject.batch : undefined}
           section={"sectionName" in entryModal.subject ? entryModal.subject.sectionName : undefined}
+          examNotification={"examNotification" in entryModal.subject ? entryModal.subject.examNotification : undefined}
           readOnly={entryModal.readOnly}
           onClose={() => setEntryModal({ open: false })}
           onSaved={() => void loadData()}

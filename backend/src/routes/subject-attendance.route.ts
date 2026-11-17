@@ -128,6 +128,11 @@ subjectAttendanceRouter.post(
         return;
       }
 
+      if (entries.length === 0) {
+        res.status(400).json({ message: "No student entries to save in attendance register" });
+        return;
+      }
+
       // Check scope gracefully without blocking faculty teaching across branches
       try {
         scopedFilters(req, { collegeId, branchId });
@@ -153,6 +158,11 @@ subjectAttendanceRouter.post(
         userId: authz.userId,
         entries,
       });
+
+      if (!saveResult.success) {
+        res.status(400).json(saveResult);
+        return;
+      }
 
       res.json(saveResult);
     } catch (error) {

@@ -152,10 +152,12 @@ export function SubjectAttendanceRegisterView() {
       if (res.entries && res.entries.length > 0) {
         for (const e of res.entries) {
           const key: EntryKey = `${e.studentDbId}_${e.subjectId}`;
-          newEntries.set(key, {
-            classesHeld: Number(e.classesHeld ?? 0),
-            classesPresent: Number(e.classesPresent ?? 0),
-          });
+          if (!newEntries.has(key)) {
+            newEntries.set(key, {
+              classesHeld: Number(e.classesHeld ?? 0),
+              classesPresent: Number(e.classesPresent ?? 0),
+            });
+          }
         }
       }
 
@@ -243,6 +245,11 @@ export function SubjectAttendanceRegisterView() {
 
   // Save Register Data
   const handleSave = async () => {
+    if (students.length === 0 || subjects.length === 0) {
+      setError("No students or subjects loaded to save.");
+      return;
+    }
+
     setSaving(true);
     setError(null);
     setSuccessMessage(null);
@@ -252,6 +259,9 @@ export function SubjectAttendanceRegisterView() {
       admissionNumber: string;
       pinNo: string;
       studentName: string;
+      sectionName?: string;
+      currentYear?: number;
+      currentSemester?: number;
       subjectId: number;
       classesHeld: number;
       classesPresent: number;
@@ -266,6 +276,9 @@ export function SubjectAttendanceRegisterView() {
           admissionNumber: student.admissionNumber,
           pinNo: student.pinNo,
           studentName: student.studentName,
+          sectionName: student.sectionName || section || "",
+          currentYear: student.currentYear ?? (filters.year !== "all" ? Number(filters.year) : 1),
+          currentSemester: student.currentSemester ?? (filters.semester !== "all" ? Number(filters.semester) : 1),
           subjectId: subject.subjectId,
           classesHeld: data.classesHeld,
           classesPresent: data.classesPresent,
@@ -274,17 +287,23 @@ export function SubjectAttendanceRegisterView() {
     }
 
     try {
+      const targetCollegeId = Number(collegeId) || 1;
+      const targetCourseId = Number(courseId) || (selectedBranch?.courseId ?? 1);
+      const targetBranchId = Number(branchId) || 1;
+      const targetYear = filters.year !== "all" ? Number(filters.year) : (students[0]?.currentYear ?? year);
+      const targetSemester = filters.semester !== "all" ? Number(filters.semester) : (students[0]?.currentSemester ?? semester);
+
       const response = await apiFetch("/subject-attendance/save", {
         method: "POST",
         body: JSON.stringify({
-          collegeId: collegeId || 1,
-          courseId: courseId || 1,
-          branchId: branchId || 1,
+          collegeId: targetCollegeId,
+          courseId: targetCourseId,
+          branchId: targetBranchId,
           academicYear,
-          year,
-          semester,
-          section,
-          batch,
+          year: targetYear,
+          semester: targetSemester,
+          section: section || "",
+          batch: batch || "",
           entries: payloadEntries,
         }),
       });
@@ -294,13 +313,16 @@ export function SubjectAttendanceRegisterView() {
         throw new Error(errData?.message || `Save failed (${response.status})`);
       }
 
-      const res = (await response.json()) as { success: boolean; count: number };
+      const res = (await response.json()) as { success: boolean; count: number; message?: string };
 
-      if (res.success) {
-        setDirty(false);
-        setSuccessMessage(`Successfully saved ${res.count || payloadEntries.length} student attendance entries!`);
-        setTimeout(() => setSuccessMessage(null), 5000);
+      if (!res.success) {
+        throw new Error(res.message || "Failed to save attendance register to server.");
       }
+
+      setDirty(false);
+      setSuccessMessage(`Successfully saved ${res.count || payloadEntries.length} student attendance entries!`);
+      setTimeout(() => setSuccessMessage(null), 5000);
+      await loadRegisterData();
     } catch (err) {
       console.error("Save failed:", err);
       setError(err instanceof Error ? err.message : "Failed to save attendance register to server.");

@@ -7,7 +7,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { LoadingAnimation } from "@/components/ui/LoadingAnimation";
 import { TableSkeleton } from "@/components/ui/TableSkeleton";
 import { apiFetch } from "@/lib/api";
-import { Check, Save, Send, AlertCircle, Search, Filter } from "lucide-react";
+import { Check, Save, Send, AlertCircle, Search, Filter, FileText } from "lucide-react";
 
 type StudentEntry = {
   studentDbId: number;
@@ -34,6 +34,13 @@ type Props = {
   semester?: number | null;
   batch?: string | null;
   section?: string | null;
+  examNotification?: {
+    id: number;
+    name: string;
+    type?: string;
+    examDates?: string;
+    deadline?: string | null;
+  } | null;
   readOnly?: boolean;
   onClose: () => void;
   onSaved?: () => void;
@@ -53,6 +60,7 @@ export function InternalMarksEntryModal({
   semester,
   batch,
   section,
+  examNotification,
   readOnly = false,
   onClose,
   onSaved,
@@ -62,6 +70,7 @@ export function InternalMarksEntryModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [examMeta, setExamMeta] = useState(examNotification || null);
 
   const [maxMarks, setMaxMarks] = useState<number>(30);
   const [submissionId, setSubmissionId] = useState<number | null>(null);
@@ -191,6 +200,9 @@ export function InternalMarksEntryModal({
         setSubmissionId(data.submissionId);
         setStatus(data.status || "draft");
         setUploadAccess(data.uploadAccess !== false);
+        if (data.examNotification) {
+          setExamMeta(data.examNotification);
+        }
 
         // Deduplicate students by studentDbId to guarantee no double counts
         const rawStudents: StudentEntry[] = data.students || [];
@@ -289,6 +301,8 @@ export function InternalMarksEntryModal({
           maxMarks,
           semesterNumber: semester ?? null,
           batch: batch ?? null,
+          section: section ?? null,
+          examId: examMeta?.id ?? null,
           entries: entriesPayload,
         }),
       });
@@ -366,6 +380,28 @@ export function InternalMarksEntryModal({
           <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 p-2.5 sm:p-3 text-[11px] sm:text-xs text-amber-900 font-medium">
             <AlertCircle className="h-4 w-4 shrink-0 text-amber-600" />
             <span>Internal marks posting is currently disabled/locked for this subject by administration. Marks can only be viewed in read-only mode.</span>
+          </div>
+        )}
+
+        {/* Exam Notification Banner */}
+        {examMeta && (
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 rounded-lg bg-indigo-50/80 border border-indigo-200 px-3 py-2 text-xs text-indigo-950">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-indigo-900 flex items-center gap-1.5">
+                <FileText className="h-4 w-4 text-indigo-600 shrink-0" />
+                Exam Notification:
+              </span>
+              <span className="font-semibold text-indigo-800">{examMeta.name}</span>
+              <span className="font-semibold text-[10px] uppercase bg-indigo-200/80 text-indigo-900 px-1.5 py-0.5 rounded">
+                {examMeta.type || "INTERNAL"}
+              </span>
+            </div>
+            {examMeta.examDates && (
+              <div className="text-[11px] text-indigo-700 font-medium">
+                Dates: {examMeta.examDates}
+                {examMeta.deadline ? ` • Deadline: ${examMeta.deadline}` : ""}
+              </div>
+            )}
           </div>
         )}
 
