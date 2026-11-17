@@ -13,6 +13,7 @@ type StudentEntry = {
   studentDbId: number;
   admissionNumber: string;
   rollNumber: string;
+  pinNo?: string | null;
   studentName: string;
   sectionName: string;
   marksObtained: number | null;
@@ -98,7 +99,7 @@ export function InternalMarksEntryModal({
   }, [students]);
 
   const displayedStudents = useMemo(() => {
-    return students.filter((st) => {
+    const list = students.filter((st) => {
       if (filterSection !== "all") {
         const stSec = (st.sectionName || "").trim().toUpperCase();
         if (filterSection.includes(",")) {
@@ -116,6 +117,43 @@ export function InternalMarksEntryModal({
         if (!mRoll && !mAdm && !mName) return false;
       }
       return true;
+    });
+
+    // Ensure students are strictly sorted by PIN number in natural alphanumeric order
+    return list.slice().sort((a, b) => {
+      const isRealPin = (val?: string | null) =>
+        Boolean(
+          val &&
+            val.trim() !== "" &&
+            val.trim() !== "-" &&
+            val.trim().toLowerCase() !== "na" &&
+            val.trim().toLowerCase() !== "null"
+        );
+
+      const pinA = isRealPin(a.pinNo)
+        ? a.pinNo!.trim()
+        : isRealPin(a.rollNumber) && a.rollNumber !== a.admissionNumber
+        ? a.rollNumber.trim()
+        : null;
+
+      const pinB = isRealPin(b.pinNo)
+        ? b.pinNo!.trim()
+        : isRealPin(b.rollNumber) && b.rollNumber !== b.admissionNumber
+        ? b.rollNumber.trim()
+        : null;
+
+      // Students with valid registered PIN numbers come first
+      if (pinA && !pinB) return -1;
+      if (!pinA && pinB) return 1;
+
+      if (pinA && pinB) {
+        return pinA.localeCompare(pinB, undefined, { numeric: true, sensitivity: "base" });
+      }
+
+      // If neither has a PIN number, order by admission number
+      const admA = (a.admissionNumber || a.rollNumber || "").trim();
+      const admB = (b.admissionNumber || b.rollNumber || "").trim();
+      return admA.localeCompare(admB, undefined, { numeric: true, sensitivity: "base" });
     });
   }, [students, filterSection, searchQuery]);
 

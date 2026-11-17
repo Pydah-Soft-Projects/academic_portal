@@ -28,6 +28,7 @@ import {
   getApprovalConfigs,
   saveApprovalConfigs,
   getInternalMarksAuditLogs,
+  getInternalMarksPendingReport,
   type AccessLevel,
   type InternalMarksStatus,
 } from "../services/internal-marks.service.js";
@@ -218,6 +219,39 @@ internalMarksRouter.get(
         req.authUser.id,
         req.authUser.hrmsEmployeeId
       );
+
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/** Pending Internal Marks & Notification Progress Report */
+internalMarksRouter.get(
+  "/pending-report",
+  requirePermission("internal_marks.view"),
+  async (req: AuthedRequest, res, next) => {
+    try {
+      const collegeId = num(req.query.collegeId);
+      const courseId = num(req.query.courseId);
+      const branchId = num(req.query.branchId);
+      const year = num(req.query.year);
+      const semester = num(req.query.semester);
+      const examId = num(req.query.examId);
+      const statusFilter = str(req.query.status);
+
+      const scoped = scopedFilters(req, { collegeId, branchId });
+
+      const result = await getInternalMarksPendingReport({
+        collegeId: scoped.collegeId ?? collegeId,
+        courseId,
+        branchId: scoped.branchId ?? branchId,
+        year,
+        semester,
+        examId,
+        statusFilter: statusFilter as "all" | "pending" | "posted" | undefined,
+      });
 
       res.json(result);
     } catch (error) {

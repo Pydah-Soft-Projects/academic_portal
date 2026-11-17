@@ -1569,7 +1569,13 @@ export async function getStudentsForMarksEntry(params: {
     LEFT JOIN student_sections ss ON ss.student_id = s.id
     WHERE ${whereStud.join(" AND ")}
     GROUP BY s.id, s.admission_number, s.pin_no, s.student_name
-    ORDER BY COALESCE(s.pin_no, s.admission_number) ASC
+    ORDER BY
+      CASE 
+        WHEN s.pin_no IS NOT NULL AND TRIM(s.pin_no) != '' AND TRIM(s.pin_no) != '-' THEN 0 
+        ELSE 1 
+      END ASC,
+      TRIM(s.pin_no) ASC,
+      TRIM(s.admission_number) ASC
     LIMIT 1000
     `,
     paramsStud
@@ -1598,7 +1604,13 @@ export async function getStudentsForMarksEntry(params: {
       WHERE s.college_id = ? AND s.course_id = ? AND s.branch_id = ?
         AND (s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))
       GROUP BY s.id, s.admission_number, s.pin_no, s.student_name
-      ORDER BY COALESCE(s.pin_no, s.admission_number) ASC
+      ORDER BY
+        CASE 
+          WHEN s.pin_no IS NOT NULL AND TRIM(s.pin_no) != '' AND TRIM(s.pin_no) != '-' THEN 0 
+          ELSE 1 
+        END ASC,
+        TRIM(s.pin_no) ASC,
+        TRIM(s.admission_number) ASC
       LIMIT 1000
       `,
       [params.collegeId, params.courseId, params.branchId]
@@ -1617,15 +1629,37 @@ export async function getStudentsForMarksEntry(params: {
 
   const studentList = uniqueStudentRows.map((st) => {
     const prev = existingEntries.get(st.id);
+    const validPin =
+      st.pin_no &&
+      st.pin_no.trim() !== "" &&
+      st.pin_no.trim() !== "-" &&
+      st.pin_no.trim().toLowerCase() !== "na" &&
+      st.pin_no.trim().toLowerCase() !== "null"
+        ? st.pin_no.trim()
+        : null;
+
     return {
       studentDbId: st.id,
       admissionNumber: st.admission_number,
-      rollNumber: st.pin_no || st.admission_number,
+      rollNumber: validPin || st.admission_number,
+      pinNo: validPin,
       studentName: st.student_name || "Student",
       sectionName: st.section_name || "",
       marksObtained: prev ? prev.marks : null,
       remarks: prev ? prev.remarks : "",
     };
+  });
+
+  // Ensure strict natural PIN number order across students
+  studentList.sort((a, b) => {
+    const hasPinA = Boolean(a.pinNo);
+    const hasPinB = Boolean(b.pinNo);
+    if (hasPinA && !hasPinB) return -1;
+    if (!hasPinA && hasPinB) return 1;
+
+    const valA = (a.pinNo || a.admissionNumber || "").trim();
+    const valB = (b.pinNo || b.admissionNumber || "").trim();
+    return valA.localeCompare(valB, undefined, { numeric: true, sensitivity: "base" });
   });
 
   const uniqueSections = [
@@ -2646,4 +2680,575 @@ export async function getInternalMarksAuditLogs(filters?: {
     details: r.details_json,
     createdAt: String(r.created_at),
   }));
+}
+
+export type ExamNotificationItem = {
+  id: number;
+  name: string;
+  type: string;
+  examCategory: string;
+  college: string | null;
+  course: string | null;
+  branch: string | null;
+  batch: string | null;
+  yearOfStudy: number | null;
+  semester: number | null;
+  status: string;
+  examinationStartDate: string | null;
+  examinationEndDate: string | null;
+  applicationStartDate: string | null;
+  applicationEndDate: string | null;
+  publishedAt: string | null;
+  subjectCount?: number;
+  postedCount?: number;
+  pendingCount?: number;
+  progressPercent?: number;
+};
+
+export type PendingReportSubjectItem = {
+  collegeId: number;
+  collegeName: string;
+  courseId: number;
+  courseName: string;
+  branchId: number;
+  branchName: string;
+  subjectId: number;
+  subjectCode: string;
+  subjectName: string;
+  subjectType: string;
+  year: number | null;
+  semester: number | null;
+  sections: string[];
+  sectionBreakdown: Array<{
+    sectionName: string;
+    assignedFaculty: Array<{
+      staffLinkId: number;
+      displayName: string;
+      employeeCode: string | null;
+      departmentName: string | null;
+    }>;
+    postingStatus: "pending" | "posted";
+    submission: {
+      id: number;
+      status: string;
+      maxMarks: number;
+      updatedAt: string;
+      submittedAt: string | null;
+      studentCount: number;
+    } | null;
+  }>;
+  assignedFaculty: Array<{
+    staffLinkId: number;
+    displayName: string;
+    employeeCode: string | null;
+    departmentName: string | null;
+  }>;
+  postingStatus: "pending" | "posted";
+  submission: {
+    id: number;
+    status: string;
+    maxMarks: number;
+    updatedAt: string;
+    submittedAt: string | null;
+    studentCount: number;
+  } | null;
+  matchingExams: Array<{
+    id: number;
+    name: string;
+    examCategory: string;
+    startDate: string | null;
+    endDate: string | null;
+  }>;
+};
+
+export async function getInternalMarksPendingReport(filters: {
+  collegeId?: number;
+  courseId?: number;
+  branchId?: number;
+  year?: number;
+  semester?: number;
+  examId?: number;
+  statusFilter?: "all" | "pending" | "posted";
+}): Promise<{
+  summary: {
+    totalSubjects: number;
+    postedCount: number;
+    pendingCount: number;
+    completionPercentage: number;
+  };
+  notifications: ExamNotificationItem[];
+  subjects: PendingReportSubjectItem[];
+}> {
+  await ensureInternalMarksSchema();
+
+  // 1. Fetch published exams (notifications)
+  const examRows = await queryExam<
+    (RowDataPacket & {
+      id: number;
+      name: string;
+      type: string;
+      regulationId: number | null;
+      college: string | null;
+      course: string | null;
+      branch: string | null;
+      batch: string | null;
+      yearOfStudy: number | null;
+      semester: number | null;
+      status: string;
+      examinationStartDate: string | null;
+      examinationEndDate: string | null;
+      applicationStartDate: string | null;
+      applicationEndDate: string | null;
+      publishedAt: string | null;
+      examCategory: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      id, name, type, regulationId, college, course, branch, batch,
+      yearOfStudy, semester, status, examinationStartDate, examinationEndDate,
+      applicationStartDate, applicationEndDate, publishedAt, examCategory
+    FROM exams
+    WHERE (examCategory = 'INTERNAL' OR (examCategory IS NULL AND (name LIKE '%Mid%' OR name LIKE '%Internal%')))
+      AND (status = 'published' OR status = 'approved' OR status = 'draft')
+    ORDER BY id DESC
+    LIMIT 30
+    `
+  );
+
+  const notifications: ExamNotificationItem[] = examRows.map((e) => ({
+    id: Number(e.id),
+    name: e.name,
+    type: e.type,
+    examCategory: e.examCategory || "INTERNAL",
+    college: e.college,
+    course: e.course,
+    branch: e.branch,
+    batch: e.batch,
+    yearOfStudy: e.yearOfStudy != null ? Number(e.yearOfStudy) : null,
+    semester: e.semester != null ? Number(e.semester) : null,
+    status: e.status,
+    examinationStartDate: e.examinationStartDate ? String(e.examinationStartDate).split("T")[0] : null,
+    examinationEndDate: e.examinationEndDate ? String(e.examinationEndDate).split("T")[0] : null,
+    applicationStartDate: e.applicationStartDate ? String(e.applicationStartDate).split("T")[0] : null,
+    applicationEndDate: e.applicationEndDate ? String(e.applicationEndDate).split("T")[0] : null,
+    publishedAt: e.publishedAt ? String(e.publishedAt).split("T")[0] : null,
+  }));
+
+  // Selected exam for targeted filtering
+  let targetExam: ExamNotificationItem | undefined;
+  if (filters.examId) {
+    targetExam = notifications.find((n) => n.id === filters.examId);
+  }
+
+  // 2. Query mapped curriculum subjects
+  const whereExam: string[] = ["1=1"];
+  const paramsExam: unknown[] = [];
+
+  if (filters.collegeId) {
+    whereExam.push("sme.collegeId = ?");
+    paramsExam.push(filters.collegeId);
+  }
+  if (filters.courseId) {
+    whereExam.push("sme.courseId = ?");
+    paramsExam.push(filters.courseId);
+  }
+  if (filters.branchId) {
+    whereExam.push("sme.branchId = ?");
+    paramsExam.push(filters.branchId);
+  }
+  if (filters.year) {
+    whereExam.push("sme.yearOfStudy = ?");
+    paramsExam.push(filters.year);
+  } else if (targetExam?.yearOfStudy) {
+    whereExam.push("sme.yearOfStudy = ?");
+    paramsExam.push(targetExam.yearOfStudy);
+  }
+  if (filters.semester) {
+    whereExam.push("sme.semester = ?");
+    paramsExam.push(filters.semester);
+  } else if (targetExam?.semester) {
+    whereExam.push("sme.semester = ?");
+    paramsExam.push(targetExam.semester);
+  }
+
+  const subjectRows = await queryExam<
+    (RowDataPacket & {
+      collegeId: number;
+      collegeName: string | null;
+      courseId: number;
+      courseName: string | null;
+      branchId: number;
+      branchName: string | null;
+      subjectId: number;
+      subjectCode: string;
+      subjectName: string;
+      subjectType: string;
+      year: number | null;
+      semester: number | null;
+    })[]
+  >(
+    `
+    SELECT
+      sme.collegeId,
+      MAX(sme.collegeName) AS collegeName,
+      sme.courseId,
+      MAX(sme.courseName) AS courseName,
+      sme.branchId,
+      MAX(sme.branchName) AS branchName,
+      sme.subjectId,
+      MAX(s.code) AS subjectCode,
+      MAX(s.name) AS subjectName,
+      MAX(s.type) AS subjectType,
+      MAX(sme.yearOfStudy) AS year,
+      MAX(sme.semester) AS semester
+    FROM subject_mapping_entries sme
+    INNER JOIN subjects s ON s.id = sme.subjectId
+    WHERE ${whereExam.join(" AND ")}
+    GROUP BY
+      sme.collegeId,
+      sme.courseId,
+      sme.branchId,
+      sme.subjectId
+    ORDER BY collegeName, courseName, branchName, year, semester, subjectCode
+    `,
+    paramsExam
+  );
+
+  // 3. Query faculty assignments from academic DB (including sections)
+  const facultyRows = await queryAcademic<
+    (RowDataPacket & {
+      subject_id: number;
+      branch_id: number;
+      staff_link_id: number;
+      display_name: string;
+      employee_code: string | null;
+      department_name: string | null;
+      section_name: string | null;
+    })[]
+  >(
+    `
+    SELECT DISTINCT
+      te.subject_id,
+      tp.branch_id,
+      sl.id AS staff_link_id,
+      sl.display_name,
+      sl.employee_code,
+      sl.department_name,
+      tp.section_name
+    FROM ap_timetable_entries te
+    INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
+    INNER JOIN ap_staff_link sl ON sl.id = te.faculty_staff_link_id
+    WHERE te.subject_id IS NOT NULL
+    UNION
+    SELECT DISTINCT
+      fa.subject_id,
+      fa.branch_id,
+      sl.id AS staff_link_id,
+      sl.display_name,
+      sl.employee_code,
+      sl.department_name,
+      fa.section_name
+    FROM ap_faculty_assignments fa
+    INNER JOIN ap_staff_link sl ON sl.id = fa.faculty_staff_link_id
+    `
+  );
+
+  // Query distinct branch timetable sections
+  const branchSectionsRows = await queryAcademic<
+    (RowDataPacket & {
+      branch_id: number;
+      year_of_study: number | null;
+      semester_number: number | null;
+      section_name: string;
+    })[]
+  >(
+    `
+    SELECT DISTINCT branch_id, year_of_study, semester_number, section_name
+    FROM ap_timetable_plans
+    WHERE section_name IS NOT NULL AND TRIM(section_name) != ''
+    `
+  );
+
+  const branchSectionMap = new Map<string, string[]>();
+  for (const b of branchSectionsRows) {
+    const key = `${b.branch_id}-${b.year_of_study}-${b.semester_number}`;
+    if (!branchSectionMap.has(key)) {
+      branchSectionMap.set(key, []);
+    }
+    const list = branchSectionMap.get(key)!;
+    const sName = String(b.section_name).trim().toUpperCase();
+    if (!list.includes(sName)) {
+      list.push(sName);
+    }
+  }
+
+  // Map faculty by `${subjectId}-${branchId}`
+  const facultyMap = new Map<
+    string,
+    Array<{
+      staffLinkId: number;
+      displayName: string;
+      employeeCode: string | null;
+      departmentName: string | null;
+    }>
+  >();
+
+  for (const f of facultyRows) {
+    const key = `${f.subject_id}-${f.branch_id}`;
+    if (!facultyMap.has(key)) {
+      facultyMap.set(key, []);
+    }
+    const list = facultyMap.get(key)!;
+    if (!list.some((existing) => existing.staffLinkId === Number(f.staff_link_id))) {
+      list.push({
+        staffLinkId: Number(f.staff_link_id),
+        displayName: f.display_name,
+        employeeCode: f.employee_code,
+        departmentName: f.department_name,
+      });
+    }
+  }
+
+  // 4. Query submissions from academic DB
+  const subRows = await queryAcademic<
+    (RowDataPacket & {
+      id: number;
+      college_id: number;
+      course_id: number;
+      branch_id: number;
+      subject_id: number;
+      section_name: string | null;
+      status: string;
+      max_marks: number;
+      updated_at: string;
+      submitted_at: string | null;
+    })[]
+  >(
+    `
+    SELECT
+      id,
+      college_id,
+      course_id,
+      branch_id,
+      subject_id,
+      section_name,
+      status,
+      max_marks,
+      updated_at,
+      updated_at AS submitted_at
+    FROM ap_internal_marks_submissions
+    `
+  );
+
+  const subMap = new Map<string, typeof subRows[0]>();
+  for (const s of subRows) {
+    const key = `${s.college_id}-${s.course_id}-${s.branch_id}-${s.subject_id}`;
+    subMap.set(key, s);
+  }
+
+  // Count student entries for submitted packages
+  const entryCountRows = await queryAcademic<
+    (RowDataPacket & {
+      submission_id: number;
+      cnt: number;
+    })[]
+  >(
+    `
+    SELECT submission_id, COUNT(*) AS cnt
+    FROM ap_internal_marks_entries
+    GROUP BY submission_id
+    `
+  );
+  const entryCountMap = new Map<number, number>(
+    entryCountRows.map((e) => [Number(e.submission_id), Number(e.cnt)])
+  );
+
+  // 5. Assemble items
+  const allItems: PendingReportSubjectItem[] = [];
+
+  for (const s of subjectRows) {
+    const subKey = `${s.collegeId}-${s.courseId}-${s.branchId}-${s.subjectId}`;
+    const facKey = `${s.subjectId}-${s.branchId}`;
+    const assignedFac = facultyMap.get(facKey) || [];
+    const sub = subMap.get(subKey);
+
+    const isPosted =
+      sub != null &&
+      ["submitted", "pending_approval", "approved", "forwarded_to_ems"].includes(
+        sub.status
+      );
+
+    // Find matching exams for this subject (strictly match course, term, and branch)
+    const matching = notifications.filter((ex) => {
+      // 1. Strict Course Match (e.g. B.Tech must not match M.Tech or Diploma)
+      if (ex.course && s.courseName) {
+        const normEx = ex.course.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+        const normS = s.courseName.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (normEx !== normS) return false;
+      }
+
+      // 2. Year & Semester Match
+      const matchYear = ex.yearOfStudy == null || Number(ex.yearOfStudy) === Number(s.year);
+      if (!matchYear) return false;
+
+      const matchSem = ex.semester == null || Number(ex.semester) === Number(s.semester);
+      if (!matchSem) return false;
+
+      // 3. Strict Branch Match against the notification's branch list
+      if (ex.branch && s.branchName) {
+        const targetBranches = ex.branch
+          .split(",")
+          .map((b) => b.trim().toLowerCase().replace(/[^a-z0-9]/g, ""))
+          .filter(Boolean);
+        const subBranch = s.branchName.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (!targetBranches.some((tb) => tb === subBranch)) return false;
+      }
+      return true;
+    });
+
+    // If targetExam specified, check if subject matches it
+    if (targetExam) {
+      const matchesTarget = matching.some((m) => m.id === targetExam!.id);
+      if (!matchesTarget) {
+        continue;
+      }
+    }
+
+    const postingStatus: "pending" | "posted" = isPosted ? "posted" : "pending";
+
+    // Status filter
+    if (filters.statusFilter && filters.statusFilter !== "all") {
+      if (filters.statusFilter !== postingStatus) {
+        continue;
+      }
+    }
+
+    // Compute sections and section-wise breakdown
+    const branchKey = `${s.branchId}-${s.year}-${s.semester}`;
+    const knownSections = branchSectionMap.get(branchKey) || [];
+
+    const subjectFacultyRows = facultyRows.filter(
+      (f) => Number(f.subject_id) === Number(s.subjectId) && Number(f.branch_id) === Number(s.branchId)
+    );
+    const facultySections = subjectFacultyRows
+      .map((f) => (f.section_name ? String(f.section_name).trim().toUpperCase() : ""))
+      .filter(Boolean);
+
+    const mergedSec = Array.from(new Set([...knownSections, ...facultySections])).sort();
+    const finalSections = mergedSec.length > 0 ? mergedSec : ["A"];
+
+    const sectionBreakdown = finalSections.map((sec) => {
+      const secFacultyRows = subjectFacultyRows.filter(
+        (f) => !f.section_name || String(f.section_name).trim().toUpperCase() === sec
+      );
+      const uniqueFac: typeof assignedFac = [];
+      for (const f of secFacultyRows) {
+        if (!uniqueFac.some((u) => u.staffLinkId === Number(f.staff_link_id))) {
+          uniqueFac.push({
+            staffLinkId: Number(f.staff_link_id),
+            displayName: f.display_name,
+            employeeCode: f.employee_code,
+            departmentName: f.department_name,
+          });
+        }
+      }
+      const finalFac = uniqueFac.length > 0 ? uniqueFac : assignedFac;
+
+      const subForSec = subRows.find(
+        (subItem) =>
+          Number(subItem.college_id) === Number(s.collegeId) &&
+          Number(subItem.course_id) === Number(s.courseId) &&
+          Number(subItem.branch_id) === Number(s.branchId) &&
+          Number(subItem.subject_id) === Number(s.subjectId) &&
+          ((subItem.section_name && String(subItem.section_name).trim().toUpperCase() === sec) ||
+            (!subItem.section_name && (sec === "A" || finalSections.length === 1)))
+      );
+
+      const isSecPosted =
+        subForSec != null &&
+        ["submitted", "pending_approval", "approved", "forwarded_to_ems"].includes(
+          subForSec.status
+        );
+
+      return {
+        sectionName: sec,
+        assignedFaculty: finalFac,
+        postingStatus: (isSecPosted ? "posted" : "pending") as "pending" | "posted",
+        submission: subForSec
+          ? {
+              id: Number(subForSec.id),
+              status: subForSec.status,
+              maxMarks: Number(subForSec.max_marks),
+              updatedAt: String(subForSec.updated_at),
+              submittedAt: subForSec.submitted_at ? String(subForSec.submitted_at) : null,
+              studentCount: entryCountMap.get(Number(subForSec.id)) || 0,
+            }
+          : null,
+      };
+    });
+
+    allItems.push({
+      collegeId: Number(s.collegeId),
+      collegeName: s.collegeName || "Unknown College",
+      courseId: Number(s.courseId),
+      courseName: s.courseName || "Unknown Course",
+      branchId: Number(s.branchId),
+      branchName: s.branchName || "Unknown Branch",
+      subjectId: Number(s.subjectId),
+      subjectCode: s.subjectCode,
+      subjectName: s.subjectName,
+      subjectType: s.subjectType,
+      year: s.year != null ? Number(s.year) : null,
+      semester: s.semester != null ? Number(s.semester) : null,
+      sections: finalSections,
+      sectionBreakdown,
+      assignedFaculty: assignedFac,
+      postingStatus,
+      submission: sub
+        ? {
+            id: Number(sub.id),
+            status: sub.status,
+            maxMarks: Number(sub.max_marks),
+            updatedAt: String(sub.updated_at),
+            submittedAt: sub.submitted_at ? String(sub.submitted_at) : null,
+            studentCount: entryCountMap.get(Number(sub.id)) || 0,
+          }
+        : null,
+      matchingExams: matching.map((m) => ({
+        id: m.id,
+        name: m.name,
+        examCategory: m.examCategory,
+        startDate: m.examinationStartDate,
+        endDate: m.examinationEndDate,
+      })),
+    });
+  }
+
+  const totalSubjects = allItems.length;
+  const postedCount = allItems.filter((i) => i.postingStatus === "posted").length;
+  const pendingCount = totalSubjects - postedCount;
+  const completionPercentage = totalSubjects > 0 ? Math.round((postedCount / totalSubjects) * 100) : 0;
+
+  // Compute exam-wise posting statistics
+  for (const n of notifications) {
+    const matchingSubs = allItems.filter((item) =>
+      item.matchingExams.some((me) => me.id === n.id)
+    );
+    n.subjectCount = matchingSubs.length;
+    n.postedCount = matchingSubs.filter((s) => s.postingStatus === "posted").length;
+    n.pendingCount = n.subjectCount - n.postedCount;
+    n.progressPercent = n.subjectCount > 0 ? Math.round((n.postedCount / n.subjectCount) * 100) : 0;
+  }
+
+  return {
+    summary: {
+      totalSubjects,
+      postedCount,
+      pendingCount,
+      completionPercentage,
+    },
+    notifications,
+    subjects: allItems,
+  };
 }

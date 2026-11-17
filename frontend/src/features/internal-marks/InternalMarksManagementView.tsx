@@ -12,7 +12,8 @@ import { DataErrorState } from "@/components/ui/DataErrorState";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/components/auth/AuthProvider";
-import { Shield, Sliders, History, Layers, Check, X, Plus, Trash2 } from "lucide-react";
+import Link from "next/link";
+import { Shield, Sliders, History, Layers, Check, X, Plus, Trash2, Bell } from "lucide-react";
 
 type HierarchyItem = {
   collegeId: number;
@@ -831,6 +832,13 @@ export function InternalMarksManagementView() {
           <History className="h-4 w-4" />
           Audit Logs
         </button>
+        <Link
+          href="/internal-marks?tab=pending_report"
+          className="flex items-center gap-1.5 border-b-2 border-transparent px-3 py-2.5 text-xs sm:text-sm font-semibold text-brand-600 hover:text-brand-800 transition ml-auto"
+        >
+          <Bell className="h-4 w-4" />
+          Pending List & Notifications Tracker →
+        </Link>
       </div>
 
       {/* Tab Content 1: Hierarchy View */}
