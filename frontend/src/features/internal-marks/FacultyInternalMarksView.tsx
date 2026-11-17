@@ -38,6 +38,7 @@ import {
   GraduationCap,
   Layers,
   School,
+  Users,
 } from "lucide-react";
 
 type AssignedSubject = {
@@ -71,6 +72,8 @@ type AssignedSubject = {
   currentApprovalLevel: number;
   maxMarks: number;
   lastUpdated: string | null;
+  studentCount?: number;
+  marksEnteredCount?: number;
 };
 
 type SubmissionItem = {
@@ -573,7 +576,7 @@ export function FacultyInternalMarksView() {
         facultyStaffLinkId:
           sec.assignedFaculty[0]?.staffLinkId || sub.assignedFaculty[0]?.staffLinkId || staffLinkId || 0,
       } as any,
-      readOnly: isPosted && !canEdit,
+      readOnly: isPosted || (!canEdit && (!staffLinkId || Boolean(sec.assignedFaculty[0]?.staffLinkId && staffLinkId !== sec.assignedFaculty[0]?.staffLinkId))),
     });
   }
 
@@ -790,7 +793,7 @@ export function FacultyInternalMarksView() {
                           <th className="px-4 py-3 min-w-[220px]">Subject & Code</th>
                           <th className="px-4 py-3 min-w-[170px]">Course & Scope</th>
                           <th className="px-3.5 py-3 text-center min-w-[110px]">Section</th>
-                          <th className="px-3.5 py-3 min-w-[130px]">Upload Access</th>
+                          <th className="px-3.5 py-3 text-center min-w-[130px]">Students Count</th>
                           <th className="px-3.5 py-3 min-w-[100px]">Status</th>
                           <th className="px-4 py-3 text-right min-w-[140px]">Actions</th>
                         </tr>
@@ -865,7 +868,7 @@ export function FacultyInternalMarksView() {
 
                               {/* Col 3: Course & Scope */}
                               <td className="px-4 py-3.5 align-middle">
-                                <div className="space-y-0.5 text-xs text-slate-600">
+                                <div className="space-y-1 text-xs text-slate-600">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded text-[11px]">
                                       {sub.branchName}
@@ -874,11 +877,23 @@ export function FacultyInternalMarksView() {
                                       {sub.courseName}
                                     </span>
                                   </div>
-                                  {sub.year && sub.semester ? (
-                                    <div className="text-[11px] text-slate-500">
-                                      Year {sub.year}, Sem {sub.semester}
-                                    </div>
-                                  ) : null}
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    {sub.year ? (
+                                      <span className="font-bold text-[10px] text-sky-800 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded">
+                                        Year {sub.year}
+                                      </span>
+                                    ) : null}
+                                    {sub.semester ? (
+                                      <span className="text-[11px] text-slate-500 font-medium">
+                                        Sem {sub.semester}
+                                      </span>
+                                    ) : null}
+                                    {sub.batch ? (
+                                      <span className="text-[10px] text-slate-400 font-mono">
+                                        ({sub.batch})
+                                      </span>
+                                    ) : null}
+                                  </div>
                                 </div>
                               </td>
 
@@ -899,19 +914,24 @@ export function FacultyInternalMarksView() {
                                 )}
                               </td>
 
-                              {/* Col 5: Upload Access */}
-                              <td className="px-3.5 py-3.5 align-middle">
-                                {isUploadEnabled ? (
-                                  <span className="inline-flex items-center gap-1 font-semibold text-xs text-emerald-700 bg-emerald-50/70 border border-emerald-200 px-2 py-1 rounded">
-                                    <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
-                                    Enabled ({sub.accessLevel})
+                              {/* Col 5: Students Count */}
+                              <td className="px-3.5 py-3.5 align-middle text-center">
+                                <div className="inline-flex flex-col items-center">
+                                  <span className="inline-flex items-center gap-1.5 font-bold text-xs text-slate-800 bg-slate-100/90 border border-slate-200/80 px-2.5 py-1 rounded-md">
+                                    <Users className="h-3.5 w-3.5 text-brand-600 shrink-0" />
+                                    <span>{sub.studentCount ?? 0} Students</span>
                                   </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 font-semibold text-xs text-red-600 bg-red-50/70 border border-red-200 px-2 py-1 rounded">
-                                    <Lock className="h-3.5 w-3.5 text-red-500" />
-                                    Disabled
-                                  </span>
-                                )}
+                                  {sub.year ? (
+                                    <span className="text-[10px] text-slate-500 font-medium mt-0.5">
+                                      Year {sub.year} roster
+                                    </span>
+                                  ) : null}
+                                  {sub.marksEnteredCount && sub.marksEnteredCount > 0 ? (
+                                    <span className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+                                      {sub.marksEnteredCount} / {sub.studentCount ?? 0} entered
+                                    </span>
+                                  ) : null}
+                                </div>
                               </td>
 
                               {/* Col 6: Status */}

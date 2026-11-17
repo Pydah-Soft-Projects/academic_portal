@@ -270,15 +270,15 @@ internalMarksRouter.get(
       const courseId = num(req.query.courseId);
       const branchId = num(req.query.branchId);
       const subjectId = num(req.query.subjectId);
-      const facultyStaffLinkId = num(req.query.facultyStaffLinkId);
+      let facultyStaffLinkId = num(req.query.facultyStaffLinkId);
       const batch = str(req.query.batch);
       const section = str(req.query.section);
       const semester = num(req.query.semester);
       const year = num(req.query.year);
 
-      if (!collegeId || !courseId || !branchId || !subjectId || !facultyStaffLinkId) {
+      if (!collegeId || !courseId || !branchId || !subjectId) {
         res.status(400).json({
-          message: "collegeId, courseId, branchId, subjectId, and facultyStaffLinkId are required",
+          message: "collegeId, courseId, branchId, and subjectId are required",
         });
         return;
       }
@@ -286,11 +286,16 @@ internalMarksRouter.get(
       scopedFilters(req, { collegeId, branchId });
 
       const authz = getAuthz(req);
+      let isOwnLoad = true;
+      const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
+
+      if (!facultyStaffLinkId && userStaffLinkId) {
+        facultyStaffLinkId = userStaffLinkId;
+      }
+
       if (shouldRestrictToOwnTeachingLoad(authz)) {
-        const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
-        if (userStaffLinkId != null && facultyStaffLinkId !== userStaffLinkId) {
-          res.status(403).json({ message: "You can only view marks entry for your own assigned subjects" });
-          return;
+        if (userStaffLinkId != null && facultyStaffLinkId != null && facultyStaffLinkId !== userStaffLinkId) {
+          isOwnLoad = false;
         }
       }
 
@@ -299,12 +304,16 @@ internalMarksRouter.get(
         courseId,
         branchId,
         subjectId,
-        facultyStaffLinkId,
+        facultyStaffLinkId: facultyStaffLinkId || 0,
         year,
         batch,
         semester,
         section,
       });
+
+      if (!isOwnLoad) {
+        data.uploadAccess = false;
+      }
 
       res.json({ data });
     } catch (error) {

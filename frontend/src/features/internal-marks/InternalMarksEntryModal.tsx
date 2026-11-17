@@ -192,7 +192,10 @@ export function InternalMarksEntryModal({
         if (section && section !== "all") query.set("section", String(section));
 
         const res = await apiFetch(`/internal-marks/students?${query.toString()}`);
-        if (!res.ok) throw new Error("Failed to load student list for marks entry");
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.message || "Failed to load student list for marks entry");
+        }
         const body = await res.json();
         const data = body.data;
 
@@ -231,7 +234,7 @@ export function InternalMarksEntryModal({
       }
     }
     void loadStudents();
-  }, [collegeId, courseId, branchId, subjectId, facultyStaffLinkId]);
+  }, [collegeId, courseId, branchId, subjectId, facultyStaffLinkId, year, semester, batch, section]);
 
   // Handle Mark Change
   function handleMarkChange(studentDbId: number, val: string) {

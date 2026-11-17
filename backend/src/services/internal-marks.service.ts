@@ -1288,6 +1288,73 @@ export async function getFacultyAssignedSubjects(
     [staffLinkId]
   );
 
+  // Compute student counts per branch, year, and section from student_database
+  const allBranchIds = [...new Set(assignments.map((a) => Number(a.branch_id)).filter(Boolean))];
+  const studentCountRows = allBranchIds.length > 0
+    ? await queryStudent<
+        (RowDataPacket & {
+          branch_id: number;
+          current_year: number | null;
+          section_name: string;
+          count: number;
+        })[]
+      >(
+        `
+        SELECT
+          s.branch_id,
+          s.current_year,
+          COALESCE(TRIM(ss.section_name), TRIM(s.section), '') AS section_name,
+          COUNT(DISTINCT s.id) AS count
+        FROM students s
+        LEFT JOIN student_sections ss ON ss.student_id = s.id
+        WHERE s.branch_id IN (${allBranchIds.map(() => "?").join(",")})
+          AND (s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))
+        GROUP BY s.branch_id, s.current_year, COALESCE(TRIM(ss.section_name), TRIM(s.section), '')
+        `,
+        allBranchIds
+      ).catch(() => [])
+    : [];
+
+  const sectionCountMap = new Map<string, number>();
+  const branchYearCountMap = new Map<string, number>();
+
+  for (const scr of studentCountRows) {
+    const bId = Number(scr.branch_id);
+    const yr = scr.current_year != null ? Number(scr.current_year) : 0;
+    const sec = scr.section_name ? scr.section_name.trim().toUpperCase() : "";
+    const cnt = Number(scr.count);
+
+    if (sec) {
+      const k = `${bId}-${yr}-${sec}`;
+      sectionCountMap.set(k, (sectionCountMap.get(k) || 0) + cnt);
+    }
+    const byKey = `${bId}-${yr}`;
+    branchYearCountMap.set(byKey, (branchYearCountMap.get(byKey) || 0) + cnt);
+  }
+
+  // Compute existing entered marks count per submission
+  const submissionIds = submissions.map((s) => Number(s.id)).filter(Boolean);
+  const entryCountMap = new Map<number, number>();
+
+  if (submissionIds.length > 0) {
+    const entryRows = await queryAcademic<
+      (RowDataPacket & { submission_id: number; count: number })[]
+    >(
+      `
+      SELECT submission_id, COUNT(*) AS count
+      FROM ap_internal_marks_entries
+      WHERE submission_id IN (${submissionIds.map(() => "?").join(",")})
+        AND marks_obtained IS NOT NULL
+      GROUP BY submission_id
+      `,
+      submissionIds
+    ).catch(() => []);
+
+    for (const er of entryRows) {
+      entryCountMap.set(Number(er.submission_id), Number(er.count));
+    }
+  }
+
   const results = [];
   const assignedPairs = new Set(
     assignments.map((a) => `${a.subject_id}-${a.branch_id}`)
@@ -1351,6 +1418,17 @@ export async function getFacultyAssignedSubjects(
         finalMaxMarks = defaultMaxMarks;
       }
 
+      const resolvedYear = item.yearOfStudy != null ? Number(item.yearOfStudy) : 0;
+      let studentCount = 0;
+      if (sec) {
+        studentCount = sectionCountMap.get(`${item.branchId}-${resolvedYear}-${sec.toUpperCase()}`) || 0;
+      }
+      if (!studentCount) {
+        studentCount = branchYearCountMap.get(`${item.branchId}-${resolvedYear}`) || 0;
+      }
+
+      const marksEnteredCount = sub ? (entryCountMap.get(Number(sub.id)) || 0) : 0;
+
       results.push({
         collegeId: item.collegeId,
         collegeName: item.collegeName || "College",
@@ -1367,6 +1445,8 @@ export async function getFacultyAssignedSubjects(
         batch: item.batch || "",
         sections: sec ? [sec] : [],
         sectionName: sec || undefined,
+        studentCount,
+        marksEnteredCount,
         examNotification,
         accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
         accessLevel: acc.accessLevel,
@@ -1508,6 +1588,17 @@ export async function getFacultyAssignedSubjects(
             finalMaxMarks = defaultMaxMarks;
           }
 
+          const fallbackYr = resolvedYear != null ? Number(resolvedYear) : 0;
+          let fallbackStudentCount = 0;
+          if (sec) {
+            fallbackStudentCount = sectionCountMap.get(`${bObj.branchId}-${fallbackYr}-${sec.toUpperCase()}`) || 0;
+          }
+          if (!fallbackStudentCount) {
+            fallbackStudentCount = branchYearCountMap.get(`${bObj.branchId}-${fallbackYr}`) || 0;
+          }
+
+          const fallbackMarksCount = sub ? (entryCountMap.get(Number(sub.id)) || 0) : 0;
+
           results.push({
             collegeId: bObj.collegeId,
             collegeName: bObj.collegeName || "College",
@@ -1524,6 +1615,8 @@ export async function getFacultyAssignedSubjects(
             batch: resolvedBatch,
             sections: sec ? [sec] : [],
             sectionName: sec || undefined,
+            studentCount: fallbackStudentCount,
+            marksEnteredCount: fallbackMarksCount,
             examNotification,
             accessStatus: acc.isEnabled ? ("enabled" as const) : ("disabled" as const),
             accessLevel: acc.accessLevel,
@@ -1563,6 +1656,16 @@ export async function getFacultyAssignedSubjects(
 }
 
 /** Fetch students and existing internal marks for entry */
+function normalizeSectionParam(sec?: string | null): string | null {
+  if (!sec) return null;
+  const s = sec.trim();
+  if (s === "" || s.toLowerCase() === "all" || s.toLowerCase().includes("all / single") || s.toLowerCase() === "null" || s.toLowerCase() === "undefined") {
+    return null;
+  }
+  const m = s.match(/(?:Section|Sec)?\s*([A-Za-z0-9]+)$/i);
+  return m ? m[1].toUpperCase() : s.toUpperCase();
+}
+
 export async function getStudentsForMarksEntry(params: {
   collegeId: number;
   courseId: number;
@@ -1593,7 +1696,10 @@ export async function getStudentsForMarksEntry(params: {
   ]);
   const subjectMeta = subRows[0] || { code: "", name: "Subject", internalMarks: null };
 
+  const normSec = normalizeSectionParam(params.section);
+
   // 3. Check existing submission
+  // Check exact section match, or if section was passed as "A" / single section, also match submissions where section_name is NULL (for unsectioned branches like DAIM)
   const subRowsDb = await queryAcademic<
     (RowDataPacket & {
       id: number;
@@ -1601,14 +1707,26 @@ export async function getStudentsForMarksEntry(params: {
       max_marks: number;
       current_approval_level: number;
       exam_id: number | null;
+      section_name: string | null;
     })[]
   >(
     `
-    SELECT id, status, max_marks, current_approval_level, exam_id
+    SELECT id, status, max_marks, current_approval_level, exam_id, section_name
     FROM ap_internal_marks_submissions
-    WHERE college_id = ? AND course_id = ? AND branch_id = ? AND subject_id = ? AND faculty_staff_link_id = ?
-      AND (section_name = ? OR (section_name IS NULL AND ? IS NULL))
-    ORDER BY id DESC
+    WHERE college_id = ? AND course_id = ? AND branch_id = ? AND subject_id = ?
+      AND (
+        (? IS NOT NULL AND (section_name = ? OR section_name = ?))
+        OR (? IS NULL AND section_name IS NULL)
+        OR section_name IS NULL
+      )
+    ORDER BY 
+      CASE 
+        WHEN ? IS NOT NULL AND section_name = ? THEN 0
+        WHEN ? IS NULL AND section_name IS NULL THEN 0
+        WHEN section_name IS NULL THEN 1
+        ELSE 2
+      END ASC,
+      id DESC
     LIMIT 1
     `,
     [
@@ -1616,9 +1734,13 @@ export async function getStudentsForMarksEntry(params: {
       params.courseId,
       params.branchId,
       params.subjectId,
-      params.facultyStaffLinkId,
-      params.section || null,
-      params.section || null,
+      normSec,
+      normSec,
+      params.section ? params.section.trim() : normSec,
+      normSec,
+      normSec,
+      normSec,
+      normSec,
     ]
   );
 
@@ -1730,24 +1852,18 @@ export async function getStudentsForMarksEntry(params: {
     "(s.student_status IS NULL OR TRIM(s.student_status) NOT IN ('Discontinued', 'Admission Cancelled', 'Course Completed'))"
   );
 
-  // Section filtering if specified (supports single section or comma-separated merged sections)
-  if (params.section && params.section !== "all") {
-    const secList = params.section
-      .split(",")
-      .map((s) => s.trim().toUpperCase())
-      .filter(Boolean);
-    if (secList.length === 1) {
-      whereStud.push(
-        "(TRIM(COALESCE(s.section, '')) = ? OR TRIM(COALESCE(ss.section_name, '')) = ?)"
-      );
-      paramsStud.push(secList[0], secList[0]);
-    } else if (secList.length > 1) {
-      const placeholders = secList.map(() => "?").join(",");
-      whereStud.push(
-        `(TRIM(COALESCE(s.section, '')) IN (${placeholders}) OR TRIM(COALESCE(ss.section_name, '')) IN (${placeholders}))`
-      );
-      paramsStud.push(...secList, ...secList);
-    }
+  // Section filtering if specified (supports single section, Section A, or comma-separated merged sections)
+  if (normSec) {
+    const rawSec = params.section ? params.section.trim() : normSec;
+    whereStud.push(
+      `(
+        TRIM(COALESCE(s.section, '')) = ? 
+        OR TRIM(COALESCE(ss.section_name, '')) = ?
+        OR TRIM(COALESCE(s.section, '')) = ?
+        OR TRIM(COALESCE(ss.section_name, '')) = ?
+      )`
+    );
+    paramsStud.push(normSec, normSec, rawSec, rawSec);
   }
 
   let studentRows = await queryStudent<
@@ -1816,6 +1932,37 @@ export async function getStudentsForMarksEntry(params: {
       `,
       [params.collegeId, params.courseId, params.branchId, targetYear]
     );
+  }
+
+  // If a submission exists, make sure any student records saved in ap_internal_marks_entries are included!
+  if (submissionId) {
+    const entryRowsAll = await queryAcademic<
+      (RowDataPacket & {
+        student_db_id: number;
+        roll_number: string | null;
+        admission_number: string | null;
+        student_name: string | null;
+        marks_obtained: number | null;
+        remarks: string | null;
+      })[]
+    >(
+      `SELECT student_db_id, roll_number, admission_number, student_name, marks_obtained, remarks FROM ap_internal_marks_entries WHERE submission_id = ?`,
+      [submissionId]
+    );
+
+    const existingStudentIds = new Set(studentRows.map((s) => Number(s.id)));
+    for (const er of entryRowsAll) {
+      if (!existingStudentIds.has(Number(er.student_db_id))) {
+        studentRows.push({
+          id: Number(er.student_db_id),
+          admission_number: er.admission_number || er.roll_number || "",
+          pin_no: er.roll_number || er.admission_number || null,
+          student_name: er.student_name || "Unknown",
+          section_name: normSec || null,
+        } as any);
+        existingStudentIds.add(Number(er.student_db_id));
+      }
+    }
   }
 
   // Deduplicate by student id to ensure no double counts
