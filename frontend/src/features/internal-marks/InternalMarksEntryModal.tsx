@@ -190,6 +190,7 @@ export function InternalMarksEntryModal({
         if (semester) query.set("semester", String(semester));
         if (batch) query.set("batch", String(batch));
         if (section && section !== "all") query.set("section", String(section));
+        if (examNotification?.id) query.set("examId", String(examNotification.id));
 
         const res = await apiFetch(`/internal-marks/students?${query.toString()}`);
         if (!res.ok) {

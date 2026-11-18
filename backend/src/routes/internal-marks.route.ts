@@ -300,6 +300,7 @@ internalMarksRouter.get(
       const section = str(req.query.section);
       const semester = num(req.query.semester);
       const year = num(req.query.year);
+      const examId = num(req.query.examId);
 
       if (!collegeId || !courseId || !branchId || !subjectId) {
         res.status(400).json({
@@ -307,8 +308,6 @@ internalMarksRouter.get(
         });
         return;
       }
-
-      scopedFilters(req, { collegeId, branchId });
 
       const authz = getAuthz(req);
       let isOwnLoad = true;
@@ -324,6 +323,14 @@ internalMarksRouter.get(
         }
       }
 
+      // If it is the faculty's own teaching load, allow entry across branches within the college.
+      // Otherwise, enforce strict branch scope for administrative / viewer access.
+      if (!userStaffLinkId || facultyStaffLinkId !== userStaffLinkId) {
+        scopedFilters(req, { collegeId, branchId });
+      } else {
+        scopedFilters(req, { collegeId });
+      }
+
       const data = await getStudentsForMarksEntry({
         collegeId,
         courseId,
@@ -334,6 +341,7 @@ internalMarksRouter.get(
         batch,
         semester,
         section,
+        examId,
       });
 
       if (!isOwnLoad) {
