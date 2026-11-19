@@ -20,6 +20,8 @@ import {
   Printer,
   Calculator,
   SlidersHorizontal,
+  ShieldCheck,
+  Info,
 } from "lucide-react";
 
 type SubjectItem = {
@@ -59,6 +61,8 @@ export function SubjectAttendanceRegisterView() {
   const [students, setStudents] = useState<StudentItem[]>([]);
   const [entries, setEntries] = useState<Map<EntryKey, StudentAttendanceRecord>>(new Map());
   const [dirty, setDirty] = useState(false);
+  const [isFacultyRestricted, setIsFacultyRestricted] = useState(false);
+  const [allSubjectsCount, setAllSubjectsCount] = useState<number | null>(null);
 
   // View layout controls (default to false for spacious "free space" layout)
   const [fitAll, setFitAll] = useState(false);
@@ -139,11 +143,16 @@ export function SubjectAttendanceRegisterView() {
           eligibleThreshold: number;
           condonationMinThreshold: number;
         };
+        isFacultyRestricted?: boolean;
+        allSubjectsCount?: number;
       };
 
       if (res.thresholds) {
         setThresholds(res.thresholds);
       }
+
+      setIsFacultyRestricted(Boolean(res.isFacultyRestricted));
+      setAllSubjectsCount(typeof res.allSubjectsCount === "number" ? res.allSubjectsCount : null);
 
       setSubjects(Array.isArray(res.subjects) ? res.subjects : []);
       setStudents(Array.isArray(res.students) ? res.students : []);
@@ -588,6 +597,40 @@ export function SubjectAttendanceRegisterView() {
         </div>
       )}
 
+      {/* Faculty Allotment Scope Notice */}
+      {isFacultyRestricted && (
+        <>
+          {subjects.length > 0 ? (
+            <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3 text-xs text-blue-900 flex items-center justify-between print:hidden">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-blue-600 shrink-0" />
+                <span>
+                  <strong className="font-semibold text-blue-950">Faculty View:</strong> Showing your{" "}
+                  <span className="font-bold">{subjects.length} allotted subject{subjects.length > 1 ? "s" : ""}</span>
+                  {allSubjectsCount != null ? ` (out of ${allSubjectsCount} curriculum subjects)` : ""}:{" "}
+                  <span className="font-semibold">{subjects.map((s) => s.code).join(", ")}</span>
+                </span>
+              </div>
+              <span className="text-[11px] text-blue-600 font-medium">Only your allotted subjects are editable</span>
+            </div>
+          ) : (
+            !loading && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 text-xs text-amber-900 flex items-start gap-3 print:hidden">
+                <Info className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-amber-950">No Allotted Subjects for this Class / Section</p>
+                  <p className="mt-0.5 text-amber-800">
+                    You are not assigned as faculty for any subjects in this course, branch, or section
+                    {allSubjectsCount != null ? ` (${allSubjectsCount} curriculum subjects in this cohort)` : ""}.
+                    Only your allotted subjects are displayed in the attendance register. If you teach this class, please contact your HOD or Academic Coordinator to update your timetable allotment.
+                  </p>
+                </div>
+              </div>
+            )
+          )}
+        </>
+      )}
+
       {/* Key Metric Cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6 print:hidden">
         <Card className="p-3.5 border-slate-200">
@@ -602,7 +645,13 @@ export function SubjectAttendanceRegisterView() {
           <div className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Subjects</div>
           <div className="mt-1 flex items-baseline gap-1.5">
             <span className="text-2xl font-bold text-slate-900">{stats.totalSubjects}</span>
-            <span className="text-[11px] text-slate-400">columns</span>
+            <span className="text-[11px] text-slate-400">
+              {isFacultyRestricted
+                ? allSubjectsCount != null
+                  ? `allotted of ${allSubjectsCount}`
+                  : "allotted"
+                : "columns"}
+            </span>
           </div>
         </Card>
 
@@ -1482,7 +1531,7 @@ export function SubjectAttendanceRegisterView() {
               Set Classes Held for Subject(s)
             </h3>
             <p className="mt-1 text-xs text-slate-500">
-              Apply a total number of classes held to all students for a selected subject or all semester subjects.
+              Apply a total number of classes held to all students for a selected subject or all {isFacultyRestricted ? "allotted" : "semester"} subjects.
             </p>
 
             <div className="mt-4 space-y-4">
@@ -1495,7 +1544,11 @@ export function SubjectAttendanceRegisterView() {
                   }
                   className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800 shadow-xs focus:border-brand-500 focus:outline-hidden"
                 >
-                  <option value="all">All Semester Subjects ({subjects.length})</option>
+                  <option value="all">
+                    {isFacultyRestricted
+                      ? `All Allotted Subjects (${subjects.length})`
+                      : `All Semester Subjects (${subjects.length})`}
+                  </option>
                   {subjects.map((s) => (
                     <option key={s.subjectId} value={s.subjectId}>
                       {s.code} — {s.name}

@@ -2,6 +2,10 @@ import { Router } from "express";
 import type { AuthedRequest } from "../middleware/auth.middleware.js";
 import { requirePermission, scopedFilters, getAuthz, statusFromAuthzError } from "../authz/require-permission.js";
 import {
+  shouldRestrictToOwnTeachingLoad,
+  resolveStaffLinkIdForUser,
+} from "../authz/faculty-self-scope.js";
+import {
   getSubjectAttendanceData,
   saveSubjectAttendanceData,
 } from "../services/subject-attendance.service.js";
@@ -61,6 +65,12 @@ subjectAttendanceRouter.get(
       const isClassTeacher = authz.roles.some((r) => r.roleKey === "class_teacher");
       const isStaff = authz.roles.some((r) => r.roleKey === "staff");
 
+      // For faculty (teaching staff without leadership roles), strictly restrict to their own allotted subjects
+      const isStaffOnly = shouldRestrictToOwnTeachingLoad(authz);
+      const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
+      const queryStaffLinkId = num(req.query.facultyStaffLinkId);
+      const facultyStaffLinkId = isStaffOnly ? (userStaffLinkId ?? -1) : queryStaffLinkId;
+
       const canEdit = isSuperAdmin || isPrincipal || isHod || isClassTeacher || isStaff;
 
       const result = await getSubjectAttendanceData({
@@ -73,6 +83,7 @@ subjectAttendanceRouter.get(
         batch,
         academicYear: academicYear || "2026-2027",
         month,
+        facultyStaffLinkId: facultyStaffLinkId ?? undefined,
       });
 
       const thresholdSettings = await getAttendanceThresholdSettings(finalCollegeId);
@@ -87,6 +98,8 @@ subjectAttendanceRouter.get(
           isHod,
           isClassTeacher,
           isStaff,
+          isStaffOnly,
+          facultyStaffLinkId: facultyStaffLinkId ?? null,
         },
       });
     } catch (error) {
@@ -145,6 +158,9 @@ subjectAttendanceRouter.post(
         }
       }
 
+      const isStaffOnly = shouldRestrictToOwnTeachingLoad(authz);
+      const userStaffLinkId = await resolveStaffLinkIdForUser(authz.userId);
+
       const saveResult = await saveSubjectAttendanceData({
         collegeId: Number(collegeId),
         courseId: Number(courseId),
@@ -156,6 +172,7 @@ subjectAttendanceRouter.post(
         batch: batch ? String(batch) : "",
         month: month ? String(month) : "Cumulative",
         userId: authz.userId,
+        facultyStaffLinkId: isStaffOnly ? (userStaffLinkId ?? -1) : undefined,
         entries,
       });
 

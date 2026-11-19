@@ -47,6 +47,7 @@ export type SubjectAttendanceFilter = {
   section?: string;
   batch?: string;
   month?: string;
+  facultyStaffLinkId?: number;
 };
 
 export type SubjectItem = {
@@ -73,6 +74,120 @@ export type AttendanceEntry = {
   classesHeld: number;
   classesPresent: number;
 };
+
+/**
+ * Query subjects allotted to a faculty member from:
+ * 1. ap_faculty_assignments
+ * 2. ap_timetable_entries joined with active ap_timetable_plans
+ * 3. active ap_class_sessions
+ */
+export async function getFacultyAllottedSubjectIds(params: {
+  facultyStaffLinkId: number;
+  collegeId?: number;
+  branchId?: number;
+  year?: number;
+  semester?: number;
+  section?: string;
+  academicYear?: string;
+}): Promise<number[]> {
+  const { facultyStaffLinkId, branchId, year, semester, section } = params;
+  if (!facultyStaffLinkId || facultyStaffLinkId <= 0) return [];
+
+  const absSemester = year && semester ? (year - 1) * 2 + semester : semester;
+  const cleanSection = section && section !== "all" ? section.trim() : "";
+
+  const queryStr = `
+    SELECT DISTINCT subject_id
+    FROM (
+      -- A. Direct faculty assignments
+      SELECT fa.subject_id
+      FROM ap_faculty_assignments fa
+      WHERE fa.faculty_staff_link_id = ?
+        AND (? IS NULL OR fa.branch_id IS NULL OR fa.branch_id = ?)
+        AND (? IS NULL OR fa.year_of_study IS NULL OR fa.year_of_study = 0 OR fa.year_of_study = ?)
+        AND (? IS NULL OR fa.semester_number IS NULL OR fa.semester_number = 0 OR fa.semester_number = ? OR fa.semester_number = ?)
+        AND (? = '' OR fa.section_name IS NULL OR fa.section_name = '' OR fa.section_name = ?)
+
+      UNION
+
+      -- B. Timetable plan entries
+      SELECT te.subject_id
+      FROM ap_timetable_entries te
+      INNER JOIN ap_timetable_plans tp ON tp.id = te.plan_id
+      WHERE te.faculty_staff_link_id = ? AND te.subject_id IS NOT NULL
+        AND (tp.status IS NULL OR tp.status NOT IN ('superseded', 'archived', 'cancelled'))
+        AND (? IS NULL OR tp.branch_id IS NULL OR tp.branch_id = ?)
+        AND (? IS NULL OR tp.year_of_study IS NULL OR tp.year_of_study = 0 OR tp.year_of_study = ?)
+        AND (? IS NULL OR tp.semester_number IS NULL OR tp.semester_number = 0 OR tp.semester_number = ? OR tp.semester_number = ?)
+        AND (? = '' OR tp.section_name IS NULL OR tp.section_name = '' OR tp.section_name = ?)
+
+      UNION
+
+      -- C. Scheduled / active class sessions
+      SELECT cs.subject_id
+      FROM ap_class_sessions cs
+      WHERE cs.faculty_staff_link_id = ? AND cs.subject_id IS NOT NULL
+        AND (cs.status IS NULL OR cs.status NOT IN ('cancelled', 'holiday'))
+        AND (? IS NULL OR cs.branch_id IS NULL OR cs.branch_id = ?)
+        AND (? IS NULL OR cs.semester_number IS NULL OR cs.semester_number = 0 OR cs.semester_number = ? OR cs.semester_number = ?)
+        AND (? = '' OR cs.section_name IS NULL OR cs.section_name = '' OR cs.section_name = ?)
+    ) sub
+  `;
+
+  const queryParams = [
+    // fa
+    facultyStaffLinkId,
+    branchId ?? null,
+    branchId ?? null,
+    year ?? null,
+    year ?? null,
+    semester ?? null,
+    semester ?? null,
+    absSemester ?? null,
+    cleanSection,
+    cleanSection,
+    // te
+    facultyStaffLinkId,
+    branchId ?? null,
+    branchId ?? null,
+    year ?? null,
+    year ?? null,
+    semester ?? null,
+    semester ?? null,
+    absSemester ?? null,
+    cleanSection,
+    cleanSection,
+    // cs
+    facultyStaffLinkId,
+    branchId ?? null,
+    branchId ?? null,
+    semester ?? null,
+    semester ?? null,
+    absSemester ?? null,
+    cleanSection,
+    cleanSection,
+  ];
+
+  try {
+    const rows = await queryAcademic<(RowDataPacket & { subject_id: number })[]>(queryStr, queryParams);
+    let subjectIds = rows.map((r) => Number(r.subject_id)).filter(Boolean);
+
+    // If section was specified and 0 results found, relax section filter
+    if (subjectIds.length === 0 && cleanSection) {
+      const relaxedParams = [...queryParams];
+      relaxedParams[8] = "";
+      relaxedParams[18] = "";
+      relaxedParams[27] = "";
+      const relaxedRows = await queryAcademic<(RowDataPacket & { subject_id: number })[]>(queryStr, relaxedParams);
+      subjectIds = relaxedRows.map((r) => Number(r.subject_id)).filter(Boolean);
+    }
+
+    return Array.from(new Set(subjectIds));
+  } catch (err) {
+    console.error("[subject-attendance] getFacultyAllottedSubjectIds error:", err);
+    return [];
+  }
+}
 
 export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter) {
   await ensureSubjectAttendanceSchema();
@@ -247,7 +362,57 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
     }
   }
 
-  const subjects: SubjectItem[] = Array.from(subjectMap.values());
+  const allCurriculumSubjects: SubjectItem[] = Array.from(subjectMap.values());
+  const allSubjectsCount = allCurriculumSubjects.length;
+
+  let subjects: SubjectItem[] = allCurriculumSubjects;
+  let allottedSubjectIds: number[] = [];
+  let isFacultyRestricted = false;
+
+  if (filters.facultyStaffLinkId) {
+    isFacultyRestricted = true;
+    allottedSubjectIds = await getFacultyAllottedSubjectIds({
+      facultyStaffLinkId: filters.facultyStaffLinkId,
+      collegeId,
+      branchId,
+      year,
+      semester,
+      section,
+      academicYear,
+    });
+
+    const allottedSet = new Set(allottedSubjectIds);
+
+    // Fetch details for any allotted subjects that weren't captured by listCurriculum
+    const missingSubjectIds = allottedSubjectIds.filter((id) => !subjectMap.has(id));
+    if (missingSubjectIds.length > 0) {
+      try {
+        const placeholders = missingSubjectIds.map(() => "?").join(",");
+        const missingRows = await queryExam<
+          (RowDataPacket & { id: number; code: string; name: string; type: string; credits: number })[]
+        >(
+          `SELECT id, code, name, type, credits FROM subjects WHERE id IN (${placeholders})`,
+          missingSubjectIds,
+        );
+        for (const row of missingRows) {
+          if (!subjectMap.has(row.id)) {
+            subjectMap.set(row.id, {
+              subjectId: row.id,
+              code: row.code || `SUB-${row.id}`,
+              name: row.name || "Subject",
+              type: row.type || "Theory",
+              credits: Number(row.credits || 3),
+            });
+          }
+        }
+      } catch (err) {
+        console.warn("[subject-attendance] missing allotted subjects query error:", err);
+      }
+    }
+
+    // Filter strictly to the faculty member's allotted subjects
+    subjects = Array.from(subjectMap.values()).filter((s) => allottedSet.has(s.subjectId));
+  }
 
   // 2. Fetch Students for this cohort
   let students: StudentItem[] = [];
@@ -530,9 +695,14 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
   return {
     subjects,
     students,
-    entries,
+    entries: isFacultyRestricted && allottedSubjectIds.length > 0
+      ? entries.filter((e) => allottedSubjectIds.includes(e.subjectId))
+      : entries,
     defaultClassesHeld,
     hasSavedEntries,
+    isFacultyRestricted,
+    allottedSubjectIds,
+    allSubjectsCount,
     meta: {
       collegeId,
       courseId,
@@ -542,6 +712,7 @@ export async function getSubjectAttendanceData(filters: SubjectAttendanceFilter)
       semester,
       section,
       batch,
+      facultyStaffLinkId: filters.facultyStaffLinkId,
     },
   };
 }
@@ -557,6 +728,7 @@ export type SaveSubjectAttendancePayload = {
   batch?: string;
   month?: string;
   userId?: number;
+  facultyStaffLinkId?: number;
   entries: Array<{
     studentDbId: number;
     admissionNumber: string;
@@ -585,6 +757,7 @@ export async function saveSubjectAttendanceData(payload: SaveSubjectAttendancePa
     batch = "",
     month = "Cumulative",
     userId,
+    facultyStaffLinkId,
     entries,
   } = payload;
 
@@ -592,11 +765,43 @@ export async function saveSubjectAttendanceData(payload: SaveSubjectAttendancePa
     return { success: false, count: 0, message: "Missing required parameters or entries" };
   }
 
+  let entriesToSave = entries;
+  if (facultyStaffLinkId) {
+    const allottedSubjectIds = await getFacultyAllottedSubjectIds({
+      facultyStaffLinkId,
+      collegeId,
+      branchId,
+      year,
+      semester,
+      section,
+      academicYear,
+    });
+
+    if (allottedSubjectIds.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        message: "You do not have any allotted subjects for this class/section to post attendance.",
+      };
+    }
+
+    const allottedSet = new Set(allottedSubjectIds);
+    entriesToSave = entries.filter((e) => allottedSet.has(e.subjectId));
+
+    if (entriesToSave.length === 0) {
+      return {
+        success: false,
+        count: 0,
+        message: "None of the submitted attendance entries belong to your allotted subjects.",
+      };
+    }
+  }
+
   const chunkSize = 50;
   let totalSaved = 0;
 
-  for (let i = 0; i < entries.length; i += chunkSize) {
-    const chunk = entries.slice(i, i + chunkSize);
+  for (let i = 0; i < entriesToSave.length; i += chunkSize) {
+    const chunk = entriesToSave.slice(i, i + chunkSize);
     const valuePlaceholders: string[] = [];
     const values: unknown[] = [];
 
