@@ -165,6 +165,15 @@ export async function ensureInternalMarksSchema() {
     /* ignore if columns already exist */
   }
 
+  try {
+    await executeAcademic(`
+      ALTER TABLE ap_internal_marks_entries
+      ADD COLUMN attendance_status ENUM('present', 'absent', 'not_eligible') NOT NULL DEFAULT 'present'
+    `);
+  } catch {
+    /* ignore if column already exists */
+  }
+
   await executeAcademic(`
     CREATE TABLE IF NOT EXISTS ap_internal_marks_entries (
       id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,
@@ -176,6 +185,7 @@ export async function ensureInternalMarksSchema() {
       marks_obtained DECIMAL(5,2) NULL,
       max_marks DECIMAL(5,2) NOT NULL DEFAULT 30.00,
       remarks VARCHAR(255) NULL,
+      attendance_status ENUM('present', 'absent', 'not_eligible') NOT NULL DEFAULT 'present',
       created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uq_im_entry_student (submission_id, student_db_id),
@@ -1827,18 +1837,19 @@ export async function getStudentsForMarksEntry(params: {
 
   // 4. Fetch existing entries if submission exists (or from legacy submission)
   const subIdForEntries = submissionId || legacySubmissionId;
-  let existingEntries = new Map<number, { marks: number | null; remarks: string | null }>();
+  let existingEntries = new Map<number, { marks: number | null; remarks: string | null; attendanceStatus: "present" | "absent" | "not_eligible" }>();
   if (subIdForEntries) {
     const entryRows = await queryAcademic<
-      (RowDataPacket & { student_db_id: number; marks_obtained: number | null; remarks: string | null })[]
+      (RowDataPacket & { student_db_id: number; marks_obtained: number | null; remarks: string | null; attendance_status?: "present" | "absent" | "not_eligible" | null })[]
     >(
-      `SELECT student_db_id, marks_obtained, remarks FROM ap_internal_marks_entries WHERE submission_id = ?`,
+      `SELECT student_db_id, marks_obtained, remarks, attendance_status FROM ap_internal_marks_entries WHERE submission_id = ?`,
       [subIdForEntries]
     );
     for (const er of entryRows) {
       existingEntries.set(Number(er.student_db_id), {
         marks: er.marks_obtained != null ? Number(er.marks_obtained) : null,
         remarks: er.remarks || null,
+        attendanceStatus: (er.attendance_status as "present" | "absent" | "not_eligible") || "present",
       });
     }
   }
@@ -2006,9 +2017,10 @@ export async function getStudentsForMarksEntry(params: {
         student_name: string | null;
         marks_obtained: number | null;
         remarks: string | null;
+        attendance_status: string | null;
       })[]
     >(
-      `SELECT student_db_id, roll_number, admission_number, student_name, marks_obtained, remarks FROM ap_internal_marks_entries WHERE submission_id = ?`,
+      `SELECT student_db_id, roll_number, admission_number, student_name, marks_obtained, remarks, attendance_status FROM ap_internal_marks_entries WHERE submission_id = ?`,
       [submissionId]
     );
 
@@ -2110,6 +2122,7 @@ export async function getStudentsForMarksEntry(params: {
       sectionName: st.section_name || "",
       marksObtained: prev ? prev.marks : null,
       remarks: prev ? prev.remarks : "",
+      attendanceStatus: prev?.attendanceStatus || "present",
     };
   });
 
@@ -2242,6 +2255,7 @@ export async function saveMarksDraft(
       studentName?: string;
       marksObtained: number | null;
       remarks?: string;
+      attendanceStatus?: "present" | "absent" | "not_eligible";
     }>;
   }
 ) {
@@ -2331,19 +2345,24 @@ export async function saveMarksDraft(
 
   // 2. Upsert entries
   for (const entry of data.entries) {
-    const marks = entry.marksObtained != null && Number.isFinite(Number(entry.marksObtained))
+    const attStatus = entry.attendanceStatus === "absent" || entry.attendanceStatus === "not_eligible"
+      ? entry.attendanceStatus
+      : "present";
+
+    const marks = attStatus === "present" && entry.marksObtained != null && Number.isFinite(Number(entry.marksObtained))
       ? Math.max(0, Math.min(data.maxMarks, Number(entry.marksObtained)))
       : null;
 
     await executeAcademic(
       `
       INSERT INTO ap_internal_marks_entries
-        (submission_id, student_db_id, admission_number, roll_number, student_name, marks_obtained, max_marks, remarks)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (submission_id, student_db_id, admission_number, roll_number, student_name, marks_obtained, max_marks, remarks, attendance_status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         marks_obtained = VALUES(marks_obtained),
         max_marks = VALUES(max_marks),
         remarks = VALUES(remarks),
+        attendance_status = VALUES(attendance_status),
         updated_at = NOW()
       `,
       [
@@ -2355,6 +2374,7 @@ export async function saveMarksDraft(
         marks,
         data.maxMarks,
         entry.remarks ?? null,
+        attStatus,
       ]
     );
   }
@@ -2917,9 +2937,16 @@ export async function forwardSubmissionToEms(
     for (const entry of entries) {
       const rollNumber = (entry.roll_number || entry.admission_number).trim();
       const studentName = entry.student_name || "Student";
-      const internalMarks = entry.marks_obtained != null ? Number(entry.marks_obtained) : 0;
+      const attStatus = ((entry as any).attendance_status as string) || "present";
+      const isAbsent = attStatus === "absent" || attStatus === "not_eligible" ? 1 : 0;
+      const internalMarks = attStatus === "present" && entry.marks_obtained != null ? Number(entry.marks_obtained) : 0;
       const maxInternalMarks = Number(entry.max_marks || sub.max_marks || 30.00);
-      const remarks = entry.remarks || "Internal Marks Forwarded";
+      let remarks = entry.remarks || "Internal Marks Forwarded";
+      if (attStatus === "absent") {
+        remarks = entry.remarks ? `${entry.remarks} (Absent)` : "Absent";
+      } else if (attStatus === "not_eligible") {
+        remarks = entry.remarks ? `${entry.remarks} (Not Eligible)` : "Not Eligible";
+      }
 
       const existingEms = await queryExam<
         (RowDataPacket & { id: number })[]
@@ -2934,6 +2961,7 @@ export async function forwardSubmissionToEms(
           UPDATE student_marks
           SET internalMarks = ?,
               maxInternalMarks = ?,
+              isAbsent = ?,
               status = 'synced',
               remarks = ?,
               uploadedBy = ?,
@@ -2943,6 +2971,7 @@ export async function forwardSubmissionToEms(
           [
             internalMarks,
             maxInternalMarks,
+            isAbsent,
             remarks,
             `AcademicPortal (${actorRoleKey})`,
             existingEms[0].id,
@@ -2952,8 +2981,8 @@ export async function forwardSubmissionToEms(
         await executeExam(
           `
           INSERT INTO student_marks
-            (category, examId, studentRollNumber, studentName, subjectCode, subjectName, internalMarks, maxInternalMarks, status, remarks, uploadedBy, createdAt, updatedAt)
-          VALUES ('internal', NULL, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, NOW(), NOW())
+            (category, examId, studentRollNumber, studentName, subjectCode, subjectName, internalMarks, maxInternalMarks, isAbsent, status, remarks, uploadedBy, createdAt, updatedAt)
+          VALUES ('internal', NULL, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?, NOW(), NOW())
           `,
           [
             rollNumber,
@@ -2962,6 +2991,7 @@ export async function forwardSubmissionToEms(
             subjectMeta.name,
             internalMarks,
             maxInternalMarks,
+            isAbsent,
             remarks,
             `AcademicPortal (${actorRoleKey})`,
           ]

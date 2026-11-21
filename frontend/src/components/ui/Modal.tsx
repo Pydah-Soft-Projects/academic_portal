@@ -7,10 +7,28 @@ type Props = {
   children: React.ReactNode;
   onClose: () => void;
   wide?: boolean;
+  size?: "sm" | "md" | "lg" | "xl" | "2xl" | "3xl" | "4xl" | "5xl" | "6xl" | "full";
+  maxWidth?: string;
   headerActions?: React.ReactNode;
+  className?: string;
 };
 
-export function Modal({ title, children, onClose, wide, headerActions }: Props) {
+const sizeClasses: Record<string, string> = {
+  sm: "max-w-md",
+  md: "max-w-lg",
+  lg: "max-w-xl",
+  xl: "max-w-2xl",
+  "2xl": "max-w-3xl",
+  "3xl": "max-w-4xl",
+  "4xl": "max-w-5xl",
+  "5xl": "max-w-6xl",
+  "6xl": "max-w-7xl",
+  full: "max-w-[96vw]",
+};
+
+export function Modal({ title, children, onClose, wide, size, maxWidth, headerActions, className }: Props) {
+  const widthClass = maxWidth || (size ? sizeClasses[size] : wide ? "max-w-3xl" : "max-w-2xl");
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-2 sm:p-4">
       <button
@@ -20,8 +38,8 @@ export function Modal({ title, children, onClose, wide, headerActions }: Props) 
         onClick={onClose}
       />
       <div
-        className={`relative flex max-h-[94vh] sm:max-h-[90vh] w-full flex-col overflow-hidden rounded-xl border border-border bg-surface text-text-main shadow-xl ${
-          wide ? "max-w-3xl" : "max-w-2xl"
+        className={`relative flex max-h-[94vh] sm:max-h-[90vh] w-full flex-col overflow-hidden rounded-xl border border-border bg-surface text-text-main shadow-xl ${widthClass} ${
+          className || ""
         }`}
       >
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-surface px-3.5 sm:px-5 py-2 sm:py-3">
